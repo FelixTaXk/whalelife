@@ -44,6 +44,7 @@ export interface ModelDefinition {
   enabled: boolean;
   parameters: Record<string, unknown>;
   dimensions: number | null;
+  context_window?: number | null;
 }
 export class ModelConfigError extends Error {
   status: number;
@@ -123,6 +124,7 @@ const RESERVED = new Set([
   "password",
   "secret",
   "token",
+  "context_window",
 ]);
 export function validateModelParameters(
   value: unknown,
@@ -141,7 +143,7 @@ export function validateModelParameters(
       for (const [key, child] of Object.entries(entry)) {
         if (RESERVED.has(key.toLowerCase()))
           throw new ModelConfigError(
-            "模型参数不能覆盖模型、消息、工具、请求地址或认证字段",
+            "模型参数不能覆盖模型、消息、工具、请求地址、认证字段或上下文窗口",
           );
         visit(child, depth + 1);
       }
@@ -166,6 +168,21 @@ function expectedDimensions(value: unknown, type: ModelType): number | null {
     value > 65536
   )
     throw new ModelConfigError("预期向量维度必须为空或 1–65536 的整数");
+  return value;
+}
+
+function contextWindow(value: unknown, type: ModelType): number | null {
+  if (value === undefined || value === null) return null;
+  if (type !== "chat") throw new ModelConfigError("上下文窗口仅适用于对话模型");
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > 10000000
+  )
+    throw new ModelConfigError(
+      "上下文窗口必须为空或 1–10000000 的整数（token）",
+    );
   return value;
 }
 
@@ -234,6 +251,7 @@ function readModel(
     dimensions: detectDimensions
       ? null
       : expectedDimensions(m.dimensions, m.type),
+    context_window: contextWindow(m.context_window, m.type),
   };
 }
 
@@ -271,6 +289,7 @@ function modelRecord(model: ModelDefinition) {
     enabled: model.enabled !== false,
     parameters: model.parameters ?? {},
     dimensions: model.dimensions ?? null,
+    context_window: model.context_window ?? null,
   };
 }
 
@@ -283,6 +302,7 @@ function normalize(config: any) {
     : structuredClone(config.models).map((m: ModelDefinition) => ({
         ...m,
         dimensions: m.dimensions ?? null,
+        context_window: m.context_window ?? null,
       }));
   const legacyModel = new Map<string, string>();
   for (const provider of legacy) {
@@ -301,6 +321,7 @@ function normalize(config: any) {
         enabled: provider.enabled !== false,
         parameters: {},
         dimensions: null,
+        context_window: null,
       });
       legacyModel.set(provider.id, modelId);
     }
@@ -350,6 +371,7 @@ export function resolveChatModel(
   model: string;
   parameters: Record<string, unknown>;
   model_id?: string;
+  context_window: number | null;
 } {
   if (!Array.isArray(config.models)) {
     const item = personaId ? config.personas?.[personaId] : undefined;
@@ -366,6 +388,7 @@ export function resolveChatModel(
     return {
       ...provider,
       parameters: validateModelParameters(provider.parameters),
+      context_window: null,
     };
   }
   const selected =
@@ -388,6 +411,7 @@ export function resolveModel(config: any, selected: string) {
     model: model.model,
     model_id: model.id,
     parameters: validateModelParameters(model.parameters),
+    context_window: contextWindow(model.context_window, model.type),
   };
 }
 
@@ -450,6 +474,7 @@ export class ModelConfig {
         enabled: m.enabled !== false,
         parameters: validateModelParameters(m.parameters),
         dimensions: m.dimensions ?? null,
+        context_window: m.context_window ?? null,
         configuration_error: modelConfigurationError(
           m,
           this.source.providers.find(
@@ -797,6 +822,17 @@ export class ModelConfig {
     if (!Array.isArray(data.data))
       throw new ModelConfigError("模型服务未返回兼容的模型列表", 502);
     return {
+      details: data.data
+        .filter((m: any) => typeof m?.id === "string" && m.id.length <= 300)
+        .map((m: any) => ({
+          id: m.id,
+          context_window:
+            Number.isSafeInteger(m.context_window) &&
+            m.context_window > 0 &&
+            m.context_window <= 10000000
+              ? m.context_window
+              : null,
+        })),
       models: [
         ...new Set<string>(
           data.data

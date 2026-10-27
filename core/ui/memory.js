@@ -1,5 +1,6 @@
 import { api, escapeHTML as e } from "./api.js";
 import { icon } from "./icons.js";
+import { renderContextPanel, bindContextSettings } from "./context.js";
 const bytes = (n) =>
   n < 1024
     ? `${n} B`
@@ -26,12 +27,16 @@ export async function loadMemory(app) {
       offset: String(app.state.memoryOffset || 0),
       limit: "25",
     });
-    const [catalog, details] = await Promise.all([
+    const [catalog, details, context] = await Promise.all([
       api("/api/memory?" + query),
       tab === "sessions" ? Promise.resolve(null) : api("/api/memory/" + tab),
+      api(
+        "/api/session/context?id=" + encodeURIComponent(app.state.session),
+      ).catch((error) => ({ error: error.message })),
     ]);
     if (request !== app.state.memoryRequest) return;
     app.state.memoryCatalog = catalog;
+    app.state.sessionContext = context;
     app.state.memoryDetails = details;
     app.state.memoryLoadedTab = tab;
     if (tab === "facts" && app.state.memoryFactsDraft === undefined) {
@@ -59,7 +64,15 @@ export function renderMemory(app) {
             ["共享事实", c.facts.count, "跨会话共享"],
             ["会话档案", c.sessions.count, bytes(c.sessions.bytes)],
             ["滚动摘要", c.summaries.count, bytes(c.summaries.bytes)],
-            ["记忆占用", bytes(c.bytes), "最近更新：" + time(c.updated_at)],
+            [
+              "当前上下文占用",
+              s.sessionContext?.usage?.percent == null
+                ? "—"
+                : s.sessionContext.usage.percent.toFixed(2) + "%",
+              s.sessionContext?.model?.context_window
+                ? `模型上限 ${s.sessionContext.model.context_window.toLocaleString()} tokens`
+                : "模型上限尚未读取",
+            ],
           ]
             .map(
               ([label, n, desc]) =>
@@ -67,9 +80,10 @@ export function renderMemory(app) {
             )
             .join(
               "",
-            )}</div><p class="memory-location">存储位置：${e(c.root)}${c.busy ? " · 有对话正在进行" : ""}</p>`
+            )}</div><p class="memory-location">本机文件占用 ${bytes(c.bytes)} · 存储位置：${e(c.root)} · 最近更新 ${time(c.updated_at)}${c.busy ? " · 有对话正在进行" : ""}</p>`
         : ""
     }
+    ${renderContextPanel(app)}
     <div class="tabs" role="tablist" aria-label="记忆类型">${tabs.map(([id, label]) => `<button class="tab ${id === tab ? "active" : ""}" role="tab" aria-selected="${id === tab}" data-memory-tab="${id}" ${s.memoryLoading ? "disabled" : ""}>${label}</button>`).join("")}</div>
     ${s.memoryError ? `<p class="form-error" role="alert">${e(s.memoryError)}</p>` : ""}
     <section class="panel panel-body memory-panel">${s.memoryLoadedTab !== tab ? '<p class="empty">正在读取记忆…</p>' : renderTab(app, tab)}</section>`;
@@ -81,7 +95,7 @@ function renderTab(app, tab) {
     return `<div class="panel-header"><div><h2>共享事实</h2><p>每行一条事实，保存后用于下一轮对话。与所有人格共享。</p></div><button class="btn small" data-facts-dedupe>去除重复行</button></div><textarea id="memory-facts" aria-label="共享事实内容" rows="14" spellcheck="false">${e(s.memoryFactsDraft)}</textarea><div class="row memory-actions"><small id="facts-state">编辑后点击保存；不会自动改写。</small><div class="spacer"></div><button class="btn" data-facts-reload>重新读取</button><button class="btn primary" data-facts-save>保存事实</button></div>`;
   if (tab === "sessions") {
     const list = s.memoryCatalog.sessions;
-    return `<form id="memory-search-form" class="row"><input name="search" type="search" aria-label="搜索会话" placeholder="搜索会话 ID 或内容" value="${e(s.memorySearch || "")}"><button class="btn" type="submit">搜索</button></form><div class="memory-table">${list.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${time(item.updated_at)} · ${bytes(item.bytes)}</small></div><button class="btn small" data-session="${e(item.id)}">查看记录</button></div>`).join("") || '<p class="empty">暂无匹配的会话。</p>'}</div><div class="row memory-actions"><small>共 ${list.total} 个匹配会话</small><div class="spacer"></div><button class="btn small" data-memory-prev ${list.offset === 0 ? "disabled" : ""}>上一页</button><button class="btn small" data-memory-next ${list.offset + list.limit >= list.total ? "disabled" : ""}>下一页</button></div>`;
+    return `<form id="memory-search-form" class="row"><input name="search" type="search" aria-label="搜索会话" placeholder="搜索名称、会话 ID 或内容" value="${e(s.memorySearch || "")}"><button class="btn" type="submit">搜索</button></form><div class="memory-table">${list.items.map((item) => `<div class="memory-item"><div><strong>${e(item.name || item.id)} ${item.id === s.session ? '<span class="badge green">当前会话</span>' : ""}</strong><small>${item.name ? e(item.id) + " · " : ""}${time(item.updated_at)} · ${bytes(item.bytes)}</small></div><div class="row session-actions"><button class="btn small" data-session="${e(item.id)}">查看</button><button class="btn small tonal" data-session-use="${e(item.id)}" ${s.chatBusy ? "disabled" : ""}>设为当前会话</button><button class="btn small" data-session-rename="${e(item.id)}">改名</button><button class="btn small danger" data-session-delete="${e(item.id)}">删除</button></div></div>`).join("") || '<p class="empty">暂无匹配的会话。</p>'}</div><div class="row memory-actions"><small>共 ${list.total} 个匹配会话</small><div class="spacer"></div><button class="btn small" data-memory-prev ${list.offset === 0 ? "disabled" : ""}>上一页</button><button class="btn small" data-memory-next ${list.offset + list.limit >= list.total ? "disabled" : ""}>下一页</button></div>`;
   }
   if (tab === "summaries")
     return `<h2>滚动摘要</h2><p class="muted">对话达到阈值后自动生成，按会话及人格版本隔离。这里只查看已生成内容。</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${time(item.updated_at)} · ${bytes(item.bytes)}</small></div><button class="btn small" data-summary="${e(item.id)}">查看摘要</button></div>`).join("") || '<p class="empty">尚未生成摘要，短会话不会产生滚动摘要。</p>'}</div>`;
@@ -90,6 +104,60 @@ function renderTab(app, tab) {
 export function bindMemory(app) {
   const root = app.content,
     s = app.state;
+  bindContextSettings(app, () => loadMemory(app));
+  root.querySelectorAll("[data-session-use]").forEach(
+    (b) =>
+      (b.onclick = async () => {
+        try {
+          await app.useSession(b.dataset.sessionUse);
+          await loadMemory(app);
+          app.toast("已选为当前会话，可调整上下文后继续聊天");
+        } catch (error) {
+          app.toast(error.message, true);
+        }
+      }),
+  );
+  root.querySelectorAll("[data-session-rename]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const item = s.memoryCatalog.sessions.items.find(
+          (x) => x.id === b.dataset.sessionRename,
+        );
+        app.dialog(
+          "会话改名",
+          `<label for="session-name">名称</label><input id="session-name" name="name" maxlength="80" required value="${e(item.name || "")}" placeholder="给这个会话取个名字">`,
+          async (data) => {
+            await api("/api/memory/session/rename", {
+              id: item.id,
+              name: data.get("name"),
+            });
+            await loadMemory(app);
+            app.toast("会话名称已保存");
+          },
+          "保存名称",
+        );
+      }),
+  );
+  root.querySelectorAll("[data-session-delete]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const item = s.memoryCatalog.sessions.items.find(
+          (x) => x.id === b.dataset.sessionDelete,
+        );
+        app.dialog(
+          "删除会话",
+          `<p>删除「${e(item.name || item.id)}」及对应摘要？</p><p>文件会移入本机记忆回收目录，共享事实保留。删除当前会话后会新建空会话。</p>`,
+          async () => {
+            await api("/api/memory/session/delete", { id: item.id });
+            if (s.session === item.id) app.newSession();
+            await loadMemory(app);
+            app.toast("会话已删除");
+          },
+          "确认删除",
+          true,
+        );
+      }),
+  );
   root.querySelectorAll("[data-memory-tab]").forEach(
     (b) =>
       (b.onclick = () => {
@@ -205,8 +273,8 @@ export function bindMemory(app) {
             s.memoryCatalog = null;
             s.memoryLoadedTab = null;
             await app.load();
-            await loadMemory(app);
             app.newSession();
+            await loadMemory(app);
             app.toast("已恢复；原数据备份为 " + value.safety_backup.id);
           },
           "备份当前数据并恢复",

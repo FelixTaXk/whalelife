@@ -3,6 +3,7 @@ import { icon, whale } from "./icons.js";
 import { renderModels, bindModels } from "./models.js";
 import { renderPersonas, bindPersonas } from "./personas.js";
 import { renderMemory, bindMemory, loadMemory } from "./memory.js";
+import { renderContextMeter } from "./context.js";
 import {
   renderOverview,
   renderBindings,
@@ -64,6 +65,7 @@ class ConsoleApp {
       if (this.authenticated) {
         this.render();
         this.syncView();
+        if (this.state.page === "memory") loadMemory(this);
       }
     });
     window.addEventListener("focus", () => this.syncView());
@@ -153,6 +155,41 @@ class ConsoleApp {
   }
   async refreshStatus() {
     this.state.status = await api("/api/status");
+  }
+  async useSession(id) {
+    if (this.state.chatBusy) throw Error("请等待当前回复结束后切换会话");
+    const context = await api(
+      "/api/session/context?id=" + encodeURIComponent(id),
+    );
+    const rows = await api("/api/session?id=" + encodeURIComponent(id));
+    if (this.state.chatBusy) throw Error("请等待当前回复结束后切换会话");
+    this.state.session = id;
+    localStorage.whaleSession = id;
+    this.state.sessionContext = context;
+    this.state.messages = rows
+      .filter((r) => r.type === "message")
+      .map((r) => ({
+        role: r.role,
+        text: r.text,
+        personaName: r.persona_name,
+      }));
+    this.state.chatDraft = "";
+    this.render();
+  }
+  async refreshSessionContext() {
+    const id = this.state.session;
+    try {
+      const value = await api(
+        "/api/session/context?id=" + encodeURIComponent(id),
+      );
+      if (id !== this.state.session) return;
+      this.state.sessionContext = value;
+      if ($("chat-context"))
+        $("chat-context").innerHTML = renderContextMeter(value);
+    } catch (error) {
+      if (id === this.state.session && $("chat-context"))
+        $("chat-context").textContent = error.message;
+    }
   }
   async syncView() {
     const page = this.state.page;
@@ -416,6 +453,7 @@ class ConsoleApp {
     this.state.session = uid("web");
     localStorage.whaleSession = this.state.session;
     this.state.messages = [];
+    this.state.sessionContext = null;
     this.state.chatDraft = "";
     this.render();
   }

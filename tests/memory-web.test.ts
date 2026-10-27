@@ -22,6 +22,19 @@ test("memory console routes require authentication and support revision-safe edi
   try {
     const url = "http://127.0.0.1:" + (app.web.server.address() as any).port;
     assert.equal((await fetch(url + "/api/memory")).status, 401);
+    assert.equal(
+      (await fetch(url + "/api/session/context?id=one")).status,
+      401,
+    );
+    for (const path of [
+      "/api/session/context",
+      "/api/memory/session/rename",
+      "/api/memory/session/delete",
+    ])
+      assert.equal(
+        (await fetch(url + path, { method: "POST", body: "{}" })).status,
+        401,
+      );
     const login = await fetch(url + "/api/login", {
       method: "POST",
       body: "{}",
@@ -71,6 +84,28 @@ test("memory console routes require authentication and support revision-safe edi
       400,
     );
     const backup = await (await post("/api/memory/backup", {})).json();
+    assert.equal(
+      (
+        await post("/api/memory/session/rename", {
+          id: "web-test",
+          name: "新名字",
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await (
+          await get("/api/memory?search=" + encodeURIComponent("新名字"))
+        ).json()
+      ).sessions.total,
+      1,
+    );
+    assert.equal(
+      (await post("/api/memory/session/delete", { id: "web-test" })).status,
+      200,
+    );
+    assert.equal((await (await get("/api/memory")).json()).sessions.count, 0);
     const latest = await (await get("/api/memory/facts")).json();
     await post("/api/memory/facts", {
       revision: latest.revision,

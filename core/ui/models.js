@@ -124,6 +124,7 @@ function draftFor(app, model, repair = false) {
     timeout_seconds: String(p.timeout_seconds ?? 120),
     proxy_url: repair ? "" : p.proxy_url || "",
     dimensions: String(model.dimensions ?? ""),
+    context_window: String(model.context_window ?? ""),
     parametersText: JSON.stringify(model.parameters || {}, null, 2),
     use: app.state.config.bindings[model.type] === model.id,
     repair,
@@ -215,6 +216,7 @@ function renderEditor(app, d) {
     ${row("timeout_seconds", "超时时间", "请求最长等待时间，单位：秒。", input(d, "timeout_seconds", 'type="number" required min="1" max="600" step="1"'))}
     ${row("proxy_url", "代理地址", "可选，仅用于此连接。支持 HTTP / HTTPS 代理。", input(d, "proxy_url", 'type="url" placeholder="http://127.0.0.1:7890"'))}
     <h3 class="model-section-heading">当前模型设置</h3>
+    ${!embedding ? row("context_window", "模型上下文上限", "单位 token。留空时尝试读取服务返回的上限；服务未提供时，可按模型文档填写。此项用于容量显示，不是历史消息条数。", input(d, "context_window", 'type="number" min="1" max="10000000" step="1" placeholder="自动读取 / 手动填写"')) : ""}
     ${row("name", "当前模型名称", "用于使用配置中的模型选择；在上方列表切换要编辑的模型。", input(d, "name", 'required maxlength="200" placeholder="例如：百炼向量"'))}
     ${row("enabled", "启用", "允许使用这条模型配置。", `<label class="setting-toggle"><input id="setting-enabled" name="enabled" type="checkbox" ${d.enabled ? "checked" : ""}><span>启用此配置</span></label>`)}
     ${row("model", embedding ? "嵌入模型" : "对话模型", `服务商提供的实际模型名称，与上方配置名称分开。${embedding ? "例如 text-embedding-v4。" : "请以服务文档中的名称为准。"}`, input(d, "model", `required maxlength="300" placeholder="${e(t?.example || (embedding ? "例如 text-embedding-3-small" : "填写实际模型名称"))}"`))}
@@ -238,6 +240,7 @@ function capture(form, d) {
     "timeout_seconds",
     "proxy_url",
     "dimensions",
+    "context_window",
     "parametersText",
   ])
     if (data.has(name)) d[name] = String(data.get(name));
@@ -532,6 +535,8 @@ function payloadFor(d) {
       enabled: d.enabled,
       parameters,
       dimensions: d.dimensions === "" ? null : Number(d.dimensions),
+      context_window:
+        d.type === "chat" && d.context_window ? Number(d.context_window) : null,
     },
   };
 }

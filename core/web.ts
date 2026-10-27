@@ -27,6 +27,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
     "views.js",
     "personas.js",
     "memory.js",
+    "context.js",
   ]);
   const allowedOrigin = (req: any) =>
     !req.headers.origin ||
@@ -119,6 +120,34 @@ export async function startWeb(config: any, services: any, runtime: any) {
       }
       if (!authorized(req)) return send(401, { error: "请先登录" });
       const memoryUrl = new URL(req.url!, origin);
+      if (req.method === "GET" && memoryUrl.pathname === "/api/session/context")
+        return send(
+          200,
+          await sessions.contextStatus(memoryUrl.searchParams.get("id")),
+        );
+      if (
+        req.method === "POST" &&
+        memoryUrl.pathname === "/api/session/context"
+      ) {
+        const input = await body(req);
+        return send(200, await sessions.updateContext(input.id, input.context));
+      }
+      if (
+        req.method === "POST" &&
+        memoryUrl.pathname === "/api/memory/session/rename"
+      )
+        return send(
+          200,
+          await services.memoryAdmin.renameSession(await body(req)),
+        );
+      if (
+        req.method === "POST" &&
+        memoryUrl.pathname === "/api/memory/session/delete"
+      )
+        return send(
+          200,
+          await services.memoryAdmin.deleteSession(await body(req)),
+        );
       if (req.method === "GET" && memoryUrl.pathname === "/api/memory")
         return send(
           200,

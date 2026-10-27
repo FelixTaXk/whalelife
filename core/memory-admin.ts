@@ -22,13 +22,19 @@ import {
   resolve,
   sep,
 } from "node:path";
-import type { Memory } from "./memory.ts";
+import {
+  indexSessionMeta,
+  parseSessionIndex,
+  type Memory,
+  type SessionIndex,
+} from "./memory.ts";
 import type { Logger } from "./logger.ts";
 
 type SessionState = {
   root: string;
   locks: Set<string>;
   memoryMaintenance?: boolean;
+  blockedSessions?: Set<string>;
   config?: { personas?: Record<string, { file?: string }> };
 };
 type FileEntry = {
@@ -227,6 +233,7 @@ export class MemoryAdmin {
   constructor(memory: Memory, sessions: SessionState, logger: Logger) {
     this.memory = memory;
     this.sessions = sessions;
+    this.sessions.blockedSessions ??= new Set<string>();
     this.logger = logger;
     this.root = resolve(memory.root);
     this.projectRoot = resolve(sessions.root);
@@ -253,6 +260,243 @@ export class MemoryAdmin {
     if (!inside(this.root, target)) throw new MemoryAdminError("记忆路径越界");
     await directoryChain(dirname(target));
     return target;
+  }
+  private async sessionIndex() {
+    const raw = await boundedRead(
+      await this.file("index.json"),
+      MAX_MANIFEST_BYTES,
+    );
+    return {
+      raw,
+      index: parseSessionIndex(raw.toString("utf8")),
+      revision: digest(raw),
+    };
+  }
+  private async writeSessionIndex(index: SessionIndex, revision: string) {
+    const target = await this.file("index.json"),
+      temp = join(this.root, `.index-${randomUUID()}.tmp`);
+    const content = JSON.stringify(index, null, 2) + "\n";
+    try {
+      await writeFile(temp, content, { flag: "wx", mode: 0o600 });
+      if (digest(await boundedRead(target, MAX_MANIFEST_BYTES)) !== revision)
+        throw new MemoryAdminError("会话索引已被外部修改，请刷新后重试", 409);
+      await rename(temp, target);
+      return digest(content);
+    } finally {
+      await unlink(temp).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT")
+          this.logger.warn("会话索引临时文件清理失败", { code: error.code });
+      });
+    }
+  }
+  renameSession(input: { id: string; name: string }) {
+    return this.memory.serial(async () => {
+      const id = identifier(input?.id);
+      if (
+        typeof input.name !== "string" ||
+        /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(input.name)
+      )
+        throw new MemoryAdminError("会话名称须为 1–80 字的单行文本");
+      const name = input.name.trim();
+      if (!name || [...name].length > 80 || Buffer.byteLength(name) > 320)
+        throw new MemoryAdminError("会话名称须为 1–80 字的单行文本");
+      if (
+        this.sessions.memoryMaintenance ||
+        this.sessions.blockedSessions?.has(id)
+      )
+        throw new MemoryAdminError("会话或记忆正在维护，请稍后重试", 409);
+      await this.ensureRoots();
+      const { index, revision } = await this.sessionIndex(),
+        previous = indexSessionMeta(index, id);
+      if (previous?.deleted)
+        throw new MemoryAdminError("会话已删除，请新建会话", 409);
+      try {
+        await regularFile(await this.file(`sessions/${id}.jsonl`));
+      } catch (error: any) {
+        if (error.code === "ENOENT")
+          throw new MemoryAdminError("会话不存在", 404);
+        throw error;
+      }
+      index.sessions = { ...index.sessions, [id]: { ...previous, name } };
+      await this.writeSessionIndex(index, revision);
+      this.logger.info("会话已改名", { id });
+      return { id, name };
+    });
+  }
+  async deleteSession(input: { id: string }) {
+    const id = identifier(input?.id),
+      blocked = this.sessions.blockedSessions!;
+    if (this.sessions.memoryMaintenance || blocked.has(id))
+      throw new MemoryAdminError("会话或记忆正在维护，请稍后重试", 409);
+    if (this.sessions.locks.has(id))
+      throw new MemoryAdminError("该会话正在回复，请稍候再删除", 409);
+    blocked.add(id);
+    return this.memory
+      .serial(async () => {
+        if (this.sessions.memoryMaintenance || this.sessions.locks.has(id))
+          throw new MemoryAdminError(
+            "该会话正在回复或记忆正在恢复，请稍候再删除",
+            409,
+          );
+        await this.ensureRoots();
+        const state = await this.sessionIndex(),
+          previous = indexSessionMeta(state.index, id);
+        if (previous?.deleted)
+          return {
+            id,
+            deleted: true,
+            deleted_at: previous.deleted_at,
+            trash_id: previous.trash_id,
+            files: previous.deleted_files ?? 0,
+          };
+        const sessionPath = `sessions/${id}.jsonl`;
+        let raw: Buffer;
+        try {
+          raw = await boundedRead(
+            await this.file(sessionPath),
+            MAX_SESSION_BYTES,
+          );
+        } catch (error: any) {
+          if (error.code === "ENOENT")
+            throw new MemoryAdminError("会话不存在", 404);
+          throw error;
+        }
+        const paths = new Set<string>([sessionPath, `summaries/${id}.md`]);
+        for (const line of raw.toString("utf8").split("\n")) {
+          try {
+            const record = JSON.parse(line);
+            if (
+              typeof record?.summary_id === "string" &&
+              /^p_[a-f0-9]{40}$/.test(record.summary_id)
+            )
+              paths.add(`summaries/${record.summary_id}.md`);
+            if (typeof record?.persona_revision === "string")
+              paths.add(
+                `summaries/p_${createHash("sha256")
+                  .update(id + ":" + record.persona_revision)
+                  .digest("hex")
+                  .slice(0, 40)}.md`,
+              );
+          } catch {
+            /* Keep malformed records verbatim in the trash copy. */
+          }
+        }
+        const trashId = `session-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+        const trashRoot = join(this.root, "trash"),
+          trash = join(trashRoot, trashId);
+        await directoryChain(trashRoot, true);
+        await mkdir(trash);
+        await mkdir(join(trash, "sessions"));
+        await mkdir(join(trash, "summaries"));
+        const files: StoredFile[] = [];
+        for (const path of paths) {
+          let content: Buffer;
+          try {
+            content = await boundedRead(
+              await this.file(path),
+              MAX_SESSION_BYTES,
+            );
+          } catch (error: any) {
+            if (error.code === "ENOENT" && path !== sessionPath) continue;
+            throw error;
+          }
+          if (path === sessionPath && digest(content) !== digest(raw))
+            throw new MemoryAdminError(
+              "会话文件在删除期间被外部修改，请重试",
+              409,
+            );
+          await writeFile(join(trash, ...path.split("/")), content, {
+            flag: "wx",
+            mode: 0o600,
+          });
+          files.push({ path, bytes: content.length, sha256: digest(content) });
+        }
+        const deletedAt = new Date().toISOString();
+        await writeFile(
+          join(trash, "manifest.json"),
+          JSON.stringify(
+            {
+              version: 1,
+              kind: "session-delete",
+              id: trashId,
+              session_id: id,
+              deleted_at: deletedAt,
+              metadata: previous,
+              files,
+            },
+            null,
+            2,
+          ) + "\n",
+          { flag: "wx", mode: 0o600 },
+        );
+        const tombstone = {
+          ...previous,
+          deleted: true,
+          deleted_at: deletedAt,
+          trash_id: trashId,
+          deleted_files: files.length,
+        };
+        const originalIndex = parseSessionIndex(state.raw.toString("utf8"));
+        state.index.sessions = { ...state.index.sessions, [id]: tombstone };
+        // Persist the tombstone first: even a process crash must not let old tabs recreate this ID.
+        const tombstoneRevision = await this.writeSessionIndex(
+          state.index,
+          state.revision,
+        );
+        const removed: StoredFile[] = [];
+        try {
+          for (const file of files) {
+            const target = await this.file(file.path);
+            if (
+              digest(await boundedRead(target, MAX_SESSION_BYTES)) !==
+              file.sha256
+            )
+              throw new MemoryAdminError(
+                "会话文件在删除期间被外部修改，请重试",
+                409,
+              );
+            await unlink(target);
+            removed.push(file);
+          }
+        } catch (error) {
+          try {
+            for (const file of removed) {
+              const target = await this.file(file.path),
+                content = await boundedRead(
+                  join(trash, ...file.path.split("/")),
+                  MAX_SESSION_BYTES,
+                );
+              if (digest(content) !== file.sha256)
+                throw Error("垃圾箱副本校验失败");
+              await writeFile(target, content, { flag: "wx", mode: 0o600 });
+            }
+            await this.writeSessionIndex(originalIndex, tombstoneRevision);
+          } catch {
+            this.logger.error("会话删除回滚未完成，副本已保留", {
+              id,
+              trash_id: trashId,
+            });
+            throw new MemoryAdminError(
+              "会话删除未完成，原文件副本已保留在记忆垃圾箱，请从副本恢复",
+              500,
+            );
+          }
+          throw error;
+        }
+        this.logger.info("会话已移入记忆垃圾箱", {
+          id,
+          trash_id: trashId,
+          files: files.length,
+        });
+        return {
+          id,
+          deleted: true,
+          deleted_at: deletedAt,
+          trash_id: trashId,
+          files: files.length,
+        };
+      })
+      .finally(() => blocked.delete(id));
   }
   private async readFacts() {
     await this.ensureRoots();
@@ -376,8 +620,13 @@ export class MemoryAdmin {
         query = searchText(options.search);
       const { files } = await inventory(this.root),
         fact = await this.readFacts();
+      const { index } = await this.sessionIndex();
       const allSessions = files
-        .filter((f) => /^sessions\/[a-zA-Z0-9_-]{1,100}\.jsonl$/.test(f.path))
+        .filter(
+          (f) =>
+            /^sessions\/[a-zA-Z0-9_-]{1,100}\.jsonl$/.test(f.path) &&
+            !indexSessionMeta(index, basename(f.path, ".jsonl"))?.deleted,
+        )
         .sort((a, b) => b.mtime - a.mtime);
       const summaryFiles = files.filter(
         (f) =>
@@ -386,7 +635,12 @@ export class MemoryAdmin {
       const matched: FileEntry[] = [];
       for (const entry of allSessions) {
         const id = basename(entry.path, ".jsonl");
-        if (!query || id.toLocaleLowerCase().includes(query)) {
+        const name = indexSessionMeta(index, id)?.name;
+        if (
+          !query ||
+          id.toLocaleLowerCase().includes(query) ||
+          (typeof name === "string" && name.toLocaleLowerCase().includes(query))
+        ) {
           matched.push(entry);
           continue;
         }
@@ -416,6 +670,11 @@ export class MemoryAdmin {
           limit,
           items: matched.slice(offset, offset + limit).map((f) => ({
             id: basename(f.path, ".jsonl"),
+            name:
+              typeof indexSessionMeta(index, basename(f.path, ".jsonl"))
+                ?.name === "string"
+                ? indexSessionMeta(index, basename(f.path, ".jsonl")).name
+                : null,
             bytes: f.bytes,
             updated_at: f.updated_at,
           })),
@@ -429,6 +688,10 @@ export class MemoryAdmin {
   session(id: string, offset = 0, limit = 100, search = "") {
     return this.memory.serial(async () => {
       await this.ensureRoots();
+      const { index } = await this.sessionIndex(),
+        meta = indexSessionMeta(index, identifier(id));
+      if (meta?.deleted)
+        throw new MemoryAdminError("会话已删除，请新建会话", 410);
       const paging = page(offset, limit),
         query = searchText(search),
         rows = await this.sessionRows(id);
@@ -439,6 +702,7 @@ export class MemoryAdmin {
         : rows.items;
       return {
         id,
+        name: typeof meta?.name === "string" ? meta.name : null,
         items: matched.slice(offset, offset + limit),
         total: matched.length,
         ...paging,
@@ -710,7 +974,7 @@ export class MemoryAdmin {
       return Promise.reject(
         new MemoryAdminError("记忆恢复正在进行，请稍后重试", 409),
       );
-    if (this.sessions.locks.size)
+    if (this.sessions.locks.size || this.sessions.blockedSessions?.size)
       return Promise.reject(
         new MemoryAdminError("对话正在进行，请等待回复完成后再恢复记忆", 409),
       );

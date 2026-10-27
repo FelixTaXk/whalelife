@@ -265,6 +265,10 @@ test("saved embedding configuration calls embeddings endpoint and reports dimens
     edit.bindings.embedding = "vector";
     await f.manager.save(edit);
     assert.deepEqual(await f.manager.listModels("local"), {
+      details: [
+        { id: "vector-model", context_window: null },
+        { id: "chat-model", context_window: null },
+      ],
       models: ["chat-model", "vector-model"],
     });
     const result = await f.manager.testModel("vector");
@@ -573,7 +577,11 @@ test("configured HTTP proxy is actually used by probes and streaming chat", asyn
     seen.push({ path: req.url, body });
     if (req.url === "/v1/models") {
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ data: [{ id: "proxied-chat" }] }));
+      res.end(
+        JSON.stringify({
+          data: [{ id: "proxied-chat", context_window: 32768 }],
+        }),
+      );
     } else if (body?.stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.end(
@@ -623,6 +631,7 @@ test("configured HTTP proxy is actually used by probes and streaming chat", asyn
     edit.providers[1].timeout_seconds = 3;
     await f.manager.save(edit);
     assert.deepEqual(await f.manager.listModels("selected"), {
+      details: [{ id: "proxied-chat", context_window: 32768 }],
       models: ["proxied-chat"],
     });
     assert.equal((await f.manager.testModel("selected-chat")).ok, true);

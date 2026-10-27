@@ -1,8 +1,16 @@
 import { persona, personaSystemPrompt } from "./persona.ts";
 import { safeId } from "./memory.ts";
 import { createHash } from "node:crypto";
+import {
+  contextPolicy,
+  validateContext,
+  matchingHistory,
+  requestUsage,
+} from "./session-context.ts";
 export class Sessions {
   memoryMaintenance = false;
+  blockedSessions = new Set<string>();
+  modelLimits = new Map<string, { value: number | null; until: number }>();
   locks = new Set<string>();
   root: string;
   config: any;
@@ -11,6 +19,101 @@ export class Sessions {
     this.root = root;
     this.config = config;
     this.services = services;
+  }
+  async modelLimit(provider: any) {
+    if (provider.context_window)
+      return { tokens: provider.context_window, source: "configured" };
+    const key = JSON.stringify([
+      provider.id,
+      provider.base_url,
+      provider.model,
+    ]);
+    const cached = this.modelLimits.get(key);
+    if (cached && cached.until > Date.now())
+      return {
+        tokens: cached.value,
+        source: cached.value ? "provider" : "unknown",
+      };
+    let value: number | null = null;
+    try {
+      const result = await this.services.modelConfig?.listModels(provider.id);
+      const metadata = result?.details?.find(
+        (m: any) => m.id === provider.model,
+      );
+      value = metadata?.context_window || null;
+    } catch {
+      /* Unknown services can supply the limit in model settings. */
+    }
+    this.modelLimits.set(key, {
+      value,
+      until: Date.now() + (value ? 3600000 : 60000),
+    });
+    return { tokens: value, source: value ? "provider" : "unknown" };
+  }
+  async contextStatus(id: string) {
+    safeId(id);
+    const meta = await this.services.memory.sessionMeta(id);
+    if (meta?.deleted) throw Error("此会话已删除，请新建或选择其他会话");
+    const p = await persona(
+      this.root,
+      this.config,
+      this.config.channels.web.persona,
+    );
+    const limit = await this.modelLimit(p.provider);
+    const policy = contextPolicy(this.config.memory, meta?.context);
+    const rows = await this.services.memory.readSession(id);
+    const history = matchingHistory(rows, p.revision, policy.history_scope);
+    const last = rows.findLast((row: any) => row.role === "assistant");
+    const usage = last?.request_usage;
+    const matches =
+      usage &&
+      last.persona_revision === p.revision &&
+      usage.model_id === (p.provider.model_id || p.provider.model) &&
+      usage.model === p.provider.model &&
+      usage.provider_id === p.provider.id;
+    return {
+      id,
+      name: meta?.name || null,
+      policy,
+      persona: p.name,
+      model: {
+        id: p.provider.model_id || p.provider.model,
+        name: p.provider.model,
+        context_window: limit.tokens,
+        limit_source: limit.source,
+      },
+      available_messages: history.filter((row: any) => row.type === "message")
+        .length,
+      stored_messages: rows.filter((row: any) => row.type === "message").length,
+      usage: matches
+        ? {
+            ...usage,
+            context_window: limit.tokens,
+            percent: limit.tokens
+              ? (usage.used_tokens / limit.tokens) * 100
+              : null,
+            settings_changed:
+              JSON.stringify(last.context_policy) !== JSON.stringify(policy),
+          }
+        : null,
+    };
+  }
+  async updateContext(id: string, input: any) {
+    safeId(id);
+    if (
+      this.memoryMaintenance ||
+      this.blockedSessions.has(id) ||
+      this.locks.has(id)
+    )
+      throw Error("会话正在处理，请结束后修改上下文");
+    const policy = validateContext(input);
+    this.blockedSessions.add(id);
+    try {
+      await this.services.memory.saveSessionMeta(id, { context: policy });
+      return await this.contextStatus(id);
+    } finally {
+      this.blockedSessions.delete(id);
+    }
   }
   async chat(
     id: string,
@@ -21,6 +124,11 @@ export class Sessions {
   ) {
     if (this.memoryMaintenance) throw Error("记忆恢复中，请稍后重试");
     safeId(id);
+    if (this.blockedSessions.has(id)) throw Error("会话维护中，请稍后重试");
+    const meta = await this.services.memory.sessionMeta(id);
+    if (meta?.deleted) throw Error("此会话已删除，请新建或选择其他会话");
+    if (this.memoryMaintenance || this.blockedSessions.has(id))
+      throw Error("会话维护中，请稍后重试");
     if (this.locks.has(id)) throw Error("该会话正在回复，请稍候");
     if (!text.trim() || text.length > 16000) throw Error("请输入 1–16000 字");
     this.locks.add(id);
@@ -30,10 +138,24 @@ export class Sessions {
       const p = await persona(this.root, this.config, channel.persona);
       if (expectedPersona && expectedPersona !== p.id)
         throw Error("当前人格已在其他窗口切换，请刷新后重试");
+      const policy = contextPolicy(this.config.memory, meta?.context);
+      const summaryId =
+        "p_" +
+        createHash("sha256")
+          .update(
+            id +
+              ":" +
+              p.revision +
+              (policy.history_scope === "session" ? ":session" : ""),
+          )
+          .digest("hex")
+          .slice(0, 40);
       const context = {
         persona_id: p.id,
         persona_name: p.name,
         persona_revision: p.revision,
+        summary_id: summaryId,
+        context_policy: policy,
       };
       const session = {
         id,
@@ -44,21 +166,12 @@ export class Sessions {
       };
       const storedHistory = await memory.readSession(id);
       // Only the final contiguous segment belongs to the current persona version.
-      let boundary = storedHistory.length - 1;
-      while (
-        boundary >= 0 &&
-        storedHistory[boundary].persona_revision === p.revision
-      )
-        boundary--;
-      const history = storedHistory.slice(boundary + 1);
-      const contextReset =
-        storedHistory.length > 0 && boundary >= 0 && !history.length;
-      const summaryId =
-        "p_" +
-        createHash("sha256")
-          .update(id + ":" + p.revision)
-          .digest("hex")
-          .slice(0, 40);
+      const history = matchingHistory(
+        storedHistory,
+        p.revision,
+        policy.history_scope,
+      );
+      const contextReset = storedHistory.length > 0 && !history.length;
       if (contextReset) await memory.writeSummary(summaryId, "");
       onContext?.({ personaId: p.id, personaName: p.name, contextReset });
       logger.info("对话人格", {
@@ -74,14 +187,21 @@ export class Sessions {
         text,
         ...context,
       });
-      const cfg = this.config.memory;
-      const allFacts = [...new Set<string>(await memory.readFacts())];
+      const cfg = { ...this.config.memory, ...policy };
+      const allFacts = policy.include_facts
+        ? [...new Set<string>(await memory.readFacts())]
+        : [];
       const facts = allFacts.slice(-(cfg.facts_max_lines ?? 100));
-      let summary = await memory.readSummary(summaryId);
-      const recent = history
-        .filter((x: any) => x.type === "message")
-        .slice(-(cfg.recent_lines ?? 30))
-        .map((x: any) => ({ role: x.role, content: x.text }));
+      let summary = policy.include_summary
+        ? await memory.readSummary(summaryId)
+        : "";
+      const recent = (
+        cfg.recent_lines === 0
+          ? []
+          : history
+              .filter((x: any) => x.type === "message")
+              .slice(-cfg.recent_lines)
+      ).map((x: any) => ({ role: x.role, content: x.text }));
       const budget = (cfg.budget_tokens ?? 6000) * 2;
       const cost = () =>
         JSON.stringify(recent).length +
@@ -100,6 +220,8 @@ export class Sessions {
         { role: "user", content: text },
       ];
       let final = "";
+      let measured: any = null;
+      const limit = await this.modelLimit(p.provider);
       for (let round = 0; round < 6; round++) {
         const reply = await llm.chat({
           provider: p.provider,
@@ -107,6 +229,7 @@ export class Sessions {
           tools: session.permission === "off" ? [] : tools.list(),
           onChunk,
         });
+        measured = requestUsage(reply.usage, p.provider, limit.tokens);
         if (!reply.toolCalls.length) {
           final = reply.text;
           break;
@@ -155,10 +278,11 @@ export class Sessions {
         role: "assistant",
         text: final,
         ...context,
+        request_usage: measured,
       });
       const count = history.filter((x: any) => x.type === "message").length + 2;
       const n = cfg.recent_lines ?? 30;
-      if (count > n && count % 10 === 0) {
+      if (policy.include_summary && n > 0 && count > n && count % 10 === 0) {
         try {
           const old = [
             ...history,
