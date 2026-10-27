@@ -86,12 +86,25 @@ test("console config API persists model selection, protects secrets and changes 
         body: JSON.stringify(data),
       });
     assert.equal((await fetch(url + "/api/model-config")).status, 401);
+    assert.equal(
+      (
+        await fetch(url + "/api/model-config/probe", {
+          method: "POST",
+          body: "{}",
+        })
+      ).status,
+      401,
+    );
     assert.equal((await get("/")).status, 200);
     assert.equal(
       (await get("/ui/app.js")).headers.get("content-type"),
       "text/javascript; charset=utf-8",
     );
     assert.equal((await get("/ui/not-allowed")).status, 404);
+    assert.match(
+      (await get("/ui/models.css")).headers.get("content-type") || "",
+      /text\/css/,
+    );
     let snapshot = await (await get("/api/model-config")).json();
     assert.ok(!JSON.stringify(snapshot).includes("private-fixture-secret"));
     const draft = () => ({
@@ -138,6 +151,37 @@ test("console config API persists model selection, protects secrets and changes 
     const probe = await post("/api/model-config/test", { modelId: "vector" });
     assert.equal(probe.status, 200);
     assert.equal((await probe.json()).dimensions, 4);
+    const beforeDraftTest = await readFile(
+      join(root, "config/config.json"),
+      "utf8",
+    );
+    const draftPayload = {
+      provider: {
+        ...snapshot.providers[0],
+        api_key: "",
+        timeout_seconds: 15,
+        proxy_url: "",
+      },
+      model: {
+        ...snapshot.models.find((m: any) => m.id === "vector"),
+        dimensions: 8,
+      },
+    };
+    assert.equal(
+      (await post("/api/model-config/probe", draftPayload)).status,
+      502,
+    );
+    const detected = await post("/api/model-config/probe", {
+      ...draftPayload,
+      detectDimensions: true,
+    });
+    assert.equal(detected.status, 200);
+    assert.equal((await detected.json()).dimensions, 4);
+    assert.equal(
+      await readFile(join(root, "config/config.json"), "utf8"),
+      beforeDraftTest,
+      "draft tests must not save or switch the active model",
+    );
     const available = await post("/api/model-config/models", {
       providerId: "local",
     });

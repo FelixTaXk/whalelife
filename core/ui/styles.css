@@ -615,143 +615,6 @@ main {
 .tab.active .count {
   background: #e9e5fa;
 }
-.model-workbench {
-  display: grid;
-  grid-template-columns: 226px minmax(0, 1fr);
-  min-height: 530px;
-  overflow: hidden;
-}
-.provider-list {
-  border-right: 1px solid var(--line);
-  padding: 18px 13px;
-  background: #fefeff;
-}
-.provider-list .section-label {
-  padding: 0 7px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 13px;
-}
-.provider-item {
-  width: 100%;
-  border: 1px solid transparent;
-  text-align: left;
-  background: transparent;
-  border-radius: 9px;
-  padding: 12px 10px;
-  display: flex;
-  gap: 11px;
-  align-items: center;
-  margin-bottom: 6px;
-}
-.provider-item:hover {
-  background: #f8f8fc;
-}
-.provider-item.active {
-  background: var(--accent-soft);
-  border-color: #e7e1fb;
-}
-.provider-logo {
-  width: 34px;
-  height: 34px;
-  flex: none;
-  background: #eaf1ff;
-  color: #6687d0;
-  border-radius: 10px;
-  font-size: 16px;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
-}
-.provider-item.active .provider-logo {
-  background: #e0daf7;
-  color: var(--accent);
-}
-.provider-item .provider-text {
-  overflow: hidden;
-  min-width: 0;
-}
-.provider-item strong {
-  font-size: 12px;
-  font-weight: 600;
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.provider-item small {
-  display: block;
-  font-size: 10px;
-  color: #9a9faf;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.provider-item > .icon {
-  margin-left: auto;
-  width: 13px;
-  color: #aaa6c7;
-}
-.provider-note {
-  padding: 15px 10px;
-  color: #a9adba;
-  font-size: 10px;
-  line-height: 1.8;
-}
-.provider-detail {
-  padding: 24px;
-  min-width: 0;
-}
-.provider-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.provider-title {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.provider-title h2 {
-  font-size: 18px;
-}
-.provider-title .provider-logo {
-  width: 40px;
-  height: 40px;
-  font-size: 20px;
-}
-.connection-meta {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 14px;
-  padding: 17px 18px;
-  background: #fafbfe;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  margin: 22px 0;
-}
-.connection-meta small {
-  font-size: 10px;
-  display: block;
-  margin-bottom: 3px;
-}
-.connection-meta p {
-  font-size: 11px;
-  color: #6e7687;
-  overflow-wrap: anywhere;
-}
-.connection-meta .badge {
-  margin-top: 2px;
-}
-.model-toolbar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-  margin-bottom: 16px;
-}
 .search-wrap {
   position: relative;
   min-width: 100px;
@@ -769,67 +632,6 @@ main {
   padding-bottom: 8px;
   font-size: 12px;
 }
-.model-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 14px;
-}
-.model-card {
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  padding: 17px;
-  min-width: 0;
-  transition: border-color 0.15s;
-}
-.model-card:hover {
-  border-color: #d9d3ee;
-}
-.model-card .card-head {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-.model-card h3 {
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.model-card code {
-  display: block;
-  margin: 12px 0;
-  font-size: 11px;
-  min-height: 18px;
-}
-.model-card .type-icon {
-  width: 29px;
-  height: 29px;
-  border-radius: 7px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  display: grid;
-  place-items: center;
-}
-.model-card .type-icon .icon {
-  width: 16px;
-  height: 16px;
-}
-.model-card .card-foot {
-  margin-top: 15px;
-  padding-top: 13px;
-  border-top: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.model-card .probe-result {
-  font-size: 10px;
-  color: #7e8494;
-  margin-top: 10px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-.model-card .probe-result.error {
-  color: #be5360;
-}
 .hint {
   font-size: 11px;
   line-height: 1.8;
@@ -843,9 +645,6 @@ main {
   height: 14px;
   margin-top: 3px;
   flex: none;
-}
-.model-hint {
-  margin-top: 16px;
 }
 .bindings-grid {
   display: grid;
@@ -1237,22 +1036,6 @@ dialog::backdrop {
   cursor: pointer;
   margin-bottom: 12px;
 }
-.select-model-item {
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  text-align: left;
-  background: white;
-  width: 100%;
-  margin-bottom: 8px;
-  color: #72788a;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.select-model-item:hover {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
 .danger-text {
   color: #be4c60;
 }
@@ -1271,9 +1054,6 @@ dialog::backdrop {
     padding-left: 44px;
     padding-right: 44px;
   }
-  .model-workbench {
-    grid-template-columns: 245px minmax(0, 1fr);
-  }
 }
 @media (max-width: 1100px) {
   :root {
@@ -1284,12 +1064,6 @@ dialog::backdrop {
   }
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-  .model-workbench {
-    grid-template-columns: 190px minmax(0, 1fr);
-  }
-  .provider-detail {
-    padding: 20px;
   }
   .overview-grid {
     grid-template-columns: 1fr;
@@ -1302,9 +1076,6 @@ dialog::backdrop {
   }
   .page-heading {
     gap: 10px;
-  }
-  .model-grid {
-    grid-template-columns: 1fr;
   }
 }
 @media (max-width: 760px) {
@@ -1372,46 +1143,6 @@ dialog::backdrop {
   }
   .stat-value.text {
     font-size: 16px;
-  }
-  .model-workbench {
-    display: block;
-  }
-  .provider-list {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-    padding: 13px;
-    display: flex;
-    overflow: auto;
-    gap: 7px;
-  }
-  .provider-list .section-label,
-  .provider-note {
-    display: none;
-  }
-  .provider-item {
-    min-width: 160px;
-    margin: 0;
-    flex: none;
-    width: auto;
-  }
-  .provider-detail {
-    padding: 18px;
-  }
-  .provider-header {
-    align-items: flex-start;
-  }
-  .provider-title h2 {
-    font-size: 16px;
-  }
-  .connection-meta {
-    grid-template-columns: 1fr;
-  }
-  .model-toolbar {
-    gap: 8px;
-  }
-  .model-toolbar .section-label {
-    width: 100%;
-    margin-bottom: 3px;
   }
   .search-wrap {
     flex: 1;

@@ -13,6 +13,8 @@ import {
 } from "../core/model-config.ts";
 import { LLM } from "../core/llm.ts";
 import { createRequire, syncBuiltinESMExports } from "node:module";
+import { connect, type Socket } from "node:net";
+import { resolveModel } from "../core/model-config.ts";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "whale-models-"));
@@ -322,5 +324,366 @@ test("upstream failures and malformed disk JSON cannot expose response bodies or
     );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("transport settings have validated defaults and never allow proxy URL credentials", async () => {
+  const f = await fixture();
+  const initial = f.manager.snapshot();
+  assert.equal(initial.providers[0].timeout_seconds, 120);
+  assert.equal(initial.providers[0].proxy_url, "");
+  let edit = f.input();
+  edit.providers[0].timeout_seconds = 25;
+  edit.providers[0].proxy_url = "http://127.0.0.1:7890";
+  await f.manager.save(edit);
+  assert.equal(f.manager.snapshot().providers[0].timeout_seconds, 25);
+  assert.equal(
+    f.manager.snapshot().providers[0].proxy_url,
+    "http://127.0.0.1:7890",
+  );
+  for (const value of [0, 601, 1.5, "60"]) {
+    edit = f.input();
+    edit.providers[0].timeout_seconds = value;
+    await assert.rejects(() => f.manager.save(edit), /1–600/);
+  }
+  for (const value of [
+    "http://username:secret@localhost:7890",
+    "socks5://localhost:7890",
+    "https://localhost:7890/path",
+  ]) {
+    edit = f.input();
+    edit.providers[0].proxy_url = value;
+    await assert.rejects(() => f.manager.save(edit), /代理/);
+  }
+});
+
+test("draft embedding tests reuse only matching saved credentials, distinguish expected dimension from request parameters, and never save", async () => {
+  const seen: any[] = [];
+  const server = createServer(async (req, res) => {
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    seen.push({
+      path: req.url,
+      auth: req.headers.authorization,
+      body: JSON.parse(raw),
+    });
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ data: [{ embedding: [1, 2, 3] }] }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const f = await fixture();
+    const edit = f.input();
+    const base = `http://127.0.0.1:${(server.address() as any).port}/v1`;
+    edit.providers[1].base_url = base;
+    (edit.providers[1] as any).api_key = "test-draft-key";
+    await f.manager.save(edit);
+    const before = await readFile(f.file, "utf8");
+    const draft: any = {
+      provider: {
+        id: "selected",
+        protocol: "openai-compatible",
+        base_url: base,
+        api_key: "",
+        enabled: true,
+        timeout_seconds: 10,
+        proxy_url: "",
+      },
+      model: {
+        model: "embedding-test",
+        type: "embedding",
+        enabled: true,
+        parameters: { dimensions: 2 },
+        dimensions: 3,
+      },
+    };
+    const result = await f.manager.probeDraft(draft);
+    assert.equal(result.dimensions, 3);
+    assert.equal(seen[0].auth, "Bearer test-draft-key");
+    assert.equal(seen[0].body.dimensions, 2);
+    assert.equal(seen[0].body.input, "WhaleLife connection test");
+    draft.model.dimensions = 1024;
+    await assert.rejects(
+      () => f.manager.probeDraft(draft),
+      /预期 1024.*返回 3/,
+    );
+    const detected = await f.manager.probeDraft({
+      ...draft,
+      detectDimensions: true,
+    });
+    assert.equal(detected.dimensions, 3);
+    delete draft.model.parameters.dimensions;
+    await f.manager.probeDraft({ ...draft, detectDimensions: true });
+    assert.ok(!Object.hasOwn(seen.at(-1).body, "dimensions"));
+    assert.equal(await readFile(f.file, "utf8"), before);
+    const moved = structuredClone(draft);
+    moved.provider.base_url += "/elsewhere";
+    await assert.rejects(() => f.manager.probeDraft(moved), /重新输入密钥/);
+    const changed = structuredClone(draft);
+    changed.provider.protocol = "dashscope";
+    await assert.rejects(
+      () => f.manager.probeDraft(changed),
+      /协议后请重新输入密钥/,
+    );
+    const snapshot = f.manager.snapshot();
+    assert.ok(!JSON.stringify(snapshot).includes("test-draft-key"));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("DashScope embeddings use native endpoint and envelope while dimensions are checked independently", async () => {
+  const seen: any[] = [];
+  const server = createServer(async (req, res) => {
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    seen.push({ path: req.url, body: JSON.parse(raw) });
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({
+        output: { embeddings: [{ embedding: [0.2, 0.4, 0.6], text_index: 0 }] },
+      }),
+    );
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const f = await fixture();
+    const edit = f.input();
+    edit.providers.push({
+      id: "dash",
+      name: "阿里原生向量",
+      protocol: "dashscope",
+      base_url: `http://127.0.0.1:${(server.address() as any).port}/api/v1`,
+      enabled: true,
+      timeout_seconds: 120,
+      proxy_url: "",
+      has_key: false,
+    });
+    edit.models.push({
+      id: "dash-vector",
+      name: "向量",
+      provider: "dash",
+      model: "text-embedding-v3",
+      type: "embedding",
+      enabled: true,
+      parameters: { dimension: 3, text_type: "query" },
+      dimensions: 3,
+    });
+    edit.bindings.embedding = "dash-vector";
+    await f.manager.save(edit);
+    const result = await f.manager.testModel("dash-vector");
+    assert.equal(result.dimensions, 3);
+    assert.equal(
+      seen[0].path,
+      "/api/v1/services/embeddings/text-embedding/text-embedding",
+    );
+    assert.deepEqual(seen[0].body, {
+      model: "text-embedding-v3",
+      input: { texts: ["WhaleLife connection test"] },
+      parameters: { dimension: 3, text_type: "query" },
+    });
+    const changed = f.input();
+    changed.models.find((m: any) => m.id === "dash-vector").dimensions = 1024;
+    await f.manager.save(changed);
+    await assert.rejects(() => f.manager.testModel("dash-vector"), /预期 1024/);
+    assert.equal(
+      (await f.manager.testModel("dash-vector", true)).dimensions,
+      3,
+    );
+    await assert.rejects(
+      () => f.manager.listModels("dash"),
+      /手动填写模型标识/,
+    );
+    const illegal = f.input();
+    illegal.models.push({
+      id: "dash-chat",
+      name: "不支持的原生对话",
+      provider: "dash",
+      model: "qwen-plus",
+      type: "chat",
+      enabled: true,
+      parameters: {},
+      dimensions: null,
+    });
+    await assert.rejects(() => f.manager.save(illegal), /仅支持 Embedding/);
+    f.config.models.push(illegal.models.at(-1));
+    assert.throws(
+      () => resolveModel(f.config, "dash-chat"),
+      /仅支持 Embedding/,
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("legacy DeepSeek embedding mistakes stay visible and unchanged but cannot be bound, tested or duplicated", async () => {
+  const f = await fixture();
+  const disk = JSON.parse(await readFile(f.file, "utf8"));
+  disk.providers[1].base_url = "https://api.deepseek.com";
+  disk.models = f.manager.snapshot().models;
+  disk.models.push({
+    id: "model_421e97a26ccc",
+    name: "误配向量",
+    provider: "selected",
+    model: "dashscope_embedding",
+    type: "embedding",
+    enabled: true,
+    parameters: {},
+  });
+  disk.model_bindings = f.manager.snapshot().bindings;
+  await writeFile(f.file, JSON.stringify(disk));
+  const snapshot = f.manager.snapshot();
+  const invalid = snapshot.models.find(
+    (m: any) => m.id === "model_421e97a26ccc",
+  );
+  assert.match(invalid.configuration_error, /DeepSeek 官方接口仅支持对话/);
+  assert.equal(invalid.provider, "selected");
+  const edit = f.input();
+  edit.providers[0].name = "修改另一提供商";
+  await f.manager.save(edit);
+  const after = JSON.parse(await readFile(f.file, "utf8"));
+  assert.equal(
+    after.models.find((m: any) => m.id === invalid.id).model,
+    "dashscope_embedding",
+  );
+  assert.equal(after.providers[1].api_key, "kept-secret");
+  await assert.rejects(() => f.manager.testModel(invalid.id), /DeepSeek/);
+  await assert.rejects(() => f.manager.testModel(invalid.id, true), /DeepSeek/);
+  const bind = f.input();
+  bind.bindings.embedding = invalid.id;
+  await assert.rejects(() => f.manager.save(bind), /绑定/);
+  const duplicate = f.input();
+  duplicate.models.push({ ...invalid, id: "another-invalid" });
+  await assert.rejects(() => f.manager.save(duplicate), /DeepSeek/);
+  const modified = f.input();
+  modified.models.find((m: any) => m.id === invalid.id).model =
+    "text-embedding-v3";
+  await assert.rejects(() => f.manager.save(modified), /DeepSeek/);
+  assert.ok(!JSON.stringify(f.manager.snapshot()).includes("kept-secret"));
+});
+
+test("configured HTTP proxy is actually used by probes and streaming chat", async () => {
+  const seen: any[] = [];
+  const origin = createServer(async (req, res) => {
+    let raw = "";
+    for await (const c of req) raw += c;
+    const body = raw ? JSON.parse(raw) : null;
+    seen.push({ path: req.url, body });
+    if (req.url === "/v1/models") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ data: [{ id: "proxied-chat" }] }));
+    } else if (body?.stream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.end(
+        'data: {"choices":[{"delta":{"content":"proxy success"}}]}\n\ndata: [DONE]\n\n',
+      );
+    } else {
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "OK" } }],
+        }),
+      );
+    }
+  });
+  origin.listen(0, "127.0.0.1");
+  await once(origin, "listening");
+  const originPort = (origin.address() as any).port;
+  const targets: string[] = [];
+  const sockets = new Set<Socket>();
+  const proxy = createServer();
+  proxy.on("connect", (req, client, head) => {
+    targets.push(req.url!);
+    const upstream = connect(originPort, "127.0.0.1");
+    for (const socket of [client, upstream]) {
+      sockets.add(socket as Socket);
+      socket.on("close", () => sockets.delete(socket as Socket));
+      socket.on("error", () => {
+        client.destroy();
+        upstream.destroy();
+      });
+    }
+    upstream.on("connect", () => {
+      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length) upstream.write(head);
+      client.pipe(upstream).pipe(client);
+    });
+  });
+  proxy.listen(0, "127.0.0.1");
+  await once(proxy, "listening");
+  try {
+    const f = await fixture();
+    const edit = f.input();
+    edit.providers[1].base_url = "http://only-reachable-via-proxy.invalid/v1";
+    (edit.providers[1] as any).api_key = "";
+    (edit.providers[1] as any).clear_key = true;
+    edit.providers[1].proxy_url = `http://127.0.0.1:${(proxy.address() as any).port}`;
+    edit.providers[1].timeout_seconds = 3;
+    await f.manager.save(edit);
+    assert.deepEqual(await f.manager.listModels("selected"), {
+      models: ["proxied-chat"],
+    });
+    assert.equal((await f.manager.testModel("selected-chat")).ok, true);
+    const llm = new LLM(f.logger);
+    const result = await llm.chat({
+      provider: resolveChatModel(f.config, "whale"),
+      messages: [{ role: "user", content: "Hi" }],
+    });
+    assert.equal(result.text, "proxy success");
+    assert.equal(targets.length, 3);
+    assert.ok(
+      targets.every((t) => t === "only-reachable-via-proxy.invalid:80"),
+    );
+    assert.equal(seen.length, 3);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await Promise.all([
+      new Promise<void>((r) => proxy.close(() => r())),
+      new Promise<void>((r) => origin.close(() => r())),
+    ]);
+  }
+});
+
+test("provider timeout covers both a slow probe and an unfinished chat stream", async () => {
+  const sockets = new Set<Socket>();
+  const server = createServer(async (req, res) => {
+    let raw = "";
+    for await (const c of req) raw += c;
+    const body = JSON.parse(raw);
+    if (body.stream) {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+    }
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const f = await fixture();
+    const edit = f.input();
+    edit.providers[1].base_url = `http://127.0.0.1:${(server.address() as any).port}`;
+    (edit.providers[1] as any).clear_key = true;
+    edit.providers[1].timeout_seconds = 1;
+    await f.manager.save(edit);
+    await assert.rejects(
+      () => f.manager.testModel("selected-chat"),
+      (e: any) => e.status === 504 && /1 秒/.test(e.message),
+    );
+    await assert.rejects(
+      () =>
+        new LLM(f.logger).chat({
+          provider: resolveChatModel(f.config, "whale"),
+          messages: [],
+        }),
+      (e: any) => e.status === 504 && /1 秒/.test(e.message),
+    );
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((r) => server.close(() => r()));
   }
 });

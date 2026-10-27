@@ -1,300 +1,535 @@
 import { api, escapeHTML as e, typeNames, uid } from "./api.js";
 import { icon } from "./icons.js";
 
-const typeIcon = (type) =>
-  type === "embedding" ? "vector" : type === "chat" ? "chat" : "sliders";
 const types = [
-  ["all", "全部模型", "cube"],
   ["chat", "对话", "chat"],
-  ["embedding", "向量 / Embedding", "vector"],
+  ["embedding", "嵌入", "vector"],
   ["rerank", "重排序", "sliders"],
-  ["other", "其他", "bolt"],
+  ["stt", "语音转文字", "chat"],
+  ["tts", "文字转语音", "chat"],
+  ["image", "图像", "cube"],
 ];
-const matches = (model, filter) =>
-  filter === "all" ||
-  model.type === filter ||
-  (filter === "other" && !["chat", "embedding", "rerank"].includes(model.type));
-const providerName = (provider) => provider.name || provider.id;
-function host(base) {
+const templates = [
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    types: ["chat"],
+    protocol: "openai-compatible",
+    base_url: "https://api.deepseek.com",
+    example: "deepseek-chat",
+    note: "DeepSeek 对话接口。填写你在该服务中实际使用的模型名称。",
+    mark: "D",
+  },
+  {
+    id: "dashscope",
+    label: "阿里云百炼 · DashScope",
+    types: ["embedding"],
+    protocol: "dashscope",
+    base_url: "https://dashscope.aliyuncs.com/api/v1",
+    example: "text-embedding-v4",
+    note: "使用 DashScope 原生嵌入接口。API 地址和 Key 必须属于同一地域；地址可以按你的服务文档修改。",
+    mark: "百",
+  },
+  {
+    id: "bailian-chat",
+    label: "阿里云百炼",
+    types: ["chat"],
+    protocol: "openai-compatible",
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    example: "填写百炼控制台中的模型名称",
+    note: "使用百炼的 OpenAI 兼容对话接口。地址和 Key 必须属于同一地域。",
+    mark: "百",
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    types: ["chat", "embedding"],
+    protocol: "openai-compatible",
+    base_url: "https://api.openai.com/v1",
+    example: "",
+    note: "填写 OpenAI API 提供的模型名称。嵌入模型和对话模型分开配置。",
+    mark: "O",
+  },
+  {
+    id: "local",
+    label: "本地服务 · OpenAI 兼容",
+    types: ["chat", "embedding"],
+    protocol: "openai-compatible",
+    base_url: "",
+    example: "填写本地已安装的模型名称",
+    note: "填写本地服务的 OpenAI 兼容地址（包含 /v1 等前缀）。无需认证的服务可将 Key 留空。",
+    mark: "L",
+  },
+  {
+    id: "custom",
+    label: "自定义 · OpenAI 兼容",
+    types: ["chat", "embedding"],
+    protocol: "openai-compatible",
+    base_url: "",
+    example: "填写服务文档中的模型名称",
+    note: "填写服务商提供的 OpenAI 兼容 API 根地址。请确认该地址支持当前模型类型。",
+    mark: "+",
+  },
+];
+export const templatesFor = (type) =>
+  templates.filter((t) => t.types.includes(type));
+function issueFor(config, model) {
+  if (model.configuration_error) return model.configuration_error;
+  const p = config.providers.find((p) => p.id === model.provider);
+  if (!p) return "找不到这条配置对应的服务连接。";
+  if (p.protocol === "dashscope" && model.type !== "embedding")
+    return "DashScope 原生嵌入接口只能配置嵌入模型。";
   try {
-    return new URL(base).host;
+    if (
+      new URL(p.base_url).hostname === "api.deepseek.com" &&
+      model.type !== "chat"
+    )
+      return "这条嵌入配置误用了 DeepSeek 对话连接。请配置实际提供嵌入模型的服务。";
   } catch {
-    return base;
+    return "API 地址无效。";
   }
+  return null;
 }
-
+export const visibleModels = (config, type) =>
+  config.models.filter((m) => m.type === type && !issueFor(config, m));
+function inferTemplate(provider, type) {
+  if (provider.protocol === "dashscope") return "dashscope";
+  try {
+    const h = new URL(provider.base_url).hostname;
+    if (h === "api.deepseek.com" && type === "chat") return "deepseek";
+    if (h === "api.openai.com") return "openai";
+    if (h.includes("dashscope") && type === "chat") return "bailian-chat";
+    if (["localhost", "127.0.0.1", "::1"].includes(h)) return "local";
+  } catch {}
+  return "custom";
+}
+function draftFor(app, model, repair = false) {
+  const p =
+    app.state.config.providers.find((p) => p.id === model.provider) || {};
+  return {
+    id: model.id,
+    providerId: repair ? uid("provider") : p.id,
+    type: model.type,
+    name: model.name,
+    model: model.model,
+    template: repair ? "" : inferTemplate(p, model.type),
+    protocol: repair ? "openai-compatible" : p.protocol,
+    base_url: repair ? "" : p.base_url,
+    api_key: "",
+    has_key: !repair && p.has_key,
+    clear_key: false,
+    enabled: model.enabled && p.enabled,
+    providerEnabled: repair || p.enabled !== false,
+    timeout_seconds: String(p.timeout_seconds ?? 120),
+    proxy_url: repair ? "" : p.proxy_url || "",
+    dimensions: String(model.dimensions ?? ""),
+    parametersText: JSON.stringify(model.parameters || {}, null, 2),
+    use: app.state.config.bindings[model.type] === model.id,
+    repair,
+    dirty: repair,
+    version: 0,
+    revision: app.state.config.revision,
+  };
+}
+function selectedDraft(app, models) {
+  const draft = app.state.modelDraft;
+  if (
+    draft &&
+    draft.type === app.state.modelFilter &&
+    (draft.dirty || draft.revision === app.state.config.revision)
+  )
+    return draft;
+  const selected =
+    models.find((m) => m.id === app.state.modelSelection) || models[0];
+  if (!selected) return null;
+  app.state.modelSelection = selected.id;
+  return (app.state.modelDraft = draftFor(app, selected));
+}
 export function renderModels(app) {
   const config = app.state.config;
-  const filter = app.state.modelFilter || "all";
-  if (!config.providers.some((p) => p.id === app.state.provider))
-    app.state.provider = config.providers[0]?.id;
-  const selected = config.providers.find((p) => p.id === app.state.provider);
-  const query = (app.state.modelSearch || "").toLowerCase();
-  const models = config.models.filter(
-    (m) =>
-      m.provider === selected?.id &&
-      matches(m, filter) &&
-      (m.name + " " + m.model).toLowerCase().includes(query),
+  const type = types.some(([id]) => id === app.state.modelFilter)
+    ? app.state.modelFilter
+    : "chat";
+  app.state.modelFilter = type;
+  const label = types.find(([id]) => id === type)[1];
+  const models = visibleModels(config, type);
+  const errors = config.models.filter((m) => issueFor(config, m));
+  const supported = ["chat", "embedding"].includes(type);
+  const draft = supported ? selectedDraft(app, models) : null;
+  return `<div class="model-type-toolbar"><div class="tabs capability-tabs" role="tablist" aria-label="模型类型">${types.map(([id, name, ico]) => `<button type="button" class="tab ${type === id ? "active" : ""}" role="tab" aria-selected="${type === id}" data-filter="${id}">${icon(ico)}${name}${["chat", "embedding"].includes(id) ? `<span class="count">${visibleModels(config, id).length}</span>` : "<small>未接入</small>"}</button>`).join("")}</div><a href="#bindings" class="btn small" aria-label="模型使用设置">${icon("sliders")}使用设置</a></div>
+    ${errors.length ? `<div class="configuration-warning">${icon("info")}<span>${errors.length} 条旧配置的服务与模型类型不匹配，已移出可用列表。</span><button type="button" class="btn small link" data-issues>查看并修复</button></div>` : ""}
+    <div class="panel connection-workbench" style="--connection-offset:${errors.length ? "248px" : "182px"}"><aside class="connection-list" aria-label="${label}模型配置"><div class="connection-list-title"><h2>${label}模型配置</h2>${supported ? `<button type="button" class="btn small link" data-add>${icon("plus")}新增</button>` : ""}</div>
+    ${draft?.isNew ? `<button type="button" class="connection-item active"><span class="connection-logo">${icon("plus")}</span><span><strong>${e(draft.name)}</strong><small>尚未保存</small></span></button>` : ""}
+    ${models
+      .map((m) => {
+        const p = config.providers.find((p) => p.id === m.provider);
+        const t = templates.find((t) => t.id === inferTemplate(p, type));
+        return `<button type="button" class="connection-item ${draft?.id === m.id ? "active" : ""}" data-connection="${e(m.id)}" aria-pressed="${draft?.id === m.id}"><span class="connection-logo ${t?.id === "dashscope" ? "bailian" : ""}">${e(t?.mark || "+")}</span><span><strong>${e(m.name)}</strong><small>${e(m.model)}</small></span>${config.bindings[type] === m.id ? '<i class="status-dot" title="已选用"></i>' : ""}</button>`;
+      })
+      .join("")}
+    ${!models.length && !draft?.isNew ? `<p class="connection-list-empty">尚未添加${label}配置</p>` : ""}</aside>
+    <section class="connection-editor">${draft ? renderEditor(app, draft) : `<div class="empty connection-empty"><span class="empty-icon">${icon(type === "embedding" ? "vector" : "cube")}</span><h2>${supported ? `尚未配置${label}服务` : `${label}能力尚未接入`}</h2><p>${type === "embedding" ? "选择提供嵌入模型的服务，填写其 API Key 和实际模型名称。" : supported ? "选择服务类型，填写连接和模型设置。" : "接入对应接口后，这里会提供可用的配置和测试。"}</p>${supported ? `<button type="button" class="btn primary" data-add>${icon("plus")}新增${label}配置</button>` : ""}</div>`}</section></div>`;
+}
+const row = (name, label, description, control) =>
+  `<div class="setting-row"><div class="setting-description"><label for="setting-${name}">${label}</label>${description ? `<p>${description}</p>` : ""}</div><div class="setting-control">${control}</div></div>`;
+const input = (d, name, extra = "") =>
+  `<input id="setting-${name}" name="${name}" value="${e(d[name] ?? "")}" ${extra}>`;
+function renderEditor(app, d) {
+  const embedding = d.type === "embedding";
+  const supported = ["chat", "embedding"].includes(d.type);
+  const t = templates.find((t) => t.id === d.template);
+  const existing = app.state.config.models.find((m) => m.id === d.id);
+  const shared = app.state.config.models.filter(
+    (m) => m.provider === d.providerId && m.id !== d.id,
+  ).length;
+  return `<form id="connection-form"><header class="connection-editor-header"><div><h2>${e(d.name || "新模型配置")}</h2><p>${e(d.base_url || "填写下面的连接设置")}</p></div><div class="row"><button type="button" class="btn link" data-probe-draft ${supported ? "" : "disabled"}>${icon("bolt")}测试</button><button type="submit" class="btn primary" id="connection-save" ${d.dirty && !app.state.modelSaving ? "" : "disabled"}>${icon("check")}保存</button></div></header>
+    <div class="connection-settings"><div class="settings-section-title"><h3>设置</h3><span id="draft-state">${d.dirty ? "有未保存的修改" : "已保存"}</span></div>
+    ${d.repair ? '<div class="configuration-warning repair-note">旧记录已保留。请选择正确的服务类型并填写该服务的 Key；旧 DeepSeek 密钥不会转移到新地址。</div>' : ""}
+    ${d.revision !== app.state.config.revision ? '<div class="configuration-warning repair-note">已保存的配置发生了变化。当前未保存的内容仍保留；请先放弃修改，再根据最新配置重新编辑。</div>' : ""}
+    <div class="service-notice">${icon("info")}<p>${e(t?.note || "选择要连接的服务，然后填写实际模型名称。")}</p></div>
+    ${row(
+      "template",
+      "服务类型",
+      "决定使用的接口格式。",
+      `<select id="setting-template" name="template" required>${!d.template ? '<option value="">请选择服务类型</option>' : ""}${templatesFor(
+        d.type,
+      )
+        .map(
+          (t) =>
+            `<option value="${t.id}" ${d.template === t.id ? "selected" : ""}>${e(t.label)}</option>`,
+        )
+        .join("")}</select>`,
+    )}
+    ${row("name", "配置名称", "由你命名，方便在列表和使用设置中识别。", input(d, "name", 'required maxlength="200" placeholder="例如：百炼向量"'))}
+    ${row("enabled", "启用", "允许使用这条模型配置。", `<label class="setting-toggle"><input id="setting-enabled" name="enabled" type="checkbox" ${d.enabled ? "checked" : ""}><span>启用此配置</span></label>`)}
+    ${row("api_key", "API Key", d.has_key ? "已保存密钥。留空保留；更换地址或接口后需重新填写。" : "填写此服务的密钥。无需认证的本地服务可留空。", `${input(d, "api_key", 'type="password" autocomplete="new-password" placeholder="' + (d.has_key ? "留空保留已保存的 Key" : "填写 API Key") + '"')}${d.has_key ? `<label class="key-clear"><input name="clear_key" type="checkbox" ${d.clear_key ? "checked" : ""}>清除已保存的 Key</label>` : ""}`)}
+    ${row("base_url", "API Base URL", "API 根地址，包含服务要求的路径前缀。", input(d, "base_url", 'type="url" required placeholder="https://服务地址/v1"'))}
+    ${row("model", embedding ? "嵌入模型" : "对话模型", `服务商提供的实际模型名称，与上方配置名称分开。${embedding ? "例如 text-embedding-v4。" : "请以服务文档中的名称为准。"}`, input(d, "model", `required maxlength="300" placeholder="${e(t?.example || (embedding ? "例如 text-embedding-3-small" : "填写实际模型名称"))}"`))}
+    ${embedding ? row("dimensions", "嵌入维度", "记录模型实际返回的向量长度，用于检查结果是否一致。留空后点击自动检测。", `<div class="dimension-input">${input(d, "dimensions", 'type="number" min="1" max="65536" step="1" placeholder="尚未检测"')}<button type="button" class="btn tonal" data-detect>自动检测</button></div>`) : ""}
+    ${row("timeout_seconds", "超时时间", "请求最长等待时间，单位：秒。", input(d, "timeout_seconds", 'type="number" required min="1" max="600" step="1"'))}
+    ${row("proxy_url", "代理地址", "可选，仅用于此连接。支持 HTTP / HTTPS 代理。", input(d, "proxy_url", 'type="url" placeholder="http://127.0.0.1:7890"'))}
+    ${supported ? row("use", embedding ? "选为嵌入模型" : "选为对话模型", embedding ? "保存后记录此选择。记忆向量检索尚未接入。" : "保存后用于新的对话请求；人格单独指定的模型仍优先。", `<label class="setting-toggle"><input id="setting-use" name="use" type="checkbox" ${d.use ? "checked" : ""}><span>使用此配置</span></label>`) : ""}
+    <details class="request-parameters"><summary>高级请求参数（可选）</summary><p>仅在服务文档要求时填写 JSON。${embedding ? `如模型支持缩减维度，可通过 ${d.protocol === "dashscope" ? "dimension" : "dimensions"} 指定请求维度，然后重新检测实际结果。` : "例如 temperature。"}</p><textarea name="parametersText" aria-label="高级请求参数" rows="5" spellcheck="false">${e(d.parametersText)}</textarea></details>
+    ${shared ? `<p class="shared-connection-note">此连接的地址、密钥、代理和超时也用于另外 ${shared} 条配置。需要独立连接时，请新增配置。</p>` : ""}
+    <div id="connection-result" class="connection-result ${d.probeError ? "error" : ""}" role="status">${e(d.probeMessage || "")}</div><div id="connection-error" class="form-error" role="alert"></div>
+    <footer class="connection-footer"><button type="button" class="btn small" data-discard>放弃修改</button>${existing ? `<button type="button" class="btn small danger" data-delete>${icon("trash")}删除此配置</button>` : ""}</footer>
+    </div></form>`;
+}
+function capture(form, d) {
+  const data = new FormData(form);
+  for (const name of [
+    "name",
+    "template",
+    "base_url",
+    "api_key",
+    "model",
+    "timeout_seconds",
+    "proxy_url",
+    "dimensions",
+    "parametersText",
+  ])
+    if (data.has(name)) d[name] = String(data.get(name));
+  for (const name of ["enabled", "clear_key", "use"]) d[name] = data.has(name);
+}
+function markDirty(app, form, d) {
+  capture(form, d);
+  d.dirty = true;
+  d.version++;
+  d.probeMessage = "";
+  d.probeError = false;
+  form.querySelector("#draft-state").textContent = "有未保存的修改";
+  form.querySelector("#connection-save").disabled = false;
+  form.querySelector("#connection-result").textContent = "";
+  form.querySelector("#connection-error").textContent = "";
+}
+function leaveDraft(app, action) {
+  if (app.state.modelSaving) return;
+  if (!app.state.modelDraft?.dirty) return action();
+  app.dialog(
+    "放弃未保存的修改？",
+    "<p>当前配置尚未保存。放弃后再切换。</p>",
+    async () => {
+      setTimeout(action, 0);
+    },
+    "放弃并继续",
   );
-  return `<div class="page-heading"><div><div class="eyebrow">MODELS & PROVIDERS</div><h1>模型服务</h1><p>连接不同的模型服务，为对话和向量检索准备合适的模型。</p></div><div class="heading-actions"><button class="btn primary" data-action="add-provider">${icon("plus")}新增提供商</button></div></div>
-    <div class="tabs" role="tablist" aria-label="模型用途">${types.map(([id, label, ico]) => `<button class="tab ${filter === id ? "active" : ""}" role="tab" aria-selected="${filter === id}" data-filter="${id}">${icon(ico)}${label}<span class="count">${config.models.filter((m) => matches(m, id)).length}</span></button>`).join("")}</div>
-    <div class="panel model-workbench"><aside class="provider-list" aria-label="提供商列表"><div class="section-label">模型提供商 <span class="count">${config.providers.length}</span></div>${config.providers.map((p) => `<button class="provider-item ${p.id === selected?.id ? "active" : ""}" data-provider="${e(p.id)}" aria-pressed="${p.id === selected?.id}"><span class="provider-logo">${e(providerName(p).slice(0, 1).toUpperCase())}</span><span class="provider-text"><strong>${e(providerName(p))}</strong><small>${config.models.filter((m) => m.provider === p.id).length} 个模型 · ${p.enabled ? "已启用" : "已停用"}</small></span>${icon("chevron")}</button>`).join("")}<div class="provider-note">同一连接可以添加多个模型。<br>密钥只保存在本机配置中。</div></aside>
-    <div class="provider-detail">${
-      selected
-        ? `<div class="provider-header"><div class="provider-title"><span class="provider-logo">${e(providerName(selected).slice(0, 1).toUpperCase())}</span><div><h2>${e(providerName(selected))}</h2><small>OpenAI 兼容服务</small></div></div><div class="row"><button class="btn small" data-action="edit-provider">${icon("edit")}编辑连接</button><button class="icon-btn" data-action="delete-provider" aria-label="删除提供商" title="删除提供商">${icon("trash")}</button></div></div>
-      <div class="connection-meta"><div><small>API 地址</small><p>${e(selected.base_url)}</p></div><div><small>访问凭据</small><span class="badge ${selected.has_key ? "green" : ""}">${icon("lock")}${selected.has_key ? "已保存密钥" : "未设置密钥"}</span></div></div>
-      <div class="model-toolbar"><span class="section-label">已配置模型 <span class="count">${models.length}</span></span><div class="spacer"></div><div class="search-wrap">${icon("search")}<input type="search" id="model-search" aria-label="搜索模型" placeholder="搜索模型…" value="${e(app.state.modelSearch || "")}"></div><button class="btn small" data-action="fetch-models">${icon("download")}获取模型</button><button class="btn small tonal" data-action="add-model">${icon("plus")}添加模型</button></div>
-      <div class="model-grid">${models.map((m) => modelCard(app, m)).join("")}</div>${!models.length ? `<div class="empty"><span class="empty-icon">${icon(typeIcon(filter))}</span><h3>${query ? "没有匹配的模型" : filter === "embedding" ? "还没有向量模型" : "还没有此类模型"}</h3><p>${query ? "试试其他模型名称。" : "添加模型后，可在「使用配置」中选择它的用途。"}</p>${!query ? '<button class="btn tonal" data-action="add-model">添加模型</button>' : ""}</div>` : ""}
-      <div class="hint model-hint">${icon("info")}<span>模型 ID 由服务提供方确定。对话与向量模型可分别测试；新增模型不会自动替换当前选择。</span></div>`
-        : `<div class="empty"><span class="empty-icon">${icon("cube")}</span><h3>连接你的第一个模型服务</h3><p>填写服务地址和访问凭据，再添加你想使用的模型。</p><button class="btn primary" data-action="add-provider">新增提供商</button></div>`
-    }</div></div>`;
 }
-
-function modelCard(app, model) {
-  const selected = Object.entries(app.state.config.bindings)
-    .filter(([, id]) => id === model.id)
-    .map(([type]) => typeNames[type]);
-  const probe = app.state.probes[model.id];
-  return `<article class="model-card"><div class="card-head"><span class="type-icon">${icon(typeIcon(model.type))}</span><h3>${e(model.name || model.model)}</h3><div class="spacer"></div><span class="status-dot" style="${model.enabled ? "" : "background:#b9bdc8"}" title="${model.enabled ? "已启用" : "已停用"}"></span></div><code>${e(model.model)}</code><div class="row"><span class="badge purple">${typeNames[model.type] || "其他"}</span>${selected.length ? `<span class="badge green">当前选择</span>` : ""}${!model.enabled ? '<span class="badge">已停用</span>' : ""}</div><div class="card-foot"><button class="btn small link" data-test="${e(model.id)}" ${!model.enabled ? "disabled" : ""}>${icon("bolt")}测试连接</button><div class="spacer"></div><button class="icon-btn" data-edit-model="${e(model.id)}" aria-label="编辑模型 ${e(model.name)}">${icon("edit")}</button><button class="icon-btn" data-delete-model="${e(model.id)}" aria-label="删除模型 ${e(model.name)}">${icon("trash")}</button></div><div class="probe-result ${probe?.error ? "error" : ""}" data-probe="${e(model.id)}">${probe ? e(probe.message) : "尚未测试"}</div></article>`;
-}
-
 export function bindModels(app) {
   const root = app.content;
   root.querySelectorAll("[data-filter]").forEach(
-    (button) =>
-      (button.onclick = () => {
-        app.state.modelFilter = button.dataset.filter;
-        app.render();
+    (b) =>
+      (b.onclick = () => {
+        if (app.state.modelFilter === b.dataset.filter) return;
+        leaveDraft(app, () => {
+          app.state.modelDraft = null;
+          app.state.modelFilter = b.dataset.filter;
+          app.render();
+        });
       }),
   );
-  root.querySelectorAll("[data-provider]").forEach(
-    (button) =>
-      (button.onclick = () => {
-        app.state.provider = button.dataset.provider;
-        app.render();
+  root.querySelectorAll("[data-connection]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        if (app.state.modelDraft?.id === b.dataset.connection) return;
+        leaveDraft(app, () => {
+          app.state.modelDraft = null;
+          app.state.modelSelection = b.dataset.connection;
+          app.render();
+        });
       }),
-  );
-  const search = root.querySelector("#model-search");
-  if (search)
-    search.oninput = () => {
-      const cursor = search.selectionStart;
-      app.state.modelSearch = search.value;
-      app.render();
-      const next = root.querySelector("#model-search");
-      next.focus();
-      next.setSelectionRange(cursor, cursor);
-    };
-  root.querySelectorAll("[data-action]").forEach(
-    (button) =>
-      (button.onclick = () => {
-        const action = button.dataset.action;
-        if (action === "add-provider") providerDialog(app);
-        if (action === "edit-provider")
-          providerDialog(
-            app,
-            app.state.config.providers.find((p) => p.id === app.state.provider),
-          );
-        if (action === "add-model") modelDialog(app);
-        if (action === "fetch-models") fetchModels(app, button);
-        if (action === "delete-provider") deleteProvider(app);
-      }),
-  );
-  root.querySelectorAll("[data-edit-model]").forEach(
-    (button) =>
-      (button.onclick = () =>
-        modelDialog(
-          app,
-          app.state.config.models.find(
-            (m) => m.id === button.dataset.editModel,
-          ),
-        )),
   );
   root
-    .querySelectorAll("[data-delete-model]")
+    .querySelectorAll("[data-add]")
     .forEach(
-      (button) =>
-        (button.onclick = () => deleteModel(app, button.dataset.deleteModel)),
+      (b) => (b.onclick = () => leaveDraft(app, () => chooseTemplate(app))),
     );
   root
-    .querySelectorAll("[data-test]")
-    .forEach(
-      (button) =>
-        (button.onclick = () => testModel(app, button.dataset.test, button)),
-    );
-}
-
-function providerDialog(app, provider) {
-  const current = provider || {
-    name: "",
-    base_url: "",
-    enabled: true,
-    protocol: "openai-compatible",
+    .querySelector("[data-issues]")
+    ?.addEventListener("click", () => showIssues(app));
+  const form = root.querySelector("#connection-form");
+  if (!form) return;
+  const d = app.state.modelDraft;
+  form.oninput = () => markDirty(app, form, d);
+  form.querySelector("[name=template]").onchange = () => {
+    const t = templates.find((t) => t.id === form.elements.template.value);
+    if (!t) return;
+    capture(form, d);
+    d.protocol = t.protocol;
+    d.base_url = t.base_url;
+    d.api_key = "";
+    d.dimensions = "";
+    d.dirty = true;
+    d.version++;
+    d.probeMessage = "";
+    app.render();
   };
-  app.dialog(
-    provider ? "编辑模型连接" : "新增提供商",
-    `
-    <label class="form-field"><span>提供商名称</span><input name="name" required maxlength="100" placeholder="例如：DeepSeek、我的本地服务" value="${e(current.name)}"></label>
-    <label class="form-field"><span>API 地址</span><input name="base_url" type="url" required placeholder="https://api.example.com/v1" value="${e(current.base_url)}"><small>填写 OpenAI 兼容的 API 根地址，包含服务要求的 /v1 等前缀。</small></label>
-    <label class="form-field"><span>API 密钥 ${current.has_key ? '<span class="badge green">已保存</span>' : ""}</span><input name="api_key" type="password" autocomplete="new-password" placeholder="${current.has_key ? "留空保留原密钥" : "无密钥的本地服务可留空"}"><small>密钥不会从服务器回传。更换服务地址时，请重新填写密钥或明确清除。</small></label>
-    ${current.has_key ? '<label class="checkbox-label"><input type="checkbox" name="clear_key">清除已保存的密钥</label>' : ""}
-    <label class="checkbox-label"><input type="checkbox" name="enabled" ${current.enabled ? "checked" : ""}>启用此连接</label>`,
-    async (form) => {
-      const next = app.configDraft();
-      const entry = {
-        id: provider?.id || uid("provider"),
-        name: form.get("name").trim(),
-        base_url: form.get("base_url").trim(),
-        protocol: "openai-compatible",
-        enabled: form.has("enabled"),
-        api_key: form.get("api_key"),
-        clear_key: form.has("clear_key"),
-      };
-      if (provider)
-        next.providers = next.providers.map((p) =>
-          p.id === provider.id ? entry : p,
-        );
-      else next.providers.push(entry);
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (app.state.modelSaving) return;
+    capture(form, d);
+    const button = form.querySelector("#connection-save");
+    button.disabled = true;
+    app.state.modelSaving = true;
+    try {
+      const next = configWithDraft(app.configDraft(), d);
       await app.saveConfig(next);
-      app.state.provider = entry.id;
+      app.state.modelDraft = null;
+      app.state.modelSelection = d.id;
       app.render();
-    },
-    "保存连接",
-  );
-}
-
-export function modelDialog(app, model, remoteModel) {
-  const current = model || {
-    name: remoteModel || "",
-    model: remoteModel || "",
-    type: ["chat", "embedding", "rerank"].includes(app.state.modelFilter)
-      ? app.state.modelFilter
-      : "chat",
-    provider: app.state.provider,
-    enabled: true,
-    parameters: {},
+    } catch (error) {
+      form.querySelector("#connection-error").textContent = error.message;
+      button.disabled = false;
+    } finally {
+      app.state.modelSaving = false;
+    }
   };
+  form.querySelector("[data-probe-draft]").onclick = () =>
+    probe(app, form, d, false);
+  form
+    .querySelector("[data-detect]")
+    ?.addEventListener("click", () => probe(app, form, d, true));
+  form.querySelector("[data-discard]").onclick = () =>
+    leaveDraft(app, () => {
+      app.state.modelDraft = null;
+      app.render();
+    });
+  form
+    .querySelector("[data-delete]")
+    ?.addEventListener("click", () => deleteConnection(app, d));
+}
+function payloadFor(d) {
+  let parameters;
+  try {
+    parameters = JSON.parse(d.parametersText || "{}");
+  } catch {
+    throw Error("高级请求参数必须是有效的 JSON 对象。");
+  }
+  if (
+    !parameters ||
+    Array.isArray(parameters) ||
+    typeof parameters !== "object"
+  )
+    throw Error("高级请求参数必须是 JSON 对象。");
+  return {
+    provider: {
+      id: d.providerId,
+      protocol: d.protocol,
+      base_url: d.base_url.trim(),
+      api_key: d.api_key.trim(),
+      clear_key: d.clear_key,
+      enabled: d.providerEnabled !== false || d.enabled,
+      timeout_seconds: Number(d.timeout_seconds),
+      proxy_url: d.proxy_url.trim(),
+    },
+    model: {
+      id: d.id,
+      name: d.name.trim(),
+      provider: d.providerId,
+      model: d.model.trim(),
+      type: d.type,
+      enabled: d.enabled,
+      parameters,
+      dimensions: d.dimensions === "" ? null : Number(d.dimensions),
+    },
+  };
+}
+export function configWithDraft(next, d) {
+  const { provider, model } = payloadFor(d);
+  next.revision = d.revision;
+  const oldProvider = next.providers.find((p) => p.id === provider.id);
+  provider.name = oldProvider?.name || d.name;
+  // Activating one model must not activate siblings hidden by a disabled legacy connection.
+  if (oldProvider?.enabled === false && provider.enabled)
+    next.models = next.models.map((m) =>
+      m.provider === provider.id && m.id !== model.id
+        ? { ...m, enabled: false }
+        : m,
+    );
+  next.providers = oldProvider
+    ? next.providers.map((p) =>
+        p.id === provider.id ? { ...p, ...provider } : p,
+      )
+    : [...next.providers, provider];
+  const exists = next.models.some((m) => m.id === model.id);
+  next.models = exists
+    ? next.models.map((m) => (m.id === model.id ? model : m))
+    : [...next.models, model];
+  if (d.use) next.bindings[d.type] = d.id;
+  else if (next.bindings[d.type] === d.id) next.bindings[d.type] = null;
+  return next;
+}
+async function probe(app, form, d, detectDimensions) {
+  if (!form.reportValidity()) return;
+  capture(form, d);
+  const version = d.version;
+  const controls = form.querySelectorAll("[data-probe-draft], [data-detect]");
+  controls.forEach((b) => (b.disabled = true));
+  const output = form.querySelector("#connection-result");
+  output.classList.remove("error");
+  output.textContent = detectDimensions
+    ? "正在请求嵌入接口并检测维度…"
+    : "正在测试当前表单中的设置…";
+  try {
+    const payload = payloadFor(d);
+    payload.provider.enabled = true;
+    payload.model.enabled = true;
+    const result = await api("/api/model-config/probe", {
+      ...payload,
+      detectDimensions,
+    });
+    if (app.state.modelDraft !== d || d.version !== version) return;
+    if (detectDimensions) {
+      d.dimensions = String(result.dimensions);
+      form.elements.dimensions.value = d.dimensions;
+      d.dirty = true;
+      d.version++;
+      form.querySelector("#connection-save").disabled = false;
+      form.querySelector("#draft-state").textContent = "检测结果尚未保存";
+    }
+    d.probeMessage = `${result.message} · ${result.latency_ms} ms${result.dimensions ? ` · ${result.dimensions} 维` : ""}${detectDimensions ? "。已填入嵌入维度，请保存。" : "。测试未修改已保存的配置。"}`;
+    d.probeError = false;
+  } catch (error) {
+    if (app.state.modelDraft !== d || d.version !== version) return;
+    d.probeMessage = error.message;
+    d.probeError = true;
+  } finally {
+    controls.forEach((b) => (b.disabled = false));
+    if (app.state.modelDraft === d) {
+      output.textContent = d.probeMessage || "设置已更改，请重新测试。";
+      output.classList.toggle("error", !!d.probeError);
+    }
+  }
+}
+function chooseTemplate(app) {
+  const type = app.state.modelFilter;
+  const label = type === "embedding" ? "嵌入" : "对话";
   app.dialog(
-    model ? "编辑模型" : "添加模型",
-    `
-    <label class="form-field"><span>显示名称</span><input name="name" required maxlength="100" placeholder="给模型起一个容易识别的名字" value="${e(current.name)}"></label>
-    <label class="form-field"><span>模型 ID</span><input name="model" required maxlength="200" placeholder="服务提供方的模型名称" value="${e(current.model)}"><small>例如 deepseek-chat、text-embedding-3-small；以你所连接的服务为准。</small></label>
-    <div class="form-row"><label class="form-field"><span>模型用途</span><select name="type">${Object.entries(
-      typeNames,
+    `新增${label}配置`,
+    `<p class="template-intro">选择提供${label}模型的服务，然后填写连接参数。</p><div class="service-template-grid">${templatesFor(
+      type,
     )
       .map(
-        ([id, name]) =>
-          `<option value="${id}" ${current.type === id ? "selected" : ""}>${name}</option>`,
+        (t) =>
+          `<button type="button" class="service-template" data-template="${t.id}"><span class="connection-logo ${t.id === "dashscope" ? "bailian" : ""}">${e(t.mark)}</span><strong>${e(t.label)}</strong><small>${t.protocol === "dashscope" ? "DashScope 原生嵌入接口" : "OpenAI 兼容接口"}</small>${icon("arrow")}</button>`,
       )
-      .join(
-        "",
-      )}</select></label><label class="form-field"><span>所属提供商</span><select name="provider">${app.state.config.providers.map((p) => `<option value="${e(p.id)}" ${current.provider === p.id ? "selected" : ""}>${e(providerName(p))}</option>`).join("")}</select></label></div>
-    <label class="checkbox-label"><input type="checkbox" name="enabled" ${current.enabled ? "checked" : ""}>启用此模型</label>
-    <details><summary>高级请求参数</summary><label class="form-field"><textarea name="parameters" rows="5" aria-label="高级请求参数 JSON" spellcheck="false">${e(JSON.stringify(current.parameters || {}, null, 2))}</textarea><small>可填写服务支持的参数，例如 temperature、max_tokens 或 dimensions。连接凭据与模型选择由上面的字段管理。</small></label></details>`,
-    async (form) => {
-      let parameters;
-      try {
-        parameters = JSON.parse(form.get("parameters") || "{}");
-      } catch {
-        throw Error("高级请求参数需要是有效的 JSON 对象");
-      }
-      const next = app.configDraft();
-      const entry = {
-        id: model?.id || uid("model"),
-        name: form.get("name").trim(),
-        model: form.get("model").trim(),
-        type: form.get("type"),
-        provider: form.get("provider"),
-        enabled: form.has("enabled"),
-        parameters,
-      };
-      if (model)
-        next.models = next.models.map((m) => (m.id === model.id ? entry : m));
-      else next.models.push(entry);
-      await app.saveConfig(next);
-      app.state.provider = entry.provider;
-      app.state.modelFilter = entry.type;
-      app.render();
-    },
-    "保存模型",
+      .join("")}</div>`,
+    null,
+  );
+  document.querySelectorAll("[data-template]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const t = templates.find((t) => t.id === b.dataset.template);
+        app.state.modelDraft = {
+          id: uid("model"),
+          providerId: uid("provider"),
+          type,
+          name: `${t.label.split(" · ")[0]} ${label}`,
+          model: "",
+          template: t.id,
+          protocol: t.protocol,
+          base_url: t.base_url,
+          api_key: "",
+          has_key: false,
+          clear_key: false,
+          enabled: true,
+          timeout_seconds: "120",
+          proxy_url: "",
+          dimensions: "",
+          parametersText: "{}",
+          use: false,
+          isNew: true,
+          dirty: true,
+          version: 0,
+          revision: app.state.config.revision,
+        };
+        app.closeDialog();
+        app.render();
+      }),
   );
 }
-
-function deleteProvider(app) {
-  const provider = app.state.config.providers.find(
-    (p) => p.id === app.state.provider,
+function showIssues(app) {
+  const models = app.state.config.models.filter((m) =>
+    issueFor(app.state.config, m),
   );
-  const count = app.state.config.models.filter(
-    (m) => m.provider === provider.id,
-  ).length;
   app.dialog(
-    "删除提供商",
-    `<p>删除「${e(providerName(provider))}」的连接配置。</p><p class="hint" style="margin-top:10px">${count ? "这个连接下还有 " + count + " 个模型，请先删除或转移这些模型。" : "此操作不会删除提供商账户或远程模型。"}</p>`,
-    async () => {
-      const next = app.configDraft();
-      next.providers = next.providers.filter((p) => p.id !== provider.id);
-      await app.saveConfig(next);
-    },
-    "删除连接",
-    true,
+    "需要修复的旧配置",
+    `<p class="template-intro">记录保留在本机，但不能用于请求。修复时需要填写正确服务的连接和密钥。</p>${models.map((m) => `<div class="invalid-model"><strong>${e(m.name)}</strong><p>${e(issueFor(app.state.config, m))}</p><button type="button" class="btn small tonal" data-repair="${e(m.id)}">修复配置</button></div>`).join("")}`,
+    null,
+  );
+  document.querySelectorAll("[data-repair]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const m = models.find((m) => m.id === b.dataset.repair);
+        app.closeDialog();
+        leaveDraft(app, () => {
+          app.state.modelFilter = m.type;
+          app.state.modelDraft = draftFor(app, m, true);
+          app.render();
+        });
+      }),
   );
 }
-function deleteModel(app, id) {
-  const model = app.state.config.models.find((m) => m.id === id);
+function deleteConnection(app, d) {
   app.dialog(
     "删除模型配置",
-    `<p>删除「${e(model.name)}」的配置？</p><p class="hint" style="margin-top:10px">如果模型正在使用，请先到「使用配置」切换选择。</p>`,
+    `<p>删除「${e(d.name)}」？已选用的模型需要先在使用设置中取消选择。</p>`,
     async () => {
       const next = app.configDraft();
-      next.models = next.models.filter((m) => m.id !== id);
+      next.revision = d.revision;
+      const original = next.models.find((m) => m.id === d.id);
+      next.models = next.models.filter((m) => m.id !== d.id);
+      if (
+        original &&
+        !next.models.some((m) => m.provider === original.provider)
+      )
+        next.providers = next.providers.filter(
+          (p) => p.id !== original.provider,
+        );
       await app.saveConfig(next);
+      app.state.modelDraft = null;
+      app.render();
     },
-    "删除模型",
+    "删除配置",
     true,
   );
-}
-async function fetchModels(app, button) {
-  const providerId = app.state.provider;
-  button.disabled = true;
-  try {
-    const result = await api("/api/model-config/models", {
-      providerId,
-    });
-    if (app.state.provider !== providerId || app.state.page !== "models")
-      return;
-    app.dialog(
-      "从服务中选择模型",
-      `<p class="hint" style="margin-bottom:15px">选择一个模型，然后确认它的用途。${result.models.length ? "" : "该服务未返回可用模型，你仍可手动添加。"}</p><div>${result.models.map((id, index) => `<button type="button" class="select-model-item" data-remote-model="${index}">${e(id)}</button>`).join("")}</div>`,
-      null,
-    );
-    document.querySelectorAll("[data-remote-model]").forEach(
-      (b) =>
-        (b.onclick = () => {
-          const name = result.models[Number(b.dataset.remoteModel)];
-          app.closeDialog();
-          modelDialog(app, undefined, name);
-        }),
-    );
-  } catch (error) {
-    app.toast(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
-}
-async function testModel(app, id, button) {
-  const revision = app.state.config.revision;
-  button.disabled = true;
-  const output = app.content.querySelector(`[data-probe="${CSS.escape(id)}"]`);
-  if (output) output.textContent = "正在连接…";
-  try {
-    const result = await api("/api/model-config/test", { modelId: id });
-    if (app.state.config.revision !== revision) return;
-    app.state.probes[id] = {
-      message: `${result.message} · ${result.latency_ms} ms${result.dimensions ? " · " + result.dimensions + " 维" : ""}`,
-    };
-  } catch (error) {
-    if (app.state.config.revision === revision)
-      app.state.probes[id] = { message: error.message, error: true };
-  } finally {
-    if (app.state.page === "models") app.render();
-  }
 }

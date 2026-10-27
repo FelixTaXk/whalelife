@@ -19,6 +19,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
   const origin = `http://${host}:${port}`;
   const assets = new Set([
     "styles.css",
+    "models.css",
     "app.js",
     "api.js",
     "icons.js",
@@ -124,7 +125,19 @@ export async function startWeb(config: any, services: any, runtime: any) {
       }
       if (req.url === "/api/model-config/test" && req.method === "POST") {
         const value = await body(req);
-        return send(200, await services.modelConfig.testModel(value.modelId));
+        return send(
+          200,
+          await services.modelConfig.testModel(
+            value.modelId,
+            value.detectDimensions === true,
+          ),
+        );
+      }
+      if (req.url === "/api/model-config/probe" && req.method === "POST") {
+        return send(
+          200,
+          await services.modelConfig.probeDraft(await body(req)),
+        );
       }
       if (req.method === "GET" && req.url?.startsWith("/api/session?")) {
         const id = new URL(req.url, origin).searchParams.get("id");

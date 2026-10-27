@@ -104,6 +104,7 @@ export function renderBindings(app) {
         (m) =>
           m.type === type &&
           m.enabled &&
+          !m.configuration_error &&
           c.providers.find((p) => p.id === m.provider)?.enabled,
       )
       .map(
