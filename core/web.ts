@@ -249,6 +249,8 @@ export async function startWeb(config: any, services: any, runtime: any) {
           data.session,
           String(data.text ?? ""),
           (text: string) => send({ type: "chunk", text }),
+          (context: any) => send({ type: "context", ...context }),
+          typeof data.persona === "string" ? data.persona : undefined,
         );
         send({ type: "done" });
       } catch (error: any) {

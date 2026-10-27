@@ -1,5 +1,6 @@
-import { persona } from "./persona.ts";
+import { persona, personaSystemPrompt } from "./persona.ts";
 import { safeId } from "./memory.ts";
+import { createHash } from "node:crypto";
 export class Sessions {
   locks = new Set<string>();
   root: string;
@@ -10,7 +11,13 @@ export class Sessions {
     this.config = config;
     this.services = services;
   }
-  async chat(id: string, text: string, onChunk: (text: string) => void) {
+  async chat(
+    id: string,
+    text: string,
+    onChunk: (text: string) => void,
+    onContext?: (value: any) => void,
+    expectedPersona?: string,
+  ) {
     safeId(id);
     if (this.locks.has(id)) throw Error("该会话正在回复，请稍候");
     if (!text.trim() || text.length > 16000) throw Error("请输入 1–16000 字");
@@ -19,6 +26,13 @@ export class Sessions {
     try {
       const channel = this.config.channels.web;
       const p = await persona(this.root, this.config, channel.persona);
+      if (expectedPersona && expectedPersona !== p.id)
+        throw Error("当前人格已在其他窗口切换，请刷新后重试");
+      const context = {
+        persona_id: p.id,
+        persona_name: p.name,
+        persona_revision: p.revision,
+      };
       const session = {
         id,
         channel: "web",
@@ -26,18 +40,42 @@ export class Sessions {
         personaId: p.id,
         permission: channel.permission ?? p.permission,
       };
-      const history = await memory.readSession(id);
+      const storedHistory = await memory.readSession(id);
+      // Only the final contiguous segment belongs to the current persona version.
+      let boundary = storedHistory.length - 1;
+      while (
+        boundary >= 0 &&
+        storedHistory[boundary].persona_revision === p.revision
+      )
+        boundary--;
+      const history = storedHistory.slice(boundary + 1);
+      const contextReset =
+        storedHistory.length > 0 && boundary >= 0 && !history.length;
+      const summaryId =
+        "p_" +
+        createHash("sha256")
+          .update(id + ":" + p.revision)
+          .digest("hex")
+          .slice(0, 40);
+      if (contextReset) await memory.writeSummary(summaryId, "");
+      onContext?.({ personaId: p.id, personaName: p.name, contextReset });
+      logger.info("对话人格", {
+        persona: p.id,
+        revision: p.revision.slice(0, 12),
+        contextReset,
+      });
       await memory.appendEvent({
         type: "message",
         channel: "web",
         session: id,
         role: "user",
         text,
+        ...context,
       });
       const cfg = this.config.memory;
-      const allFacts = await memory.readFacts();
+      const allFacts = [...new Set<string>(await memory.readFacts())];
       const facts = allFacts.slice(-(cfg.facts_max_lines ?? 100));
-      let summary = await memory.readSummary(id);
+      let summary = await memory.readSummary(summaryId);
       const recent = history
         .filter((x: any) => x.type === "message")
         .slice(-(cfg.recent_lines ?? 30))
@@ -54,13 +92,7 @@ export class Sessions {
       const messages: any[] = [
         {
           role: "system",
-          content:
-            p.prompt +
-            "\n当用户明确要求记住事实时调用 remember_fact 工具，不要仅口头承诺。\n共享事实：\n" +
-            (allFacts.length > facts.length ? "facts 已截断\n" : "") +
-            facts.join("\n") +
-            "\n会话摘要：\n" +
-            summary,
+          content: personaSystemPrompt(p, facts, summary),
         },
         ...recent,
         { role: "user", content: text },
@@ -104,6 +136,7 @@ export class Sessions {
             name: call.name,
             args: call.arguments,
             ...result,
+            ...context,
           });
           messages.push({
             role: "tool",
@@ -119,12 +152,17 @@ export class Sessions {
         session: id,
         role: "assistant",
         text: final,
+        ...context,
       });
       const count = history.filter((x: any) => x.type === "message").length + 2;
       const n = cfg.recent_lines ?? 30;
       if (count > n && count % 10 === 0) {
         try {
-          const old = (await memory.readSession(id))
+          const old = [
+            ...history,
+            { type: "message", role: "user", text },
+            { type: "message", role: "assistant", text: final },
+          ]
             .filter((x: any) => x.type === "message")
             .slice(0, -n)
             .slice(-10);
@@ -139,7 +177,7 @@ export class Sessions {
               { role: "user", content: summary + "\n" + JSON.stringify(old) },
             ],
           });
-          await memory.writeSummary(id, result.text);
+          await memory.writeSummary(summaryId, result.text);
         } catch (error) {
           logger.warn("摘要更新失败，下次重试", { error });
         }

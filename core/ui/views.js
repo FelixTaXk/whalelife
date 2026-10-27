@@ -1,18 +1,12 @@
-import { api, escapeHTML as e, typeNames } from "./api.js";
+import {
+  api,
+  escapeHTML as e,
+  typeNames,
+  availableModels,
+  extensionPlugins,
+} from "./api.js";
 import { icon, whale } from "./icons.js";
 
-const names = {
-  logger: "日志服务",
-  memory: "文件记忆",
-  llm: "模型连接",
-  tools: "工具管理",
-  approval: "审批接口",
-  channels: "渠道接口",
-  permission: "权限管理",
-  facts: "事实记忆",
-  chat: "对话引擎",
-  web: "Web 控制台",
-};
 const statusName = (status) =>
   ({
     active: "运行中",
@@ -34,10 +28,16 @@ export function renderOverview(app) {
   const { status: s, config: c } = app.state;
   const chat = activeChat(app);
   const embed = c.models.find((m) => m.id === c.bindings.embedding);
-  const active = s.plugins.filter((p) => p.status === "active").length;
+  const extensions = extensionPlugins(s);
+  const active = extensions.filter((p) => p.status === "active").length;
   return `<div class="page-heading"><div><div class="eyebrow">YOUR LOCAL WORKSPACE</div><h1>欢迎回来</h1><p>鲸鲸已就绪。模型、记忆与插件，都在这里。</p></div><div class="heading-actions"><span class="badge green"><i class="status-dot"></i>核心运行中</span></div></div>
  <div class="stats-grid">${[
-   ["模型配置", c.models.length + "", "个模型可按用途选择", "cube"],
+   [
+     "可用模型",
+     availableModels(c).length + "",
+     "已启用且配置有效的对话与向量模型",
+     "cube",
+   ],
    [
      "当前对话",
      chat?.name || "尚未选择",
@@ -50,7 +50,12 @@ export function renderOverview(app) {
      formatBytes(s.memory.bytes) + " 已保存",
      "database",
    ],
-   ["运行中的插件", active + "", s.plugins.length + " 个插件已加载", "puzzle"],
+   [
+     "运行中的扩展插件",
+     active + "",
+     extensions.length + " 个扩展插件",
+     "puzzle",
+   ],
  ]
    .map(
      ([name, value, foot, ico]) =>
@@ -137,7 +142,7 @@ export function bindBindings(app) {
 }
 
 export function renderPlugins(app) {
-  const plugins = app.state.status.plugins.filter((p) => !p.builtin);
+  const plugins = extensionPlugins(app.state.status);
   return `<div class="page-heading"><div><h1>插件管理</h1><p>管理扩展插件，按需启停和重载。</p></div><span class="badge">${plugins.length} 个扩展插件</span></div><div class="plugin-grid">${plugins.map((p) => `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon("puzzle")}<h3>${e(p.name || p.id)}</h3><div class="spacer"></div><span class="badge ${p.status === "active" ? "green" : p.status === "failed" ? "red" : ""}">${statusName(p.status)}</span></div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "扩展插件")}</p><footer><button class="btn small" data-plugin-id="${e(p.id)}" data-plugin-action="${p.status === "active" ? "stop" : "start"}">${p.status === "active" ? "停用" : "启用"}</button><button class="btn small tonal" data-plugin-id="${e(p.id)}" data-plugin-action="reload">${icon("refresh")}重载</button>${p.id.includes("/") ? '<small style="margin-left:auto">子插件</small>' : ""}</footer></article>`).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
 }
 export function bindPlugins(app) {
@@ -165,7 +170,7 @@ export function bindPlugins(app) {
 export function renderChat(app) {
   const model = activeChat(app);
   const personaName = app.state.status.personaName || "助手";
-  return `<div class="page-heading"><div><div class="eyebrow">PLAYGROUND</div><h1>和${e(personaName)}聊聊</h1><p>测试模型回复，也可以让鲸鲸记下一条事实。</p></div><div class="heading-actions"><button class="btn" id="new-session" ${app.state.chatBusy ? "disabled" : ""}>${icon("plus")}新会话</button></div></div><section class="panel chat-panel"><div class="chat-header"><span class="avatar">${e(personaName.slice(0, 1))}</span><div><h3>${e(app.state.status.personaName || "鲸鲸")}</h3><small>${e(model?.name || "请先选择对话模型")} <span>·</span> ${e(app.state.status.persona)}</small></div><div class="spacer"></div><a href="#bindings" class="btn small link">更换模型 ${icon("sliders")}</a></div><div id="messages" class="messages" aria-live="polite"></div><form id="chat-form" class="composer"><textarea id="chat-input" aria-label="聊天消息" placeholder="和${e(personaName)}说点什么…" rows="2"></textarea><div class="composer-footer"><small>Enter 发送 · Shift + Enter 换行</small><button id="send" class="btn primary small" type="submit" ${app.state.chatBusy || !app.chatConnected || !model ? "disabled" : ""}>${app.state.chatBusy ? "正在回复…" : "发送"} ${icon("send")}</button></div></form></section>`;
+  return `<div class="page-heading"><div><div class="eyebrow">PLAYGROUND</div><h1>和${e(personaName)}聊聊</h1><p>测试当前人格的回复，也可以要求记下一条事实。</p></div><div class="heading-actions"><button class="btn" id="new-session" ${app.state.chatBusy ? "disabled" : ""}>${icon("plus")}新会话</button></div></div><section class="panel chat-panel"><div class="chat-header"><span class="avatar">${e(personaName.slice(0, 1))}</span><div><h3>${e(app.state.status.personaName || "鲸鲸")}</h3><small>${e(model?.name || "请先选择对话模型")} <span>·</span> ${e(app.state.status.persona)}</small></div><div class="spacer"></div><a href="#bindings" class="btn small link">更换模型 ${icon("sliders")}</a></div><div id="messages" class="messages" aria-live="polite"></div><form id="chat-form" class="composer"><textarea id="chat-input" aria-label="聊天消息" placeholder="和${e(personaName)}说点什么…" rows="2"></textarea><div class="composer-footer"><small>Enter 发送 · Shift + Enter 换行</small><button id="send" class="btn primary small" type="submit" ${app.state.chatBusy || !app.chatConnected || !model ? "disabled" : ""}>${app.state.chatBusy ? "正在回复…" : "发送"} ${icon("send")}</button></div></form></section>`;
 }
 export function bindChat(app) {
   app.renderMessages();

@@ -34,7 +34,7 @@ const talk = (port: number, cookie: string, session: string, text: string) =>
     ws.on("message", (raw) => {
       const d = JSON.parse(raw.toString());
       if (d.type === "chunk") chunks.push(d.text);
-      else {
+      else if (d.type === "done" || d.type === "error") {
         clearTimeout(timer);
         ws.close();
         resolve({

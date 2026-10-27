@@ -229,7 +229,7 @@ test("console config API persists model selection, protects secrets and changes 
       ws.on("message", (raw) => {
         const item = JSON.parse(raw.toString());
         if (item.type === "chunk") text += item.text;
-        else {
+        else if (item.type === "done" || item.type === "error") {
           clearTimeout(timer);
           ws.close();
           if (item.type === "error") reject(Error(item.error));
@@ -240,7 +240,11 @@ test("console config API persists model selection, protects secrets and changes 
     });
     assert.match(reply, /chat-b/);
     assert.ok(
-      systemPrompts.at(-1)?.startsWith(editedPersona.prompt),
+      systemPrompts
+        .at(-1)
+        ?.includes(
+          "【当前人格设定】\n" + editedPersona.prompt + "\n【人格设定结束】",
+        ),
       "edited persona reaches the actual model request",
     );
     assert.equal(requested.at(-1), "chat-b");
@@ -300,7 +304,15 @@ test("console config API persists model selection, protects secrets and changes 
     );
     await app.sessions.chat("persona-new", "自我介绍", () => {});
     assert.equal(requested.at(-1), "chat-a");
-    assert.ok(systemPrompts.at(-1)?.startsWith(createdData.persona.prompt));
+    assert.ok(
+      systemPrompts
+        .at(-1)
+        ?.includes(
+          "【当前人格设定】\n" +
+            createdData.persona.prompt +
+            "\n【人格设定结束】",
+        ),
+    );
     const updatedPrompt = "你是测试人格 BETA。只按修改后的要求回答。";
     const updated = await post("/api/persona/config", {
       ...activeData.persona,
@@ -311,7 +323,9 @@ test("console config API persists model selection, protects secrets and changes 
     assert.equal(updated.status, 200);
     await app.sessions.chat("persona-new", "再介绍一次", () => {});
     assert.ok(
-      systemPrompts.at(-1)?.startsWith(updatedPrompt),
+      systemPrompts
+        .at(-1)
+        ?.includes("【当前人格设定】\n" + updatedPrompt + "\n【人格设定结束】"),
       "prompt edits affect the next request without a restart",
     );
     assert.equal((await post("/api/persona/config", activation)).status, 409);

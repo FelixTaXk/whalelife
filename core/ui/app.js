@@ -1,4 +1,4 @@
-import { api, escapeHTML as e, uid } from "./api.js";
+import { api, escapeHTML as e, uid, availableModels } from "./api.js";
 import { icon, whale } from "./icons.js";
 import { renderModels, bindModels } from "./models.js";
 import { renderPersonas, bindPersonas } from "./personas.js";
@@ -58,8 +58,12 @@ class ConsoleApp {
       this.state.page = this.pageFromHash();
       document.body.classList.remove("sidebar-open");
       $("sidebar-scrim").hidden = true;
-      if (this.authenticated) this.render();
+      if (this.authenticated) {
+        this.render();
+        this.syncView();
+      }
     });
+    window.addEventListener("focus", () => this.syncView());
     $("login-form").onsubmit = (event) => {
       event.preventDefault();
       this.login();
@@ -102,10 +106,8 @@ class ConsoleApp {
     }
   }
   async load() {
-    const [status, config] = await Promise.all([
-      api("/api/status"),
-      api("/api/model-config"),
-    ]);
+    const config = await api("/api/model-config");
+    const status = await api("/api/status");
     this.state.status = status;
     this.state.config = config;
   }
@@ -134,7 +136,11 @@ class ConsoleApp {
       );
       this.state.messages = rows
         .filter((r) => r.type === "message")
-        .map((r) => ({ role: r.role, text: r.text }));
+        .map((r) => ({
+          role: r.role,
+          text: r.text,
+          personaName: r.persona_name,
+        }));
     } catch (error) {
       this.toast("会话恢复失败：" + error.message, true);
     }
@@ -144,6 +150,26 @@ class ConsoleApp {
   }
   async refreshStatus() {
     this.state.status = await api("/api/status");
+  }
+  async syncView() {
+    const page = this.state.page;
+    if (
+      !this.authenticated ||
+      this.state.chatBusy ||
+      this.syncing ||
+      !["overview", "plugins", "chat"].includes(page)
+    )
+      return;
+    this.syncing = true;
+    try {
+      await this.load();
+      if (this.state.page === page && !this.state.chatBusy) this.render();
+    } catch (error) {
+      if (error.status === 401) this.requireLogin();
+      else this.toast(error.message, true);
+    } finally {
+      this.syncing = false;
+    }
   }
   async reload() {
     const button = $("refresh");
@@ -169,19 +195,10 @@ class ConsoleApp {
         a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
     });
-    const availableModels = this.state.config.models.filter(
-      (m) =>
-        ["chat", "embedding"].includes(m.type) &&
-        m.enabled &&
-        !m.configuration_error &&
-        this.state.config.providers.find((p) => p.id === m.provider)?.enabled,
-    ).length;
-    $("nav-model-count").textContent = availableModels;
-    $("nav-model-count").title = `${availableModels} 个已启用且配置有效的模型`;
-    $("nav-model-count").setAttribute(
-      "aria-label",
-      `${availableModels} 个可用模型`,
-    );
+    const count = availableModels(this.state.config).length;
+    $("nav-model-count").textContent = count;
+    $("nav-model-count").title = `${count} 个已启用且配置有效的模型`;
+    $("nav-model-count").setAttribute("aria-label", `${count} 个可用模型`);
     this.content.innerHTML = page.render(this);
     page.bind?.(this);
     this.updateConnection();
@@ -270,20 +287,33 @@ class ConsoleApp {
         if (this.state.page === "logs") this.renderLogs();
         return;
       }
+      if (data.type === "context") {
+        this.replyPersonaName = data.personaName;
+        this.state.status.persona = data.personaId;
+        this.state.status.personaName = data.personaName;
+        if (this.state.page === "chat") this.render();
+        if (data.contextReset)
+          this.toast("人格已更新，本轮使用新的人格上下文；旧记录保留");
+        return;
+      }
       if (data.type === "chunk") {
         if (!this.reply) {
-          this.reply = { role: "assistant", text: "" };
+          this.reply = {
+            role: "assistant",
+            text: "",
+            personaName: this.replyPersonaName,
+          };
           this.state.messages.push(this.reply);
         }
         this.reply.text += data.text;
-      } else {
+      } else if (data.type === "done" || data.type === "error") {
         if (data.type === "error") {
           this.state.messages.push({ role: "error", text: data.error });
           this.toast(data.error, true);
         }
         this.state.chatBusy = false;
         this.reply = null;
-        this.refreshStatus().catch(() => {});
+        this.syncView();
         this.updateChatControls();
       }
       if (this.state.page === "chat") this.renderMessages();
@@ -362,7 +392,14 @@ class ConsoleApp {
     this.state.chatDraft = "";
     this.reply = null;
     $("chat-input").value = "";
-    this.chatWS.send(JSON.stringify({ session: this.state.session, text }));
+    this.replyPersonaName = this.state.status.personaName;
+    this.chatWS.send(
+      JSON.stringify({
+        session: this.state.session,
+        text,
+        persona: this.state.status.persona,
+      }),
+    );
     this.updateChatControls();
     this.renderMessages();
   }
@@ -385,7 +422,7 @@ class ConsoleApp {
     box.innerHTML = this.state.messages
       .map(
         (m) =>
-          `<div class="message ${m.role === "user" ? "user" : m.role === "error" ? "error" : ""}"><span class="mini-avatar">${m.role === "user" ? "你" : m.role === "error" ? "!" : e(personaName.slice(0, 1))}</span><div class="bubble">${e(m.text)}</div></div>`,
+          `<div class="message ${m.role === "user" ? "user" : m.role === "error" ? "error" : ""}"><span class="mini-avatar" title="${e(m.personaName || "助手")}">${m.role === "user" ? "你" : m.role === "error" ? "!" : e((m.personaName || "助手").slice(0, 1))}</span><div class="bubble">${e(m.text)}</div></div>`,
       )
       .join("");
     box.scrollTop = box.scrollHeight;

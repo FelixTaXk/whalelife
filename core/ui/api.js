@@ -36,3 +36,14 @@ export const typeNames = {
 };
 export const uid = (prefix) =>
   prefix + "_" + crypto.randomUUID().replaceAll("-", "").slice(0, 12);
+
+export const availableModels = (config) =>
+  config.models.filter(
+    (m) =>
+      ["chat", "embedding"].includes(m.type) &&
+      m.enabled &&
+      !m.configuration_error &&
+      config.providers.find((p) => p.id === m.provider)?.enabled,
+  );
+export const extensionPlugins = (status) =>
+  status.plugins.filter((p) => !p.builtin);

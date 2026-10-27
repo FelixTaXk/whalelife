@@ -1,6 +1,50 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+test("overview counts usable models and running extensions consistently with navigation and plugins", async () => {
+  const { availableModels, extensionPlugins } = await import(
+    new URL("../core/ui/api.js", import.meta.url).href
+  );
+  const { renderOverview, renderPlugins } = await import(
+    new URL("../core/ui/views.js", import.meta.url).href
+  );
+  const config = fixture();
+  config.models[1].enabled = false;
+  config.models[2].configuration_error = "服务不支持该用途";
+  config.models.push({ ...config.models[0], id: "future", type: "tts" });
+  const state = {
+    config,
+    status: {
+      persona: "a",
+      permission: "off",
+      memory: { files: 0, bytes: 0 },
+      plugins: [
+        { id: "internal-core", builtin: true, status: "active" },
+        { id: "extension-one", builtin: false, status: "active" },
+        { id: "extension-two", builtin: false, status: "stopped" },
+      ],
+    },
+  };
+  assert.equal(availableModels(config).length, 2);
+  assert.equal(extensionPlugins(state.status).length, 2);
+  assert.match(
+    renderOverview({ state }),
+    /可用模型<\/small><div class="stat-value ">2<\/div>/,
+  );
+  assert.match(
+    renderOverview({ state }),
+    /运行中的扩展插件<\/small><div class="stat-value ">1<\/div>/,
+  );
+  assert.ok(!renderPlugins({ state }).includes("internal-core"));
+  state.status.plugins[1].status = "stopped";
+  assert.match(
+    renderOverview({ state }),
+    /运行中的扩展插件<\/small><div class="stat-value ">0<\/div>/,
+  );
+  config.providers[2].enabled = false;
+  assert.equal(availableModels(config).length, 1);
+});
+
 // Import the browser renderer without a DOM or network so these fixtures can
 // exercise the same filtering and escaping used by the actual settings page.
 const { visibleModels, templatesFor, renderModels, bindModels } = await import(
