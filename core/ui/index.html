@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>WhaleLife · 控制台</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <div id="login" class="login-screen">
+      <form id="login-form" class="login-card">
+        <div class="brand-mark" data-whale></div>
+        <h1>欢迎回到 WhaleLife</h1>
+        <p>连接鲸鲸，管理你的模型与能力。</p>
+        <label for="password">控制台访问密码</label
+        ><input
+          id="password"
+          type="password"
+          autocomplete="current-password"
+          placeholder="本机未设置密码时可直接进入"
+        />
+        <p id="login-error" class="field-error" role="alert"></p>
+        <button class="btn primary full" type="submit">
+          进入控制台 <span data-icon="arrow"></span>
+        </button>
+        <div class="login-foot">你的模型，你的记忆，你的鲸鲸。</div>
+      </form>
+    </div>
+    <div id="shell" class="shell" hidden>
+      <aside id="sidebar" class="sidebar">
+        <a href="#overview" class="brand"
+          ><span class="brand-mark" data-whale></span
+          ><span>WhaleLife<small>鲸鲸的工作空间</small></span></a
+        >
+        <div class="nav-group">工作空间</div>
+        <nav aria-label="主要导航">
+          <a href="#overview" data-page="overview"
+            ><span data-icon="grid"></span>概览</a
+          >
+          <a href="#models" data-page="models"
+            ><span data-icon="cube"></span>模型服务<span
+              id="nav-model-count"
+              class="nav-count"
+            ></span
+          ></a>
+          <a href="#bindings" data-page="bindings"
+            ><span data-icon="sliders"></span>使用配置</a
+          >
+          <a href="#chat" data-page="chat"
+            ><span data-icon="chat"></span>聊天测试</a
+          >
+        </nav>
+        <div class="nav-group">管理</div>
+        <nav aria-label="管理导航">
+          <a href="#plugins" data-page="plugins"
+            ><span data-icon="puzzle"></span>插件管理</a
+          >
+          <a href="#logs" data-page="logs"
+            ><span data-icon="terminal"></span>运行日志</a
+          >
+        </nav>
+        <div class="sidebar-bottom">
+          <span class="status-dot"></span>
+          <div>本地工作空间<small>WhaleLife · M0</small></div>
+          <span data-icon="lock"></span>
+        </div>
+      </aside>
+      <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
+      <div class="workspace">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button id="menu-toggle" class="icon-btn" aria-label="切换导航栏">
+              <span data-icon="menu"></span></button
+            ><span class="breadcrumb"
+              >工作空间 <span>/</span>
+              <strong id="breadcrumb">概览</strong></span
+            >
+          </div>
+          <div class="topbar-right">
+            <span id="connection-state" class="connection-state"
+              ><i class="status-dot"></i> 核心已连接</span
+            ><button
+              id="refresh"
+              class="icon-btn"
+              aria-label="刷新状态"
+              title="刷新状态"
+            >
+              <span data-icon="refresh"></span></button
+            ><a class="btn small" href="#chat"
+              ><span data-icon="chat"></span>开始聊天</a
+            ><span class="avatar">鲸</span>
+          </div>
+        </header>
+        <main id="content" tabindex="-1"></main>
+      </div>
+    </div>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <dialog id="dialog" aria-labelledby="dialog-title">
+      <div id="dialog-content"></div>
+    </dialog>
+    <script type="module" src="/ui/app.js"></script>
+  </body>
+</html>

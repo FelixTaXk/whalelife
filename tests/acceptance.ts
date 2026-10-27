@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { WebSocket } from "ws";
 import { boot } from "../core/index.ts";
+import { resolveChatModel } from "../core/model-config.ts";
 const root = resolve(".");
 const evidence = join(root, "docs/acceptance");
 await mkdir(evidence, { recursive: true });
@@ -103,18 +104,33 @@ changed.memory.root = join(profile, "memory");
 changed.channels.web.permission = "off";
 changed.personas.whale.name = "重启验收人格";
 changed.personas.whale.file = "memory/personas/changed.md";
-changed.providers[0].model = "acceptance-model";
-changed.providers[0].api_key = "deliberately-invalid-key";
+const originalSelection = resolveChatModel(config, config.channels.web.persona);
+if (changed.models)
+  changed.models.find((m: any) => m.id === originalSelection.model_id).model =
+    "acceptance-model";
+else
+  changed.providers.find((p: any) => p.id === originalSelection.id).model =
+    "acceptance-model";
+changed.providers.find((p: any) => p.id === originalSelection.id).api_key =
+  "deliberately-invalid-key";
 await writeFile(join(profile, "config/config.json"), JSON.stringify(changed));
 let app = await boot(profile);
-assert.equal(app.config.providers[0].model, "acceptance-model");
+assert.equal(
+  resolveChatModel(app.config, app.config.channels.web.persona).model,
+  "acceptance-model",
+);
 assert.equal(app.config.channels.web.permission, "off");
 assert.match(
   await readFile(join(profile, "memory/personas/changed.md"), "utf8"),
   /重启验收人格/,
 );
 await app.close();
-changed.providers[0].model = config.providers[0].model;
+if (changed.models)
+  changed.models.find((m: any) => m.id === originalSelection.model_id).model =
+    originalSelection.model;
+else
+  changed.providers.find((p: any) => p.id === originalSelection.id).model =
+    originalSelection.model;
 await writeFile(join(profile, "config/config.json"), JSON.stringify(changed));
 app = await boot(profile);
 results.push({

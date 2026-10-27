@@ -1,22 +1,37 @@
 import type { Logger } from "./logger.ts";
+import { validateModelParameters } from "./model-config.ts";
 export class LLM {
   logger: Logger;
   providers: any[];
-  constructor(logger: Logger, providers: any[] = []) {
+  resolver?: (model: string) => any;
+  constructor(
+    logger: Logger,
+    providers: any[] = [],
+    resolver?: (model: string) => any,
+  ) {
     this.logger = logger;
     this.providers = providers;
+    this.resolver = resolver;
   }
   async chat(opts: any) {
     opts = {
       ...opts,
       provider:
         opts.provider ??
-        this.providers.find(
-          (p) => p.id === opts.model || p.model === opts.model,
-        ) ??
-        this.providers[0],
+        (opts.model &&
+          (this.resolver
+            ? this.resolver(opts.model)
+            : this.providers.find(
+                (p) => p.id === opts.model || p.model === opts.model,
+              ))),
     };
-    if (!opts.provider) throw Error("模型供应商未配置");
+    if (
+      !opts.provider ||
+      !opts.provider.model ||
+      opts.provider.enabled === false
+    )
+      throw Error("请先明确选择可用的对话模型");
+    const parameters = validateModelParameters(opts.provider.parameters);
     const start = Date.now();
     this.logger.info("LLM 请求", { model: opts.provider.model });
     try {
@@ -25,10 +40,13 @@ export class LLM {
         {
           method: "POST",
           headers: {
-            Authorization: "Bearer " + opts.provider.api_key,
+            ...(opts.provider.api_key
+              ? { Authorization: "Bearer " + opts.provider.api_key }
+              : {}),
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            ...parameters,
             model: opts.provider.model,
             messages: opts.messages,
             stream: true,
@@ -36,6 +54,7 @@ export class LLM {
             ...(opts.tools?.length ? { tools: opts.tools } : {}),
           }),
           signal: AbortSignal.timeout(120000),
+          redirect: "error",
         },
       );
       if (!response.ok) throw Error(`模型服务返回 HTTP ${response.status}`);

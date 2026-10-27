@@ -17,6 +17,14 @@ export async function startWeb(config: any, services: any, runtime: any) {
     return () => routes.delete(key);
   };
   const origin = `http://${host}:${port}`;
+  const assets = new Set([
+    "styles.css",
+    "app.js",
+    "api.js",
+    "icons.js",
+    "models.js",
+    "views.js",
+  ]);
   const allowedOrigin = (req: any) =>
     !req.headers.origin ||
     req.headers.origin === origin ||
@@ -34,12 +42,18 @@ export async function startWeb(config: any, services: any, runtime: any) {
       (req.headers.cookie ?? "").match(/(?:^|; )whale=([a-f0-9]+)/)?.[1],
     );
   const body = async (req: any) => {
-    let raw = "";
+    const chunks: Buffer[] = [];
+    let size = 0;
     for await (const chunk of req) {
-      raw += chunk;
-      if (raw.length > 65536) throw Error("请求过大");
+      size += chunk.length;
+      if (size > 65536) throw Error("请求过大");
+      chunks.push(chunk);
     }
-    return JSON.parse(raw || "{}");
+    try {
+      return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    } catch {
+      throw Error("请求 JSON 格式无效");
+    }
   };
   const server = createServer(async (req, res) => {
     const send = (status: number, value: any) => {
@@ -51,15 +65,28 @@ export async function startWeb(config: any, services: any, runtime: any) {
     };
     try {
       if (!allowedOrigin(req)) return send(403, { error: "来源无效" });
+      if (req.method === "GET" && req.url?.startsWith("/ui/")) {
+        const asset = req.url.slice(4);
+        if (!assets.has(asset)) return send(404, { error: "文件不存在" });
+        res.writeHead(200, {
+          "Content-Type": asset.endsWith(".css")
+            ? "text/css; charset=utf-8"
+            : "text/javascript; charset=utf-8",
+          "Cache-Control": "no-cache",
+          "X-Content-Type-Options": "nosniff",
+        });
+        res.end(await readFile(new URL("./ui/" + asset, import.meta.url)));
+        return;
+      }
       if (req.method === "GET" && req.url === "/") {
         res.writeHead(200, {
           "Content-Type": "text/html; charset=utf-8",
           "Cache-Control": "no-store",
           "X-Frame-Options": "DENY",
           "Content-Security-Policy":
-            "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' ws:; frame-ancestors 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
         });
-        res.end(await readFile(new URL("./ui.html", import.meta.url)));
+        res.end(await readFile(new URL("./ui/index.html", import.meta.url)));
         return;
       }
       if (req.method === "POST" && req.url === "/api/login") {
@@ -81,15 +108,41 @@ export async function startWeb(config: any, services: any, runtime: any) {
         return send(200, { ok: true });
       }
       if (!authorized(req)) return send(401, { error: "请先登录" });
+      if (req.url === "/api/model-config" && req.method === "GET")
+        return send(200, services.modelConfig.snapshot());
+      if (req.url === "/api/model-config" && req.method === "POST") {
+        const value = await services.modelConfig.save(await body(req));
+        services.llm.providers = config.providers;
+        return send(200, value);
+      }
+      if (req.url === "/api/model-config/models" && req.method === "POST") {
+        const value = await body(req);
+        return send(
+          200,
+          await services.modelConfig.listModels(value.providerId),
+        );
+      }
+      if (req.url === "/api/model-config/test" && req.method === "POST") {
+        const value = await body(req);
+        return send(200, await services.modelConfig.testModel(value.modelId));
+      }
+      if (req.method === "GET" && req.url?.startsWith("/api/session?")) {
+        const id = new URL(req.url, origin).searchParams.get("id");
+        if (!id) return send(400, { error: "请提供会话 ID" });
+        return send(200, await memory.readSession(id, 100));
+      }
       if (req.method === "GET" && req.url === "/api/status")
         return send(200, {
           core: "running",
-          models: config.providers.map((p: any) => ({
+          models: (config.models ?? config.providers).map((p: any) => ({
             id: p.id,
             model: p.model,
           })),
           persona: config.channels.web.persona,
-          permission: config.channels.web.permission,
+          personaName: config.personas?.[config.channels.web.persona]?.name,
+          permission:
+            config.channels.web.permission ??
+            config.personas?.[config.channels.web.persona]?.permission,
           memory: await memory.status(),
           plugins: runtime.list(),
         });
@@ -108,7 +161,10 @@ export async function startWeb(config: any, services: any, runtime: any) {
       send(404, { error: "接口不存在" });
     } catch (error: any) {
       logger.error("Web 请求失败", { error });
-      if (!res.headersSent) send(400, { error: error.message });
+      if (!res.headersSent)
+        send([400, 409, 502].includes(error.status) ? error.status : 400, {
+          error: error.message,
+        });
       else res.end();
     }
   });

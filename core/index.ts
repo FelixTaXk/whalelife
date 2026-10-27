@@ -9,6 +9,7 @@ import { approval } from "./permission.ts";
 import { Runtime } from "./runtime.ts";
 import { Sessions } from "./session.ts";
 import { startWeb } from "./web.ts";
+import { ModelConfig, resolveModel } from "./model-config.ts";
 export async function boot(
   root = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
 ) {
@@ -27,6 +28,7 @@ export async function boot(
   logger.info("配置加载与校验", {
     providers: config.providers.map((p: any) => p.id),
   });
+  const modelConfig = new ModelConfig(root, config, logger);
   const memory = new Memory(resolve(root, config.memory.root), logger);
   await memory.init();
   for (const [id, p] of Object.entries<any>(config.personas)) {
@@ -43,7 +45,9 @@ export async function boot(
     }
     logger.info("人格就绪", { id });
   }
-  const llm = new LLM(logger, config.providers),
+  const llm = new LLM(logger, config.providers, (id) =>
+      resolveModel(config, id),
+    ),
     tools = new Tools(logger, config.permissions?.tools);
   const runtime = new Runtime(root, logger);
   const services: any = {
@@ -52,6 +56,7 @@ export async function boot(
     llm,
     tools,
     approval,
+    modelConfig,
     channels: {
       register() {
         throw Error("M0 仅提供 Web 渠道");
