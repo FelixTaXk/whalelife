@@ -236,7 +236,7 @@ async function withBindingForm(
   }
 }
 
-test("one bindings submit saves model and persona together then starts a new session", async () => {
+test("one bindings submit saves model and persona together while keeping the current session", async () => {
   const app = uiFixture();
   const events: string[] = [];
   let saved: any;
@@ -257,7 +257,7 @@ test("one bindings submit saves model and persona together then starts a new ses
     await form.onsubmit({ preventDefault() {} });
     assert.equal(nodes["#bindings-error"].textContent, "");
   });
-  assert.deepEqual(events, ["save", "new-session"]);
+  assert.deepEqual(events, ["save"]);
   assert.equal(saved.activePersona, "helper");
   assert.equal(saved.bindings.chat, "chat-two");
   assert.equal(saved.personaModels.helper, "chat-one");
@@ -295,4 +295,66 @@ test("an unchanged persona or failed save never resets the current session", asy
     assert.match(nodes["#bindings-error"].textContent, /其他窗口修改/);
     assert.equal(nodes["[type=submit]"].disabled, false);
   });
+});
+
+test("persona save-and-activate keeps the current session and messages", async () => {
+  const { bindPersonas } = await import(
+    new URL("../core/ui/personas.js", import.meta.url).href
+  );
+  const app = uiFixture();
+  const messages = [{ role: "user", text: "原会话" }];
+  Object.assign(app.state, {
+    session: "keep-me",
+    messages,
+    personaSelection: "helper",
+    personaDrafts: {
+      helper: {
+        name: "研究助手",
+        model: "",
+        prompt: "助手",
+        revision: "r",
+        configRevision: "c",
+      },
+    },
+  });
+  const elements: any = [
+    { value: "研究助手" },
+    { value: "" },
+    { value: "助手" },
+  ];
+  elements.name = elements[0];
+  elements.model = elements[1];
+  elements.prompt = elements[2];
+  const errorBox = { textContent: "" };
+  const form: any = { elements, querySelector: () => errorBox };
+  app.content = {
+    querySelector: (key: string) =>
+      key === "#persona-form" ? form : key === "[data-new-persona]" ? {} : null,
+    querySelectorAll: () => [],
+  };
+  app.newSession = () =>
+    assert.fail("activation must retain the current session");
+  app.refreshStatus = async () => {};
+  app.render = () => {};
+  app.toast = () => {};
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        config: app.state.config,
+        persona: { id: "helper", name: "研究助手", model: null },
+      }),
+    );
+  try {
+    bindPersonas(app);
+    await form.onsubmit({
+      preventDefault() {},
+      submitter: { value: "activate" },
+    });
+    assert.equal(errorBox.textContent, "");
+    assert.equal(app.state.session, "keep-me");
+    assert.equal(app.state.messages, messages);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

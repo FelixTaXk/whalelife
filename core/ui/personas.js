@@ -30,7 +30,7 @@ export function renderPersonas(app) {
   ${d.configRevision !== c.revision ? '<div class="configuration-warning">配置已有更新。请重新读取后再保存，当前输入尚未丢弃。</div>' : ""}
   <div class="persona-meta-fields"><label class="form-field"><span>人格名称</span><input name="name" required maxlength="100" placeholder="例如：写作助手" value="${e(d.name)}"></label><label class="form-field"><span>对话模型</span><select name="model"><option value="">跟随工作空间选择</option>${models.map((m) => `<option value="${e(m.id)}" ${m.id === d.model ? "selected" : ""}>${e(m.name)}</option>`).join("")}</select></label></div>
   <div class="persona-prompt-body"><label for="persona-prompt-text"><strong>人格内容</strong></label><p class="hint">具体写明身份、性格、回答方式和行为要求。这段内容会作为系统提示词发送给模型。</p><textarea id="persona-prompt-text" name="prompt" aria-label="人格内容" spellcheck="false" required placeholder="例如：你是一位严谨的写作助手。回答简洁，先给结论，再说明理由。">${e(d.prompt)}</textarea>
-  <p class="form-error" id="persona-error" role="alert"></p><div class="persona-save-row row"><span class="muted" id="persona-save-state">${d.dirty ? "有未保存的修改" : selected === c.activePersona ? "已保存 · 当前聊天正在使用" : "已保存 · 尚未指定为聊天人格"}</span><div class="row"><button class="btn" type="submit" value="save">保存</button><button class="btn primary" type="submit" value="activate">${icon("check")}保存并启用</button></div></div><p class="hint persona-help">保存：保留配置。保存并启用：同时指定给聊天，并开始新会话，旧聊天记录保留。</p>${!creating && selected === c.activePersona ? '<button type="button" class="btn small tonal" data-test-persona>开始新会话测试</button>' : ""}</div></form>`
+  <p class="form-error" id="persona-error" role="alert"></p><div class="persona-save-row row"><span class="muted" id="persona-save-state">${d.dirty ? "有未保存的修改" : selected === c.activePersona ? "已保存 · 当前聊天正在使用" : "已保存 · 尚未指定为聊天人格"}</span><div class="row"><button class="btn" type="submit" value="save">保存</button><button class="btn primary" type="submit" value="activate">${icon("check")}保存并启用</button></div></div><p class="hint persona-help">保存：保留配置。保存并启用：同时指定给聊天，保持当前会话不变。</p>${!creating && selected === c.activePersona ? '<button type="button" class="btn small tonal" data-test-persona>开始新会话测试</button>' : ""}</div></form>`
   }</section></div>`;
 }
 async function loadPersona(app, id) {
@@ -142,11 +142,10 @@ export function bindPersonas(app) {
       if (id === "new") delete app.state.personaDrafts.new;
       app.state.personaSelection = result.persona.id;
       await app.refreshStatus();
-      if (activate) app.newSession();
       app.render();
       app.toast(
         activate
-          ? `已启用「${result.persona.name}」，新会话已就绪`
+          ? `已启用「${result.persona.name}」，继续使用当前会话`
           : "人格已保存",
       );
     } catch (error) {

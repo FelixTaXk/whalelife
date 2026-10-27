@@ -114,7 +114,7 @@ function personaRoutingText(config, personaId) {
 export function renderBindings(app) {
   const c = app.state.config;
   const activePersona = c.activePersona || app.state.status?.persona || "";
-  const personaSettings = `<label class="form-field"><span>当前聊天人格</span><select id="active-persona" name="activePersona" required ${app.state.chatBusy || !c.personas.length ? "disabled" : ""}>${!activePersona ? '<option value="">请选择人格</option>' : ""}${c.personas.map((p) => `<option value="${e(p.id)}" ${p.id === activePersona ? "selected" : ""}>${e(p.name)}</option>`).join("")}</select></label><p id="active-persona-routing" class="hint" style="margin-top:16px">${e(personaRoutingText(c, activePersona))}</p><p class="hint" style="margin-top:12px">与模型选择一起保存后生效。切换人格会开始新会话，旧聊天记录保留；请等待当前回复结束后切换。</p><a href="#personas" class="btn tonal" style="margin-top:18px">编辑人格 ${icon("arrow")}</a>`;
+  const personaSettings = `<label class="form-field"><span>当前聊天人格</span><select id="active-persona" name="activePersona" required ${app.state.chatBusy || !c.personas.length ? "disabled" : ""}>${!activePersona ? '<option value="">请选择人格</option>' : ""}${c.personas.map((p) => `<option value="${e(p.id)}" ${p.id === activePersona ? "selected" : ""}>${e(p.name)}</option>`).join("")}</select></label><p id="active-persona-routing" class="hint" style="margin-top:16px">${e(personaRoutingText(c, activePersona))}</p><p class="hint" style="margin-top:12px">与模型选择一起保存后生效。切换人格保持当前会话和聊天记录；请等待当前回复结束后切换。</p><a href="#personas" class="btn tonal" style="margin-top:18px">编辑人格 ${icon("arrow")}</a>`;
   const options = (type, selected, inherit = false) =>
     `<option value="">${inherit ? "使用工作空间的对话模型" : "未配置"}</option>` +
     c.models
@@ -163,7 +163,6 @@ export function bindBindings(app) {
       next.bindings[key] = data.get("binding_" + key) || null;
     try {
       await app.saveConfig(next);
-      if (switching) app.newSession();
     } catch (error) {
       errorBox.textContent = error.message;
     } finally {
