@@ -185,7 +185,7 @@ class ConsoleApp {
       if (id !== this.state.session) return;
       this.state.sessionContext = value;
       if ($("chat-context"))
-        $("chat-context").innerHTML = renderContextMeter(value);
+        $("chat-context").innerHTML = renderContextMeter(value, true);
     } catch (error) {
       if (id === this.state.session && $("chat-context"))
         $("chat-context").textContent = error.message;

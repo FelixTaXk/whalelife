@@ -653,6 +653,42 @@ export class MemoryAdmin {
           matched.push(entry);
       }
       const total = aggregate(files);
+      const items = await Promise.all(
+        matched.slice(offset, offset + limit).map(async (f) => {
+          const id = basename(f.path, ".jsonl"),
+            meta = indexSessionMeta(index, id);
+          let last: any;
+          try {
+            const rows = await this.sessionRows(id);
+            last = rows.items.findLast(
+              (row: any) =>
+                row.type === "message" &&
+                (typeof row.persona_id === "string" ||
+                  typeof row.persona_name === "string"),
+            );
+          } catch (error) {
+            this.logger.warn("读取会话人格失败", { id, error });
+          }
+          return {
+            id,
+            name: typeof meta?.name === "string" ? meta.name : null,
+            last_persona: last
+              ? {
+                  id:
+                    typeof last.persona_id === "string"
+                      ? last.persona_id
+                      : null,
+                  name:
+                    typeof last.persona_name === "string"
+                      ? last.persona_name
+                      : last.persona_id,
+                }
+              : null,
+            bytes: f.bytes,
+            updated_at: f.updated_at,
+          };
+        }),
+      );
       return {
         root: this.root,
         files: total.count,
@@ -668,16 +704,7 @@ export class MemoryAdmin {
           total: matched.length,
           offset,
           limit,
-          items: matched.slice(offset, offset + limit).map((f) => ({
-            id: basename(f.path, ".jsonl"),
-            name:
-              typeof indexSessionMeta(index, basename(f.path, ".jsonl"))
-                ?.name === "string"
-                ? indexSessionMeta(index, basename(f.path, ".jsonl")).name
-                : null,
-            bytes: f.bytes,
-            updated_at: f.updated_at,
-          })),
+          items,
         },
         summaries: aggregate(summaryFiles),
         busy: this.sessions.locks.size > 0,

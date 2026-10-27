@@ -1,6 +1,19 @@
 import { api, escapeHTML as e } from "./api.js";
 const number = (value) => Number(value).toLocaleString();
-export function renderContextMeter(value) {
+export function renderContextMeter(value, compact = false) {
+  if (compact) {
+    const usage = value?.usage,
+      limit = value?.model?.context_window;
+    const label = !value
+      ? "正在读取上下文…"
+      : value.error
+        ? value.error
+        : `上下文 ${usage ? number(usage.used_tokens) : "未统计"} / ${limit ? number(limit) : "上限未提供"} tokens${usage?.percent == null ? "" : ` · ${usage.percent.toFixed(2)}%`}${usage?.settings_changed ? " · 设置已变更" : ""}`;
+    const detail = usage
+      ? `最近请求：输入 ${number(usage.input_tokens)} + 输出 ${number(usage.output_tokens)} tokens；${new Date(usage.measured_at).toLocaleString()}`
+      : "下一次对话后显示服务返回的用量；详细统计见记忆管理。";
+    return `<div class="chat-context-compact"><span title="${e(detail)}">${e(label)}</span><a href="#memory">会话与上下文设置</a></div>`;
+  }
   if (!value) return '<p class="muted">正在读取上下文统计…</p>';
   if (value.error) return `<p class="muted">${e(value.error)}</p>`;
   const limit = value.model.context_window,

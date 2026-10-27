@@ -58,11 +58,32 @@
   gap: 8px;
 }
 #chat-context {
-  padding: 16px 20px 0;
+  padding: 7px 22px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
 }
-.chat-context-link {
-  margin: 8px 0 16px;
-  text-align: right;
+.chat-context-compact {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.chat-context-compact span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.chat-context-compact a {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.chat-panel > .chat-header,
+.chat-panel > .composer {
+  flex-shrink: 0;
 }
 @media (max-width: 760px) {
   .context-fields {

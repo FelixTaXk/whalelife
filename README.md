@@ -53,6 +53,8 @@
 
 ## 插件
 
+插件开发由独立会话负责，本体维护会话专注核心。新插件会话先读本机 `docs/HANDOFF-PLUGINS.md`，其中包含实际接口、生命周期、设计稿差异、常见坑和专项测试流程。
+
 默认 `plugins/` 只用于安装实际使用的扩展。`hello` / `hello/extra` 是开发示例，保存在 `examples/plugins/hello/`，不会随启动自动加载。它演示工具注册、父服务继承和子插件独立启停。需要体验时，将示例的 `index.ts`、`plugin.yaml` 和 `sub/` 复制到 `plugins/hello/` 后重启；类型导入改为 `../../core/context.ts`，子插件改为 `../../../../core/context.ts`。示例测试只将这份代码复制到临时工作目录，不加载本机的实际插件。任何 `data/` 都是本地数据，不应复制到示例或提交。
 
 `plugins/<id>/plugin.yaml` 声明 id、name、description、version、depends 和 sub，`index.ts` 导出 `apply(ctx)`。工具、事件与资源通过 `ctx.tools.register`、`ctx.on`、`ctx.effect(() => cleanup)` 注册。父插件可用 `await ctx.plugin(await import('./sub/extra/index.ts'))` 显式加载导出 `id` 的子插件；省略显式加载时按 manifest 的 `sub` 自动扫描。子插件可以继续嵌套。
