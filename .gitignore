@@ -1,0 +1,15 @@
+# ===== 隐私与本地数据（永不提交）=====
+docs/
+memory/
+logs/
+config/*
+!config/config.example.json
+*.log
+
+# ===== 依赖与构建 =====
+node_modules/
+dist/
+
+# ===== 系统杂项 =====
+.DS_Store
+Thumbs.db
