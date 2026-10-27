@@ -114,8 +114,25 @@ export async function startWeb(config: any, services: any, runtime: any) {
         const id = new URL(req.url, origin).searchParams.get("id");
         return send(200, await services.personaFiles.get(id));
       }
-      if (req.method === "POST" && req.url === "/api/persona")
-        return send(200, await services.personaFiles.save(await body(req)));
+      if (req.method === "POST" && req.url === "/api/persona/config")
+        return send(
+          200,
+          await services.modelConfig.savePersona(await body(req)),
+        );
+      if (req.method === "POST" && req.url === "/api/persona") {
+        const input = await body(req);
+        const snapshot = services.modelConfig.snapshot();
+        const selected = snapshot.personas.find((p: any) => p.id === input.id);
+        if (!selected) return send(400, { error: "人格不存在" });
+        const result = await services.modelConfig.savePersona({
+          ...input,
+          name: selected.name,
+          model: selected.model,
+          configRevision: snapshot.revision,
+          activate: false,
+        });
+        return send(200, result.persona);
+      }
       if (req.url === "/api/model-config" && req.method === "GET")
         return send(200, services.modelConfig.snapshot());
       if (req.url === "/api/model-config" && req.method === "POST") {

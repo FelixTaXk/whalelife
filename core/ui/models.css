@@ -573,3 +573,16 @@
     min-width: 170px;
   }
 }
+.persona-save-row {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.persona-save-row > .row {
+  margin-left: auto;
+}
+.persona-help {
+  margin: 12px 0;
+}
+#persona-prompt-text {
+  margin-top: 12px;
+}

@@ -10,6 +10,7 @@ import { persona } from "../core/persona.ts";
 
 test("console config API persists model selection, protects secrets and changes the next chat request", async () => {
   const requested: string[] = [];
+  const systemPrompts: string[] = [];
   const provider = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
@@ -30,6 +31,7 @@ test("console config API persists model selection, protects secrets and changes 
     }
     if (req.url === "/v1/chat/completions") {
       requested.push(body.model);
+      systemPrompts.push(body.messages[0].content);
       res.setHeader("Content-Type", "text/event-stream");
       return res.end(
         "data: " +
@@ -169,6 +171,7 @@ test("console config API persists model selection, protects secrets and changes 
       (await post("/api/persona", { ...editedPersona, prompt: "" })).status,
       400,
     );
+    snapshot = await (await get("/api/model-config")).json();
     const probe = await post("/api/model-config/test", { modelId: "vector" });
     assert.equal(probe.status, 200);
     assert.equal((await probe.json()).dimensions, 4);
@@ -236,6 +239,10 @@ test("console config API persists model selection, protects secrets and changes 
       ws.on("error", reject);
     });
     assert.match(reply, /chat-b/);
+    assert.ok(
+      systemPrompts.at(-1)?.startsWith(editedPersona.prompt),
+      "edited persona reaches the actual model request",
+    );
     assert.equal(requested.at(-1), "chat-b");
     assert.equal(
       (await (await get("/api/session?id=console-test")).json()).length,
@@ -262,11 +269,62 @@ test("console config API persists model selection, protects secrets and changes 
     assert.equal(malformed.status, 400);
     assert.ok(!(await malformed.text()).includes("new-malformed-secret"));
     assert.ok(!app.logger.lines.join("\n").includes("new-malformed-secret"));
+    const created = await post("/api/persona/config", {
+      configRevision: snapshot.revision,
+      name: "新测试人格",
+      model: "local-chat",
+      prompt: "你是测试人格 ALPHA。只按新人格回答。",
+      activate: false,
+    });
+    assert.equal(created.status, 200);
+    const createdData = await created.json();
+    const newPersonaId = createdData.persona.id;
+    assert.equal(
+      createdData.config.activePersona,
+      "whale",
+      "save alone does not activate",
+    );
+    assert.equal(app.config.channels.web.persona, "whale");
+    const activation = {
+      ...createdData.persona,
+      configRevision: createdData.config.revision,
+      activate: true,
+    };
+    const activated = await post("/api/persona/config", activation);
+    assert.equal(activated.status, 200);
+    const activeData = await activated.json();
+    assert.equal(activeData.config.activePersona, newPersonaId);
+    assert.equal(
+      (await (await get("/api/status")).json()).personaName,
+      "新测试人格",
+    );
+    await app.sessions.chat("persona-new", "自我介绍", () => {});
+    assert.equal(requested.at(-1), "chat-a");
+    assert.ok(systemPrompts.at(-1)?.startsWith(createdData.persona.prompt));
+    const updatedPrompt = "你是测试人格 BETA。只按修改后的要求回答。";
+    const updated = await post("/api/persona/config", {
+      ...activeData.persona,
+      prompt: updatedPrompt,
+      configRevision: activeData.config.revision,
+      activate: false,
+    });
+    assert.equal(updated.status, 200);
+    await app.sessions.chat("persona-new", "再介绍一次", () => {});
+    assert.ok(
+      systemPrompts.at(-1)?.startsWith(updatedPrompt),
+      "prompt edits affect the next request without a restart",
+    );
+    assert.equal((await post("/api/persona/config", activation)).status, 409);
     await app.close();
     app = await boot(root);
     assert.equal(app.config.model_bindings.chat, "second");
     assert.equal(app.config.model_bindings.embedding, "vector");
     assert.equal(app.config.personas.whale.name, "验收人格");
+    assert.equal(app.config.channels.web.persona, newPersonaId);
+    assert.equal(
+      (await persona(root, app.config, newPersonaId)).prompt,
+      updatedPrompt,
+    );
     assert.equal(
       (await persona(root, app.config, "whale")).prompt,
       editedPersona.prompt,

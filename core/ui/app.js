@@ -169,7 +169,19 @@ class ConsoleApp {
         a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
     });
-    $("nav-model-count").textContent = this.state.config.models.length;
+    const availableModels = this.state.config.models.filter(
+      (m) =>
+        ["chat", "embedding"].includes(m.type) &&
+        m.enabled &&
+        !m.configuration_error &&
+        this.state.config.providers.find((p) => p.id === m.provider)?.enabled,
+    ).length;
+    $("nav-model-count").textContent = availableModels;
+    $("nav-model-count").title = `${availableModels} 个已启用且配置有效的模型`;
+    $("nav-model-count").setAttribute(
+      "aria-label",
+      `${availableModels} 个可用模型`,
+    );
     this.content.innerHTML = page.render(this);
     page.bind?.(this);
     this.updateConnection();
@@ -363,16 +375,17 @@ class ConsoleApp {
     this.render();
   }
   renderMessages() {
+    const personaName = this.state.status.personaName || "助手";
     const box = $("messages");
     if (!box) return;
     if (!this.state.messages.length) {
-      box.innerHTML = `<div class="chat-empty"><span class="brand-mark">${whale}</span><h3>今天想和鲸鲸聊点什么？</h3><p>从一句问候开始，或试试「记下这个」。</p></div>`;
+      box.innerHTML = `<div class="chat-empty"><span class="brand-mark">${whale}</span><h3>今天想和${e(personaName)}聊点什么？</h3><p>从一句问候开始，或试试「记下这个」。</p></div>`;
       return;
     }
     box.innerHTML = this.state.messages
       .map(
         (m) =>
-          `<div class="message ${m.role === "user" ? "user" : m.role === "error" ? "error" : ""}"><span class="mini-avatar">${m.role === "user" ? "你" : m.role === "error" ? "!" : "鲸"}</span><div class="bubble">${e(m.text)}</div></div>`,
+          `<div class="message ${m.role === "user" ? "user" : m.role === "error" ? "error" : ""}"><span class="mini-avatar">${m.role === "user" ? "你" : m.role === "error" ? "!" : e(personaName.slice(0, 1))}</span><div class="bubble">${e(m.text)}</div></div>`,
       )
       .join("");
     box.scrollTop = box.scrollHeight;

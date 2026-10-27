@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { readFile, writeFile, rename, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, writeFile, rename, unlink, mkdir } from "node:fs/promises";
+import { join, resolve, dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { Logger } from "./logger.ts";
 import { proxyURL, timeoutSeconds, withModelResponse } from "./model-http.ts";
@@ -334,7 +334,13 @@ function normalize(config: any) {
       }
     }
   }
-  return { providers, models, bindings, personas };
+  return {
+    providers,
+    models,
+    bindings,
+    personas,
+    activePersona: config.channels?.web?.persona,
+  };
 }
 
 export function resolveChatModel(
@@ -415,11 +421,9 @@ export class ModelConfig {
     this.config.providers = this.source.providers;
     this.config.models = this.source.models;
     this.config.model_bindings = this.source.bindings;
-    for (const [name, persona] of Object.entries<any>(this.source.personas))
-      if (this.config.personas?.[name]) {
-        this.config.personas[name].model = persona.model ?? null;
-        this.config.personas[name].name = persona.name;
-      }
+    this.config.personas = structuredClone(this.source.personas);
+    if (this.config.channels?.web)
+      this.config.channels.web.persona = this.source.activePersona;
   }
   snapshot() {
     const raw = readFileSync(this.file, "utf8");
@@ -454,6 +458,7 @@ export class ModelConfig {
         ),
       })),
       bindings: { ...this.source.bindings },
+      activePersona: this.source.activePersona,
       personas: Object.entries<any>(this.source.personas).map(([id, p]) => ({
         id,
         name: p.name || id,
@@ -464,6 +469,124 @@ export class ModelConfig {
   save(input: any) {
     if (Array.isArray(input?.providers)) this.protectKeys(input.providers);
     const task = this.queue.then(() => this.write(input));
+    this.queue = task.catch(() => {});
+    return task;
+  }
+  savePersona(input: any) {
+    const task = this.queue.then(async () => {
+      this.snapshot();
+      const raw = await readFile(this.file, "utf8");
+      const expected = input?.configRevision;
+      const conflict = () =>
+        new ModelConfigError(
+          "配置或人格已在其他窗口修改，请重新读取后编辑",
+          409,
+        );
+      if (expected !== this.revision || hash(raw) !== expected)
+        throw conflict();
+      if (
+        typeof input.prompt !== "string" ||
+        !input.prompt.trim() ||
+        Buffer.byteLength(input.prompt) > 32768
+      )
+        throw new ModelConfigError("人格内容不能为空，且不能超过 32 KiB");
+      if (input.activate !== undefined && typeof input.activate !== "boolean")
+        throw new ModelConfigError("启用选项必须为布尔值");
+      const disk = parseConfig(raw);
+      disk.providers = structuredClone(this.source.providers);
+      disk.models = structuredClone(this.source.models);
+      disk.model_bindings = { ...this.source.bindings };
+      disk.personas = structuredClone(this.source.personas);
+      const creating = input.id === undefined;
+      const personaId = creating
+        ? `persona_${randomUUID().replaceAll("-", "")}`
+        : id(input.id, "人格 ID");
+      if (!creating && !Object.hasOwn(disk.personas ?? {}, personaId))
+        throw new ModelConfigError("人格不存在");
+      const name = text(input.name, "人格名称", 100);
+      const selected = input.model ?? null;
+      if (selected !== null) resolveModel(this.config, selected);
+      if (input.activate)
+        resolveModel(this.config, selected ?? this.source.bindings.chat);
+      const previous = disk.personas?.[personaId];
+      const file = creating
+        ? resolve(
+            dirname(this.file),
+            "..",
+            disk.memory?.root ?? "memory",
+            "personas",
+            personaId + ".md",
+          )
+        : resolve(dirname(this.file), "..", previous.file);
+      const original = creating ? null : await readFile(file, "utf8");
+      if (!creating && hash(original!) !== input.revision) throw conflict();
+      disk.personas ??= {};
+      disk.personas[personaId] = {
+        ...(previous ?? { file, permission: "ask" }),
+        name,
+        model: selected,
+      };
+      if (input.activate) disk.channels.web.persona = personaId;
+      const content = JSON.stringify(disk, null, 2) + "\n";
+      const temp = file + "." + randomUUID() + ".tmp";
+      const configTemp = this.file + "." + randomUUID() + ".tmp";
+      let promptWritten = false;
+      try {
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(temp, input.prompt, {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+        });
+        await writeFile(configTemp, content, {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+        });
+        if (hash(await readFile(this.file, "utf8")) !== expected)
+          throw conflict();
+        if (!creating && hash(await readFile(file, "utf8")) !== input.revision)
+          throw conflict();
+        await rename(temp, file);
+        promptWritten = true;
+        if (hash(await readFile(this.file, "utf8")) !== expected)
+          throw conflict();
+        await rename(configTemp, this.file);
+      } catch (error) {
+        // Roll back only our own prompt write if publishing configuration failed.
+        if (
+          promptWritten &&
+          hash(await readFile(file, "utf8")) === hash(input.prompt)
+        ) {
+          if (creating) await unlink(file);
+          else {
+            await writeFile(temp, original!, "utf8");
+            await rename(temp, file);
+          }
+        }
+        throw error;
+      } finally {
+        await unlink(temp).catch(() => {});
+        await unlink(configTemp).catch(() => {});
+      }
+      this.revision = hash(content);
+      this.source = normalize(disk);
+      this.apply();
+      this.logger.info(creating ? "人格已创建" : "人格已保存", {
+        persona: personaId,
+        active: this.config.channels.web.persona === personaId,
+      });
+      return {
+        config: this.snapshot(),
+        persona: {
+          id: personaId,
+          name,
+          model: selected,
+          prompt: input.prompt,
+          revision: hash(input.prompt),
+        },
+      };
+    });
     this.queue = task.catch(() => {});
     return task;
   }
