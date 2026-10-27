@@ -17,3 +17,8 @@ Thumbs.db
 runtime/
 plugins/**/data/
 .artifacts/
+
+# Memory snapshots and temporary restore directories contain private data.
+/backups/memory/
+.whalelife-memory-restore-*/
+.whalelife-memory-rollback-*/

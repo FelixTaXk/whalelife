@@ -26,6 +26,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
     "models.js",
     "views.js",
     "personas.js",
+    "memory.js",
   ]);
   const allowedOrigin = (req: any) =>
     !req.headers.origin ||
@@ -43,12 +44,12 @@ export async function startWeb(config: any, services: any, runtime: any) {
     tokens.has(
       (req.headers.cookie ?? "").match(/(?:^|; )whale=([a-f0-9]+)/)?.[1],
     );
-  const body = async (req: any) => {
+  const body = async (req: any, limit = 65536) => {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req) {
       size += chunk.length;
-      if (size > 65536) throw Error("请求过大");
+      if (size > limit) throw Error("请求过大");
       chunks.push(chunk);
     }
     try {
@@ -56,6 +57,13 @@ export async function startWeb(config: any, services: any, runtime: any) {
     } catch {
       throw Error("请求 JSON 格式无效");
     }
+  };
+  const savePersona = (input: any) => {
+    if (sessions.memoryMaintenance) throw Error("记忆恢复中，请稍后编辑人格");
+    return memory.serial(() => {
+      if (sessions.memoryMaintenance) throw Error("记忆恢复中，请稍后编辑人格");
+      return services.modelConfig.savePersona(input);
+    });
   };
   const server = createServer(async (req, res) => {
     const send = (status: number, value: any) => {
@@ -110,21 +118,61 @@ export async function startWeb(config: any, services: any, runtime: any) {
         return send(200, { ok: true });
       }
       if (!authorized(req)) return send(401, { error: "请先登录" });
+      const memoryUrl = new URL(req.url!, origin);
+      if (req.method === "GET" && memoryUrl.pathname === "/api/memory")
+        return send(
+          200,
+          await services.memoryAdmin.catalog({
+            search: memoryUrl.searchParams.get("search") || "",
+            offset: Number(memoryUrl.searchParams.get("offset") || 0),
+            limit: Number(memoryUrl.searchParams.get("limit") || 25),
+          }),
+        );
+      if (req.method === "GET" && memoryUrl.pathname === "/api/memory/facts")
+        return send(200, await services.memoryAdmin.facts());
+      if (req.method === "POST" && memoryUrl.pathname === "/api/memory/facts")
+        return send(
+          200,
+          await services.memoryAdmin.saveFacts(await body(req, 131072)),
+        );
+      if (req.method === "GET" && memoryUrl.pathname === "/api/memory/session")
+        return send(
+          200,
+          await services.memoryAdmin.session(
+            memoryUrl.searchParams.get("id"),
+            Number(memoryUrl.searchParams.get("offset") || 0),
+            Number(memoryUrl.searchParams.get("limit") || 100),
+            memoryUrl.searchParams.get("search") || "",
+          ),
+        );
+      if (
+        req.method === "GET" &&
+        memoryUrl.pathname === "/api/memory/summaries"
+      )
+        return send(200, await services.memoryAdmin.summaries());
+      if (req.method === "GET" && memoryUrl.pathname === "/api/memory/summary")
+        return send(
+          200,
+          await services.memoryAdmin.summary(memoryUrl.searchParams.get("id")),
+        );
+      if (req.method === "GET" && memoryUrl.pathname === "/api/memory/backups")
+        return send(200, await services.memoryAdmin.backups());
+      if (req.method === "POST" && memoryUrl.pathname === "/api/memory/backup")
+        return send(200, await services.memoryAdmin.backup());
+      if (req.method === "POST" && memoryUrl.pathname === "/api/memory/restore")
+        return send(200, await services.memoryAdmin.restore(await body(req)));
       if (req.method === "GET" && req.url?.startsWith("/api/persona?")) {
         const id = new URL(req.url, origin).searchParams.get("id");
         return send(200, await services.personaFiles.get(id));
       }
       if (req.method === "POST" && req.url === "/api/persona/config")
-        return send(
-          200,
-          await services.modelConfig.savePersona(await body(req)),
-        );
+        return send(200, await savePersona(await body(req)));
       if (req.method === "POST" && req.url === "/api/persona") {
         const input = await body(req);
         const snapshot = services.modelConfig.snapshot();
         const selected = snapshot.personas.find((p: any) => p.id === input.id);
         if (!selected) return send(400, { error: "人格不存在" });
-        const result = await services.modelConfig.savePersona({
+        const result = await savePersona({
           ...input,
           name: selected.name,
           model: selected.model,
@@ -157,6 +205,11 @@ export async function startWeb(config: any, services: any, runtime: any) {
           ),
         );
       }
+      if (req.url === "/api/model-config/models/draft" && req.method === "POST")
+        return send(
+          200,
+          await services.modelConfig.listDraftModels(await body(req)),
+        );
       if (req.url === "/api/model-config/probe" && req.method === "POST") {
         return send(
           200,
@@ -199,9 +252,14 @@ export async function startWeb(config: any, services: any, runtime: any) {
     } catch (error: any) {
       logger.error("Web 请求失败", { error });
       if (!res.headersSent)
-        send([400, 409, 502].includes(error.status) ? error.status : 400, {
-          error: error.message,
-        });
+        send(
+          [400, 404, 409, 413, 500, 502].includes(error.status)
+            ? error.status
+            : 400,
+          {
+            error: error.message,
+          },
+        );
       else res.end();
     }
   });

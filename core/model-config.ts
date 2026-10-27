@@ -688,6 +688,16 @@ export class ModelConfig {
       if (input.personaNames && Object.hasOwn(input.personaNames, name))
         p.name = text(input.personaNames[name], "人格名称", 100);
     }
+    if (input.activePersona !== undefined) {
+      if (
+        typeof input.activePersona !== "string" ||
+        !Object.hasOwn(personas, input.activePersona)
+      )
+        throw new ModelConfigError("当前人格必须选择已存在的人格");
+      disk.channels ??= {};
+      disk.channels.web ??= {};
+      disk.channels.web.persona = input.activePersona;
+    }
     this.protectKeys(providers);
     const next = {
       ...disk,
@@ -764,6 +774,21 @@ export class ModelConfig {
   }
   async listModels(providerId: string) {
     const provider = this.provider(providerId);
+    return this.fetchModels(provider);
+  }
+  async listDraftModels(input: any) {
+    if (!object(input?.provider))
+      throw new ModelConfigError("请提供服务连接设置");
+    this.protectKeys([input.provider]);
+    this.snapshot();
+    const old = this.source.providers.find(
+      (p: ProviderConfig) => p.id === input.provider.id,
+    );
+    const provider = readProvider(input.provider, old, true);
+    this.protectKeys([provider]);
+    return this.fetchModels(provider);
+  }
+  private async fetchModels(provider: ProviderConfig) {
     if (provider.protocol !== "openai-compatible")
       throw new ModelConfigError(
         "DashScope 原生协议请手动填写模型标识，或使用 OpenAI 兼容地址获取模型列表",

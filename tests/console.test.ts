@@ -214,6 +214,30 @@ test("console config API persists model selection, protects secrets and changes 
       "chat-b",
       "vector-a",
     ]);
+    const beforeList = await readFile(join(root, "config/config.json"), "utf8");
+    const listProvider = snapshot.providers.find((p: any) => p.id === "local");
+    const draftList = await post("/api/model-config/models/draft", {
+      provider: listProvider,
+    });
+    assert.equal(draftList.status, 200);
+    assert.deepEqual((await draftList.json()).models, [
+      "chat-a",
+      "chat-b",
+      "vector-a",
+    ]);
+    assert.equal(
+      await readFile(join(root, "config/config.json"), "utf8"),
+      beforeList,
+    );
+    assert.equal(
+      (
+        await post("/api/model-config/models/draft", {
+          provider: { ...listProvider, base_url: "https://other.example/v1" },
+        })
+      ).status,
+      400,
+      "draft list cannot forward a saved key to a changed address",
+    );
     const reply = await new Promise<string>((resolve, reject) => {
       const ws = new WebSocket(url.replace("http", "ws") + "/ws/chat", {
         headers: { Cookie: cookie },

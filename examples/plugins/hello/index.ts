@@ -1,4 +1,4 @@
-import type { Context } from "../../core/context.ts";
+import type { Context } from "../../../core/context.ts";
 export async function apply(ctx: Context) {
   ctx.provide("hello", { greet: (name: string) => `你好，${name}` });
   ctx.tools.register({

@@ -3,6 +3,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Logger } from "./logger.ts";
 import { Memory } from "./memory.ts";
+import { MemoryAdmin } from "./memory-admin.ts";
 import { LLM } from "./llm.ts";
 import { Tools } from "./tools.ts";
 import { approval } from "./permission.ts";
@@ -85,6 +86,7 @@ export async function boot(
   );
   const sessions = new Sessions(root, config, services);
   services.sessions = sessions;
+  services.memoryAdmin = new MemoryAdmin(memory, sessions, logger);
   await runtime.builtin("chat", sessions);
   const web = await startWeb(config, services, runtime);
   services.web = web;

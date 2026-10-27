@@ -100,8 +100,20 @@ function formatBytes(bytes) {
       : (bytes / 1048576).toFixed(1) + " MB";
 }
 
+function personaRoutingText(config, personaId) {
+  const persona = config.personas.find((p) => p.id === personaId);
+  if (!persona) return "先到人格配置页创建人格，再指定给聊天使用。";
+  if (persona.model) {
+    const model = config.models.find((m) => m.id === persona.model);
+    return `「${persona.name}」的专用模型「${model?.name || persona.model}」优先于工作空间的对话模型。更改工作空间模型不会覆盖这项专用设置。`;
+  }
+  return `「${persona.name}」未设置专用模型，将使用左侧选择的工作空间对话模型。人格专用模型一旦设置，会优先于工作空间选择。`;
+}
+
 export function renderBindings(app) {
   const c = app.state.config;
+  const activePersona = c.activePersona || app.state.status?.persona || "";
+  const personaSettings = `<label class="form-field"><span>当前聊天人格</span><select id="active-persona" name="activePersona" required ${app.state.chatBusy || !c.personas.length ? "disabled" : ""}>${!activePersona ? '<option value="">请选择人格</option>' : ""}${c.personas.map((p) => `<option value="${e(p.id)}" ${p.id === activePersona ? "selected" : ""}>${e(p.name)}</option>`).join("")}</select></label><p id="active-persona-routing" class="hint" style="margin-top:16px">${e(personaRoutingText(c, activePersona))}</p><p class="hint" style="margin-top:12px">与模型选择一起保存后生效。切换人格会开始新会话，旧聊天记录保留；请等待当前回复结束后切换。</p><a href="#personas" class="btn tonal" style="margin-top:18px">编辑人格 ${icon("arrow")}</a>`;
   const options = (type, selected, inherit = false) =>
     `<option value="">${inherit ? "使用工作空间的对话模型" : "未配置"}</option>` +
     c.models
@@ -119,22 +131,40 @@ export function renderBindings(app) {
       .join("");
   const field = (type, description) =>
     `<div class="binding-row"><div class="row">${icon(typeIcon(type))}<h3>${typeNames[type]}模型</h3></div><select name="binding_${type}" aria-label="${typeNames[type]}模型">${options(type, c.bindings[type])}</select><p>${description}</p></div>`;
-  return `<form id="bindings-form"><div class="page-heading"><div><div class="eyebrow">MODEL ROUTING</div><h1>使用配置</h1><p>明确选择每种能力使用的模型。未配置的用途保持关闭。</p></div><div class="heading-actions"><button type="submit" class="btn primary">${icon("check")}保存配置</button></div></div><div class="info-banner">${icon("info")}选择已启用的模型，保存后从下一次请求开始生效。</div><div class="bindings-grid"><section class="panel"><div class="panel-header"><h2>工作空间模型</h2><a href="#models" class="btn small link">管理模型 ${icon("arrow")}</a></div><div class="panel-body">${field("chat", "用于鲸鲸的日常对话和会话摘要。")}${field("embedding", "为后续记忆检索选择向量模型。当前支持配置与向量接口测试，检索接入将在后续开发。")}${field("rerank", "为后续检索结果排序预留，可暂时不配置。")}<details style="margin-top:20px"><summary class="muted">更多模型用途</summary><div style="margin-top:20px">${field("image", "图像生成服务的模型选择。")}${field("stt", "语音识别服务的模型选择。")}${field("tts", "语音合成服务的模型选择。")}<p class="hint" style="margin-top:16px">图像、语音与重排序目前仅保存选择，相应能力尚未接入。</p></div></details></div></section><section class="panel"><div class="panel-header"><h2>人格配置</h2></div><div class="panel-body"><p>人格名称、专用模型和人格内容已集中到人格配置页。</p><a href="#personas" class="btn tonal" style="margin-top:18px">编辑人格 ${icon("arrow")}</a></div></section></div><p id="bindings-error" class="form-error" role="alert"></p></form>`;
+  return `<form id="bindings-form"><div class="page-heading"><div><div class="eyebrow">MODEL ROUTING</div><h1>使用配置</h1><p>明确选择每种能力使用的模型。未配置的用途保持关闭。</p></div><div class="heading-actions"><button type="submit" class="btn primary">${icon("check")}保存配置</button></div></div><div class="info-banner">${icon("info")}选择已启用的模型，保存后从下一次请求开始生效。</div><div class="bindings-grid"><section class="panel"><div class="panel-header"><h2>工作空间模型</h2><a href="#models" class="btn small link">管理模型 ${icon("arrow")}</a></div><div class="panel-body">${field("chat", "用于鲸鲸的日常对话和会话摘要。")}${field("embedding", "为后续记忆检索选择向量模型。当前支持配置与向量接口测试，检索接入将在后续开发。")}${field("rerank", "为后续检索结果排序预留，可暂时不配置。")}<details style="margin-top:20px"><summary class="muted">更多模型用途</summary><div style="margin-top:20px">${field("image", "图像生成服务的模型选择。")}${field("stt", "语音识别服务的模型选择。")}${field("tts", "语音合成服务的模型选择。")}<p class="hint" style="margin-top:16px">图像、语音与重排序目前仅保存选择，相应能力尚未接入。</p></div></details></div></section><section class="panel"><div class="panel-header"><h2>人格配置</h2></div><div class="panel-body">${personaSettings}</div></section></div><p id="bindings-error" class="form-error" role="alert"></p></form>`;
 }
 export function bindBindings(app) {
   const form = document.querySelector("#bindings-form");
+  const select = form.querySelector("#active-persona");
+  select.onchange = () => {
+    form.querySelector("#active-persona-routing").textContent =
+      personaRoutingText(app.state.config, select.value);
+  };
   form.onsubmit = async (event) => {
     event.preventDefault();
     const button = form.querySelector("[type=submit]");
+    if (button.disabled) return;
+    const errorBox = form.querySelector("#bindings-error");
+    errorBox.textContent = "";
+    const data = new FormData(form);
+    const currentPersona =
+      app.state.config.activePersona || app.state.status?.persona;
+    const selectedPersona = data.get("activePersona") || currentPersona;
+    const switching = selectedPersona !== currentPersona;
+    if (switching && app.state.chatBusy) {
+      errorBox.textContent = "请等待当前回复结束后切换人格。";
+      return;
+    }
     button.disabled = true;
     const next = app.configDraft();
-    const data = new FormData(form);
+    if (selectedPersona) next.activePersona = selectedPersona;
     for (const key of ["chat", "embedding", "rerank", "image", "stt", "tts"])
       next.bindings[key] = data.get("binding_" + key) || null;
     try {
       await app.saveConfig(next);
+      if (switching) app.newSession();
     } catch (error) {
-      document.querySelector("#bindings-error").textContent = error.message;
+      errorBox.textContent = error.message;
     } finally {
       button.disabled = false;
     }

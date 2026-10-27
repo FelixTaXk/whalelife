@@ -2,6 +2,7 @@ import { persona, personaSystemPrompt } from "./persona.ts";
 import { safeId } from "./memory.ts";
 import { createHash } from "node:crypto";
 export class Sessions {
+  memoryMaintenance = false;
   locks = new Set<string>();
   root: string;
   config: any;
@@ -18,6 +19,7 @@ export class Sessions {
     onContext?: (value: any) => void,
     expectedPersona?: string,
   ) {
+    if (this.memoryMaintenance) throw Error("记忆恢复中，请稍后重试");
     safeId(id);
     if (this.locks.has(id)) throw Error("该会话正在回复，请稍候");
     if (!text.trim() || text.length > 16000) throw Error("请输入 1–16000 字");

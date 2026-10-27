@@ -1,4 +1,145 @@
 /* Model connection workbench: type → connection → settings. */
+.memory-location {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 16px 0;
+  overflow-wrap: anywhere;
+}
+.memory-panel h2 {
+  margin-bottom: 10px;
+}
+.memory-panel .panel-header {
+  padding: 0 0 16px;
+  gap: 12px;
+}
+.memory-panel textarea {
+  width: 100%;
+  font:
+    14px/1.8 "Microsoft YaHei",
+    sans-serif;
+}
+.memory-actions {
+  margin-top: 18px;
+  gap: 10px;
+}
+.memory-table {
+  margin-top: 20px;
+}
+.memory-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.memory-item > div {
+  flex: 1;
+  min-width: 0;
+}
+.memory-item strong {
+  display: block;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.memory-item small {
+  display: block;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.memory-preview,
+.memory-transcript {
+  max-height: 55vh;
+  overflow: auto;
+}
+.memory-preview,
+.memory-transcript pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    14px/1.8 "Microsoft YaHei",
+    sans-serif;
+}
+.memory-transcript article {
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+}
+.memory-transcript small {
+  color: var(--muted);
+}
+#memory-search-form input {
+  flex: 1;
+  min-width: 0;
+}
+.connection-models {
+  margin-bottom: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+.model-section-heading {
+  margin: 24px 0 8px;
+}
+.configured-model {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  background: transparent;
+}
+.configured-model.selected {
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+.configured-model > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.configured-model strong,
+.configured-model small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.configured-model small {
+  margin-top: 5px;
+  color: var(--muted);
+}
+.model-picker {
+  max-height: 360px;
+  overflow: auto;
+  margin-top: 12px;
+}
+.model-choice {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--line);
+}
+.model-choice[hidden] {
+  display: none;
+}
+.model-choice input {
+  width: auto;
+}
+.model-choice span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.model-picker-tools {
+  justify-content: space-between;
+  margin-top: 12px;
+}
+#model-list-search {
+  width: 100%;
+  margin-top: 12px;
+}
+.connection-models .settings-section-title {
+  flex-wrap: wrap;
+  gap: 12px;
+}
 .model-type-toolbar {
   display: flex;
   justify-content: space-between;

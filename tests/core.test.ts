@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { Logger } from "../core/logger.ts";
 import { Memory } from "../core/memory.ts";
 import { Runtime } from "../core/runtime.ts";
@@ -48,7 +48,11 @@ test("permissions deny off, allow safe, require approval, respect override", () 
 });
 test("cordis nested cleanup, independent child, reload, bad plugin isolation", async () => {
   const root = await mkdtemp(join(tmpdir(), "whale-runtime-"));
-  await cp(resolve("plugins"), join(root, "plugins"), { recursive: true });
+  await mkdir(join(root, "plugins"));
+  await cp(resolve("examples/plugins/hello"), join(root, "plugins/hello"), {
+    recursive: true,
+    filter: (source) => basename(source) !== "data",
+  });
   const logger = new Logger(join(root, "logs"));
   const runtime = new Runtime(root, logger);
   const tools = new Tools(logger);

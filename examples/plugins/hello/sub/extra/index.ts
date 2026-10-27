@@ -1,4 +1,4 @@
-import type { Context } from "../../../../core/context.ts";
+import type { Context } from "../../../../../core/context.ts";
 export const id = "extra";
 export function apply(ctx: Context) {
   ctx.logger.info("hello/extra 父服务验证", {

@@ -2,6 +2,7 @@ import { api, escapeHTML as e, uid, availableModels } from "./api.js";
 import { icon, whale } from "./icons.js";
 import { renderModels, bindModels } from "./models.js";
 import { renderPersonas, bindPersonas } from "./personas.js";
+import { renderMemory, bindMemory, loadMemory } from "./memory.js";
 import {
   renderOverview,
   renderBindings,
@@ -15,6 +16,7 @@ import {
 } from "./views.js";
 
 const pages = {
+  memory: { name: "记忆管理", render: renderMemory, bind: bindMemory },
   personas: { name: "人格配置", render: renderPersonas, bind: bindPersonas },
   overview: { name: "概览", render: renderOverview },
   models: { name: "模型服务", render: renderModels, bind: bindModels },
@@ -56,6 +58,7 @@ class ConsoleApp {
     this.state.page = this.pageFromHash();
     window.addEventListener("hashchange", () => {
       this.state.page = this.pageFromHash();
+      if (this.state.page === "memory") this.state.memoryLoadedTab = null;
       document.body.classList.remove("sidebar-open");
       $("sidebar-scrim").hidden = true;
       if (this.authenticated) {
@@ -176,6 +179,7 @@ class ConsoleApp {
     button.disabled = true;
     try {
       await this.load();
+      if (this.state.page === "memory") await loadMemory(this);
       this.render();
       this.toast("状态已刷新");
     } catch (error) {
@@ -362,6 +366,10 @@ class ConsoleApp {
       `<i class="status-dot" style="${online ? "" : "background:#c5ac72"}"></i> ${online ? "核心已连接" : "正在连接"}`;
   }
   updateChatControls() {
+    const activePersona = $("active-persona");
+    if (activePersona)
+      activePersona.disabled =
+        this.state.chatBusy || !this.state.config.personas.length;
     const button = $("send");
     if (button) {
       const persona = this.state.config.personas.find(

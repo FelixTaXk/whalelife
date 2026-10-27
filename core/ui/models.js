@@ -111,6 +111,7 @@ function draftFor(app, model, repair = false) {
     providerId: repair ? uid("provider") : p.id,
     type: model.type,
     name: model.name,
+    providerName: p.name || model.name,
     model: model.model,
     template: repair ? "" : inferTemplate(p, model.type),
     protocol: repair ? "openai-compatible" : p.protocol,
@@ -153,6 +154,9 @@ export function renderModels(app) {
   app.state.modelFilter = type;
   const label = types.find(([id]) => id === type)[1];
   const models = visibleModels(config, type);
+  const connections = models.filter(
+    (m, i) => models.findIndex((x) => x.provider === m.provider) === i,
+  );
   const errors = config.models.filter(
     (m) => m.type === type && issueFor(config, m),
   );
@@ -160,13 +164,14 @@ export function renderModels(app) {
   const draft = supported ? selectedDraft(app, models) : null;
   return `<div class="model-type-toolbar"><div class="tabs capability-tabs" role="tablist" aria-label="模型类型">${types.map(([id, name, ico]) => `<button type="button" class="tab ${type === id ? "active" : ""}" role="tab" aria-selected="${type === id}" data-filter="${id}">${icon(ico)}${name}${["chat", "embedding"].includes(id) ? `<span class="count">${visibleModels(config, id).length}</span>` : "<small>未接入</small>"}</button>`).join("")}</div><a href="#bindings" class="btn small" aria-label="模型使用设置">${icon("sliders")}使用设置</a></div>
     ${errors.length ? `<details class="model-repair-summary"><summary>${errors.length} 条配置待修复</summary><p>这些记录选用了不匹配的服务，暂不能使用。原记录仍保留。<button type="button" class="btn small link" data-issues>查看并修复</button></p></details>` : ""}
-    <div class="panel connection-workbench" style="--connection-offset:${errors.length ? "220px" : "182px"}"><aside class="connection-list" aria-label="${label}模型配置"><div class="connection-list-title"><h2>${label}模型配置</h2>${supported ? `<button type="button" class="btn small link" data-add>${icon("plus")}新增</button>` : ""}</div>
+    <div class="panel connection-workbench" style="--connection-offset:${errors.length ? "220px" : "182px"}"><aside class="connection-list" aria-label="${label}服务连接"><div class="connection-list-title"><h2>${label}服务连接</h2>${supported ? `<button type="button" class="btn small link" data-add>${icon("plus")}新增</button>` : ""}</div>
     ${draft?.isNew ? `<button type="button" class="connection-item active"><span class="connection-logo">${icon("plus")}</span><span><strong>${e(draft.name)}</strong><small>尚未保存</small></span></button>` : ""}
-    ${models
+    ${connections
       .map((m) => {
         const p = config.providers.find((p) => p.id === m.provider);
         const t = templates.find((t) => t.id === inferTemplate(p, type));
-        return `<button type="button" class="connection-item ${draft?.id === m.id ? "active" : ""}" data-connection="${e(m.id)}" aria-pressed="${draft?.id === m.id}"><span class="connection-logo ${t?.id === "dashscope" ? "bailian" : ""}">${e(t?.mark || "+")}</span><span><strong>${e(m.name)}</strong><small>${e(m.model)}</small></span>${config.bindings[type] === m.id ? '<i class="status-dot" title="已选用"></i>' : ""}</button>`;
+        const selected = draft?.providerId === p.id;
+        return `<button type="button" class="connection-item ${selected ? "active" : ""}" data-connection="${e(m.id)}" aria-pressed="${selected}"><span class="connection-logo ${t?.id === "dashscope" ? "bailian" : ""}">${e(t?.mark || "+")}</span><span><strong>${e(p.name || m.name)}</strong><small>${models.filter((x) => x.provider === p.id).length} 个${label}模型</small></span></button>`;
       })
       .join("")}
     ${!models.length && !draft?.isNew ? `<p class="connection-list-empty">尚未添加${label}配置</p>` : ""}</aside>
@@ -183,12 +188,15 @@ function renderEditor(app, d) {
   const existing = app.state.config.models.find((m) => m.id === d.id);
   const shared = app.state.config.models.filter(
     (m) => m.provider === d.providerId && m.id !== d.id,
-  ).length;
-  return `<form id="connection-form"><header class="connection-editor-header"><div><h2>${e(d.name || "新模型配置")}</h2><p>${e(d.base_url || "填写下面的连接设置")}</p></div><div class="row"><button type="button" class="btn link" data-probe-draft ${supported ? "" : "disabled"}>${icon("bolt")}测试</button><button type="submit" class="btn primary" id="connection-save" ${d.dirty && !app.state.modelSaving ? "" : "disabled"}>${icon("check")}保存</button></div></header>
+  );
+  return `<form id="connection-form"><header class="connection-editor-header"><div><h2>${e(d.providerName || "新服务连接")}</h2><p>${e(d.base_url || "填写下面的连接设置")}</p></div><div class="row"><button type="button" class="btn link" data-probe-draft ${supported ? "" : "disabled"}>${icon("bolt")}测试当前模型</button><button type="submit" class="btn primary" id="connection-save" ${d.dirty && !app.state.modelSaving ? "" : "disabled"}>${icon("check")}保存</button></div></header>
     <div class="connection-settings"><div class="settings-section-title"><h3>设置</h3><span id="draft-state">${d.dirty ? "有未保存的修改" : "已保存"}</span></div>
     ${d.repair ? '<div class="configuration-warning repair-note">旧记录已保留。请选择正确的服务类型并填写该服务的 Key；旧 DeepSeek 密钥不会转移到新地址。</div>' : ""}
     ${d.revision !== app.state.config.revision ? '<div class="configuration-warning repair-note">已保存的配置发生了变化。当前未保存的内容仍保留；请先放弃修改，再根据最新配置重新编辑。</div>' : ""}
     <div class="service-notice">${icon("info")}<p>${e(t?.note || "选择要连接的服务，然后填写实际模型名称。")}</p></div>
+    ${renderConnectionModels(app, d)}
+    <h3 class="model-section-heading">服务连接</h3>
+    ${row("providerName", "连接名称", "这个连接下的模型共用地址、密钥、代理和超时。", input(d, "providerName", 'required maxlength="200"'))}
     ${row(
       "template",
       "服务类型",
@@ -202,17 +210,18 @@ function renderEditor(app, d) {
         )
         .join("")}</select>`,
     )}
-    ${row("name", "配置名称", "由你命名，方便在列表和使用设置中识别。", input(d, "name", 'required maxlength="200" placeholder="例如：百炼向量"'))}
-    ${row("enabled", "启用", "允许使用这条模型配置。", `<label class="setting-toggle"><input id="setting-enabled" name="enabled" type="checkbox" ${d.enabled ? "checked" : ""}><span>启用此配置</span></label>`)}
     ${row("api_key", "API Key", d.has_key ? "已保存密钥。留空保留；更换地址或接口后需重新填写。" : "填写此服务的密钥。无需认证的本地服务可留空。", `<div class="secret-input">${input(d, "api_key", 'type="password" autocomplete="new-password" placeholder="' + (d.has_key ? "留空保留已保存的 Key" : "填写 API Key") + '"')}<button type="button" class="icon-btn" data-toggle-key aria-label="显示 API Key" aria-pressed="false">${icon("eye")}</button></div>${d.has_key ? `<label class="key-clear"><input name="clear_key" type="checkbox" ${d.clear_key ? "checked" : ""}>清除已保存的 Key</label>` : ""}`)}
     ${row("base_url", "API Base URL", "API 根地址，包含服务要求的路径前缀。", input(d, "base_url", 'type="url" required placeholder="https://服务地址/v1"'))}
-    ${row("model", embedding ? "嵌入模型" : "对话模型", `服务商提供的实际模型名称，与上方配置名称分开。${embedding ? "例如 text-embedding-v4。" : "请以服务文档中的名称为准。"}`, input(d, "model", `required maxlength="300" placeholder="${e(t?.example || (embedding ? "例如 text-embedding-3-small" : "填写实际模型名称"))}"`))}
-    ${embedding ? row("dimensions", "嵌入维度", "记录模型实际返回的向量长度，用于检查结果是否一致。留空后点击自动检测。", `<div class="dimension-input">${input(d, "dimensions", 'type="number" min="1" max="65536" step="1" placeholder="尚未检测"')}<button type="button" class="btn tonal" data-detect>自动检测</button></div>`) : ""}
     ${row("timeout_seconds", "超时时间", "请求最长等待时间，单位：秒。", input(d, "timeout_seconds", 'type="number" required min="1" max="600" step="1"'))}
     ${row("proxy_url", "代理地址", "可选，仅用于此连接。支持 HTTP / HTTPS 代理。", input(d, "proxy_url", 'type="url" placeholder="http://127.0.0.1:7890"'))}
+    <h3 class="model-section-heading">当前模型设置</h3>
+    ${row("name", "当前模型名称", "用于使用配置中的模型选择；在上方列表切换要编辑的模型。", input(d, "name", 'required maxlength="200" placeholder="例如：百炼向量"'))}
+    ${row("enabled", "启用", "允许使用这条模型配置。", `<label class="setting-toggle"><input id="setting-enabled" name="enabled" type="checkbox" ${d.enabled ? "checked" : ""}><span>启用此配置</span></label>`)}
+    ${row("model", embedding ? "嵌入模型" : "对话模型", `服务商提供的实际模型名称，与上方配置名称分开。${embedding ? "例如 text-embedding-v4。" : "请以服务文档中的名称为准。"}`, input(d, "model", `required maxlength="300" placeholder="${e(t?.example || (embedding ? "例如 text-embedding-3-small" : "填写实际模型名称"))}"`))}
+    ${embedding ? row("dimensions", "嵌入维度", "记录模型实际返回的向量长度，用于检查结果是否一致。留空后点击自动检测。", `<div class="dimension-input">${input(d, "dimensions", 'type="number" min="1" max="65536" step="1" placeholder="尚未检测"')}<button type="button" class="btn tonal" data-detect>自动检测</button></div>`) : ""}
     ${supported ? row("use", embedding ? "选为嵌入模型" : "选为对话模型", embedding ? "保存后记录此选择。记忆向量检索尚未接入。" : "保存后用于新的对话请求；人格单独指定的模型仍优先。", `<label class="setting-toggle"><input id="setting-use" name="use" type="checkbox" ${d.use ? "checked" : ""}><span>使用此配置</span></label>`) : ""}
     <details class="request-parameters"><summary>高级请求参数（可选）</summary><p>仅在服务文档要求时填写 JSON。${embedding ? `如模型支持缩减维度，可通过 ${d.protocol === "dashscope" ? "dimension" : "dimensions"} 指定请求维度，然后重新检测实际结果。` : "例如 temperature。"}</p><textarea name="parametersText" aria-label="高级请求参数" rows="5" spellcheck="false">${e(d.parametersText)}</textarea></details>
-    ${shared ? `<p class="shared-connection-note">此连接的地址、密钥、代理和超时也用于另外 ${shared} 条配置。需要独立连接时，请新增配置。</p>` : ""}
+    ${shared.length ? `<details class="shared-connection-note"><summary>共用此连接的其他模型（${shared.length}）</summary>${shared.map((m) => `<p><strong>${e(m.name)}</strong> · ${e(m.model)} · ${e(typeNames[m.type])}${issueFor(app.state.config, m) ? `<br><span class="form-error">${e(issueFor(app.state.config, m))}</span>` : ""}</p>`).join("")}</details>` : ""}
     <div id="connection-result" class="connection-result ${d.probeError ? "error" : ""}" role="status">${e(d.probeMessage || "")}</div><div id="connection-error" class="form-error" role="alert"></div>
     <footer class="connection-footer"><button type="button" class="btn small" data-discard>放弃修改</button>${existing ? `<button type="button" class="btn small danger" data-delete>${icon("trash")}删除此配置</button>` : ""}</footer>
     </div></form>`;
@@ -221,6 +230,7 @@ function capture(form, d) {
   const data = new FormData(form);
   for (const name of [
     "name",
+    "providerName",
     "template",
     "base_url",
     "api_key",
@@ -232,6 +242,127 @@ function capture(form, d) {
   ])
     if (data.has(name)) d[name] = String(data.get(name));
   for (const name of ["enabled", "clear_key", "use"]) d[name] = data.has(name);
+}
+function renderConnectionModels(app, d) {
+  const models = visibleModels(app.state.config, d.type).filter(
+    (m) => m.provider === d.providerId,
+  );
+  return `<section class="connection-models"><div class="settings-section-title"><h3>已配置的模型 <span class="badge">${models.length}</span></h3><div class="row"><button type="button" class="btn small tonal" data-fetch-models ${d.protocol === "dashscope" ? 'disabled title="DashScope 原生接口不提供兼容模型列表，请自定义添加"' : ""}>${icon("download")}获取模型列表</button><button type="button" class="btn small" data-custom-model>${icon("plus")}自定义模型</button></div></div>${models.map((m) => `<button type="button" class="configured-model ${d.id === m.id ? "selected" : ""}" data-edit-model="${e(m.id)}"><span><strong>${e(m.name)}</strong><small>${e(m.model)}</small></span><span class="badge ${m.enabled ? "green" : ""}">${m.enabled ? "已启用" : "已停用"}</span>${app.state.config.bindings[d.type] === m.id ? '<span class="badge">当前使用</span>' : ""}<span class="btn small link">编辑 ${icon("sliders")}</span></button>`).join("") || '<p class="muted">填写下方连接后，获取模型列表并勾选添加，也可手动填写模型。</p>'}</section>`;
+}
+export function configWithModels(next, d, choices) {
+  if (d.isNew && !d.model.trim()) {
+    const { provider } = payloadFor(d);
+    provider.name = d.providerName || d.name;
+    next.revision = d.revision;
+    next.providers.push(provider);
+  } else next = configWithDraft(next, d);
+  for (const choice of choices) {
+    const model = String(choice.model || "").trim();
+    if (!model || model.length > 300)
+      throw Error("模型 ID 不能为空或超过 300 字符");
+    if (
+      next.models.some(
+        (m) =>
+          m.provider === d.providerId && m.type === d.type && m.model === model,
+      )
+    )
+      continue;
+    next.models.push({
+      id: uid("model"),
+      provider: d.providerId,
+      type: d.type,
+      model,
+      name: choice.name?.trim() || model,
+      enabled: true,
+      parameters: {},
+      dimensions: null,
+    });
+  }
+  return next;
+}
+async function addModels(app, d, choices) {
+  if (!choices.length) throw Error("请至少选择一个模型");
+  if (app.state.modelSaving) throw Error("配置正在保存，请稍后重试");
+  app.state.modelSaving = true;
+  try {
+    const next = configWithModels(app.configDraft(), d, choices);
+    const selected = next.models.find(
+      (m) =>
+        m.provider === d.providerId &&
+        m.type === d.type &&
+        m.model === choices[0].model,
+    );
+    await app.saveConfig(next);
+    app.state.modelDraft = null;
+    app.state.modelSelection = selected?.id;
+    app.render();
+  } finally {
+    app.state.modelSaving = false;
+  }
+}
+async function fetchModels(app, form, d) {
+  capture(form, d);
+  const version = d.version;
+  const button = form.querySelector("[data-fetch-models]");
+  button.disabled = true;
+  const errorBox = form.querySelector("#connection-error");
+  errorBox.textContent = "";
+  try {
+    const { provider } = payloadFor(d);
+    const { models } = await api("/api/model-config/models/draft", {
+      provider,
+    });
+    if (app.state.modelDraft !== d || d.version !== version) return;
+    const existing = new Set(
+      app.state.config.models
+        .filter((m) => m.provider === d.providerId && m.type === d.type)
+        .map((m) => m.model),
+    );
+    app.dialog(
+      `添加${d.type === "embedding" ? "嵌入" : "对话"}模型`,
+      `<p>从此连接返回的列表中选择模型，可一次添加多个。列表可能包含不同用途，请确认所选模型支持当前用途。</p><input id="model-list-search" type="search" aria-label="搜索模型" placeholder="搜索模型 ID"><div class="row model-picker-tools"><span>${models.length} 个模型</span><button type="button" class="btn small" id="model-select-visible">全选当前结果</button></div><div class="model-picker">${models.map((m) => `<label class="model-choice" data-model-name="${e(m.toLowerCase())}"><input type="checkbox" name="model" value="${e(m)}" ${existing.has(m) ? "disabled checked" : ""}><span>${e(m)}</span>${existing.has(m) ? "<small>已添加</small>" : ""}</label>`).join("") || '<p class="empty">服务未返回模型，可使用自定义模型添加。</p>'}</div>`,
+      async (data) =>
+        addModels(
+          app,
+          d,
+          data.getAll("model").map((model) => ({ model })),
+        ),
+      "添加选中模型",
+    );
+    document.querySelector("#model-list-search").oninput = (event) => {
+      const query = event.target.value.trim().toLowerCase();
+      document
+        .querySelectorAll("[data-model-name]")
+        .forEach(
+          (row) => (row.hidden = !row.dataset.modelName.includes(query)),
+        );
+    };
+    document.querySelector("#model-select-visible").onclick = () => {
+      document.querySelectorAll("[data-model-name]").forEach((row) => {
+        const checkbox = row.querySelector("input");
+        if (!row.hidden && !checkbox.disabled) checkbox.checked = true;
+      });
+    };
+  } catch (error) {
+    errorBox.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+function customModel(app, form, d) {
+  capture(form, d);
+  app.dialog(
+    "在此连接中添加模型",
+    `<label for="custom-model-id">模型 ID</label><input id="custom-model-id" name="model" required maxlength="300" placeholder="服务商提供的实际模型名称"><label for="custom-model-name">显示名称（可选）</label><input id="custom-model-name" name="name" maxlength="200"><p>使用当前连接的地址和密钥。添加后可在模型列表中编辑参数${d.type === "embedding" ? "并检测嵌入维度" : ""}。</p>`,
+    async (data) =>
+      addModels(app, d, [
+        {
+          model: String(data.get("model")).trim(),
+          name: String(data.get("name") || ""),
+        },
+      ]),
+    "添加模型",
+  );
 }
 function markDirty(app, form, d) {
   capture(form, d);
@@ -291,6 +422,21 @@ export function bindModels(app) {
   const form = root.querySelector("#connection-form");
   if (!form) return;
   const d = app.state.modelDraft;
+  root.querySelectorAll("[data-edit-model]").forEach(
+    (b) =>
+      (b.onclick = () =>
+        leaveDraft(app, () => {
+          app.state.modelDraft = null;
+          app.state.modelSelection = b.dataset.editModel;
+          app.render();
+        })),
+  );
+  root
+    .querySelector("[data-fetch-models]")
+    ?.addEventListener("click", () => fetchModels(app, form, d));
+  root
+    .querySelector("[data-custom-model]")
+    ?.addEventListener("click", () => customModel(app, form, d));
   form.oninput = () => markDirty(app, form, d);
   form.querySelector("[name=template]").onchange = () => {
     const t = templates.find((t) => t.id === form.elements.template.value);
@@ -393,7 +539,7 @@ export function configWithDraft(next, d) {
   const { provider, model } = payloadFor(d);
   next.revision = d.revision;
   const oldProvider = next.providers.find((p) => p.id === provider.id);
-  provider.name = oldProvider?.name || d.name;
+  provider.name = d.providerName || oldProvider?.name || d.name;
   // Activating one model must not activate siblings hidden by a disabled legacy connection.
   if (oldProvider?.enabled === false && provider.enabled)
     next.models = next.models.map((m) =>
@@ -480,6 +626,7 @@ function chooseTemplate(app) {
           providerId: uid("provider"),
           type,
           name: `${t.label.split(" · ")[0]} ${label}`,
+          providerName: t.label.split(" · ")[0],
           model: "",
           template: t.id,
           protocol: t.protocol,

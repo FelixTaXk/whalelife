@@ -9,5 +9,10 @@
     "erasableSyntaxOnly": true,
     "skipLibCheck": true
   },
-  "include": ["core/**/*.ts", "plugins/**/*.ts", "tests/**/*.ts"]
+  "include": [
+    "core/**/*.ts",
+    "plugins/**/*.ts",
+    "examples/**/*.ts",
+    "tests/**/*.ts"
+  ]
 }
