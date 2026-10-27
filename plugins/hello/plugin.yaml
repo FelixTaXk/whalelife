@@ -1,0 +1,5 @@
+id: hello
+name: 打招呼
+description: 演示工具与嵌套插件生命周期
+version: 0.1.0
+sub: [extra]

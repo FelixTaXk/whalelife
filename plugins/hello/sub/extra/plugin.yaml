@@ -1,0 +1,4 @@
+id: extra
+name: 子插件演示
+description: 验证父服务继承与独立启停
+version: 0.1.0
