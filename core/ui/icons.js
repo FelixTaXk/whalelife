@@ -1,4 +1,9 @@
 const paths = {
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff:
+    '<path d="m3 3 18 18M10 5.2C17 4 22 12 22 12a21 21 0 0 1-4 4M6.5 6.5A23 23 0 0 0 2 12s4 7 10 7a12 12 0 0 0 5-1.3M10 10a3 3 0 0 0 4 4"/>',
+  persona:
+    '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
   cube: '<path d="m12 3 9 5v8l-9 5-9-5V8zM3 8l9 5 9-5M12 13v8M7.5 5.5l9 5"/>',
   sliders:

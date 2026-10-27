@@ -495,3 +495,81 @@
     z-index: 2;
   }
 }
+
+.secret-input {
+  position: relative;
+}
+.secret-input > input {
+  width: 100%;
+  padding-right: 44px;
+}
+.secret-input > button {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.model-repair-summary {
+  margin-bottom: 15px;
+  color: #80642d;
+  font-size: 12px;
+}
+.model-repair-summary summary {
+  cursor: pointer;
+}
+.model-repair-summary p {
+  padding: 8px 0;
+}
+.persona-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 20px;
+}
+.persona-list {
+  padding: 12px;
+  align-self: start;
+}
+.persona-editor {
+  min-width: 0;
+}
+.persona-meta-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  padding: 20px 24px 0;
+}
+.persona-prompt-body {
+  padding: 20px 24px;
+}
+.persona-prompt-body textarea {
+  width: 100%;
+  min-height: 330px;
+  line-height: 1.8;
+  font:
+    14px/1.8 "Microsoft YaHei",
+    sans-serif;
+}
+.persona-editor small {
+  display: block;
+  margin-top: 5px;
+}
+.persona-save-row {
+  justify-content: space-between;
+  margin-top: 16px;
+}
+#persona-meta-error {
+  padding: 0 24px;
+}
+@media (max-width: 760px) {
+  .persona-layout,
+  .persona-meta-fields {
+    grid-template-columns: 1fr;
+  }
+  .persona-list {
+    display: flex;
+    overflow-x: auto;
+  }
+  .persona-list button {
+    min-width: 170px;
+  }
+}

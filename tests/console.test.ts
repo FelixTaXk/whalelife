@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 import { boot } from "../core/index.ts";
+import { persona } from "../core/persona.ts";
 
 test("console config API persists model selection, protects secrets and changes the next chat request", async () => {
   const requested: string[] = [];
@@ -86,6 +87,7 @@ test("console config API persists model selection, protects secrets and changes 
         body: JSON.stringify(data),
       });
     assert.equal((await fetch(url + "/api/model-config")).status, 401);
+    assert.equal((await fetch(url + "/api/persona?id=whale")).status, 401);
     assert.equal(
       (
         await fetch(url + "/api/model-config/probe", {
@@ -116,7 +118,7 @@ test("console config API persists model selection, protects secrets and changes 
         snapshot.personas.map((p: any) => [p.id, p.model]),
       ),
     });
-    const next = draft();
+    const next = { ...draft(), personaNames: { whale: "验收人格" } };
     next.models.push(
       {
         id: "second",
@@ -148,6 +150,25 @@ test("console config API persists model selection, protects secrets and changes 
     );
     assert.equal(persisted.providers[0].api_key, "private-fixture-secret");
     assert.deepEqual(persisted.custom, { keep: "unchanged" });
+    assert.equal(app.config.personas.whale.name, "验收人格");
+    const beforePersona = await (await get("/api/persona?id=whale")).json();
+    const editedPersona = {
+      ...beforePersona,
+      prompt: "# 验收人格\n使用简洁中文回答。",
+    };
+    const personaSaved = await post("/api/persona", editedPersona);
+    assert.equal(personaSaved.status, 200);
+    assert.equal(
+      (await persona(root, app.config, "whale")).prompt,
+      editedPersona.prompt,
+      "the next request reads the edited persona file",
+    );
+    assert.equal((await post("/api/persona", beforePersona)).status, 409);
+    assert.equal((await get("/api/persona?id=__proto__")).status, 400);
+    assert.equal(
+      (await post("/api/persona", { ...editedPersona, prompt: "" })).status,
+      400,
+    );
     const probe = await post("/api/model-config/test", { modelId: "vector" });
     assert.equal(probe.status, 200);
     assert.equal((await probe.json()).dimensions, 4);
@@ -245,6 +266,11 @@ test("console config API persists model selection, protects secrets and changes 
     app = await boot(root);
     assert.equal(app.config.model_bindings.chat, "second");
     assert.equal(app.config.model_bindings.embedding, "vector");
+    assert.equal(app.config.personas.whale.name, "验收人格");
+    assert.equal(
+      (await persona(root, app.config, "whale")).prompt,
+      editedPersona.prompt,
+    );
   } finally {
     await app?.close();
     await new Promise<void>((r) => provider.close(() => r()));

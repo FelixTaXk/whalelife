@@ -153,12 +153,14 @@ export function renderModels(app) {
   app.state.modelFilter = type;
   const label = types.find(([id]) => id === type)[1];
   const models = visibleModels(config, type);
-  const errors = config.models.filter((m) => issueFor(config, m));
+  const errors = config.models.filter(
+    (m) => m.type === type && issueFor(config, m),
+  );
   const supported = ["chat", "embedding"].includes(type);
   const draft = supported ? selectedDraft(app, models) : null;
   return `<div class="model-type-toolbar"><div class="tabs capability-tabs" role="tablist" aria-label="模型类型">${types.map(([id, name, ico]) => `<button type="button" class="tab ${type === id ? "active" : ""}" role="tab" aria-selected="${type === id}" data-filter="${id}">${icon(ico)}${name}${["chat", "embedding"].includes(id) ? `<span class="count">${visibleModels(config, id).length}</span>` : "<small>未接入</small>"}</button>`).join("")}</div><a href="#bindings" class="btn small" aria-label="模型使用设置">${icon("sliders")}使用设置</a></div>
-    ${errors.length ? `<div class="configuration-warning">${icon("info")}<span>${errors.length} 条旧配置的服务与模型类型不匹配，已移出可用列表。</span><button type="button" class="btn small link" data-issues>查看并修复</button></div>` : ""}
-    <div class="panel connection-workbench" style="--connection-offset:${errors.length ? "248px" : "182px"}"><aside class="connection-list" aria-label="${label}模型配置"><div class="connection-list-title"><h2>${label}模型配置</h2>${supported ? `<button type="button" class="btn small link" data-add>${icon("plus")}新增</button>` : ""}</div>
+    ${errors.length ? `<details class="model-repair-summary"><summary>${errors.length} 条配置待修复</summary><p>这些记录选用了不匹配的服务，暂不能使用。原记录仍保留。<button type="button" class="btn small link" data-issues>查看并修复</button></p></details>` : ""}
+    <div class="panel connection-workbench" style="--connection-offset:${errors.length ? "220px" : "182px"}"><aside class="connection-list" aria-label="${label}模型配置"><div class="connection-list-title"><h2>${label}模型配置</h2>${supported ? `<button type="button" class="btn small link" data-add>${icon("plus")}新增</button>` : ""}</div>
     ${draft?.isNew ? `<button type="button" class="connection-item active"><span class="connection-logo">${icon("plus")}</span><span><strong>${e(draft.name)}</strong><small>尚未保存</small></span></button>` : ""}
     ${models
       .map((m) => {
@@ -202,7 +204,7 @@ function renderEditor(app, d) {
     )}
     ${row("name", "配置名称", "由你命名，方便在列表和使用设置中识别。", input(d, "name", 'required maxlength="200" placeholder="例如：百炼向量"'))}
     ${row("enabled", "启用", "允许使用这条模型配置。", `<label class="setting-toggle"><input id="setting-enabled" name="enabled" type="checkbox" ${d.enabled ? "checked" : ""}><span>启用此配置</span></label>`)}
-    ${row("api_key", "API Key", d.has_key ? "已保存密钥。留空保留；更换地址或接口后需重新填写。" : "填写此服务的密钥。无需认证的本地服务可留空。", `${input(d, "api_key", 'type="password" autocomplete="new-password" placeholder="' + (d.has_key ? "留空保留已保存的 Key" : "填写 API Key") + '"')}${d.has_key ? `<label class="key-clear"><input name="clear_key" type="checkbox" ${d.clear_key ? "checked" : ""}>清除已保存的 Key</label>` : ""}`)}
+    ${row("api_key", "API Key", d.has_key ? "已保存密钥。留空保留；更换地址或接口后需重新填写。" : "填写此服务的密钥。无需认证的本地服务可留空。", `<div class="secret-input">${input(d, "api_key", 'type="password" autocomplete="new-password" placeholder="' + (d.has_key ? "留空保留已保存的 Key" : "填写 API Key") + '"')}<button type="button" class="icon-btn" data-toggle-key aria-label="显示 API Key" aria-pressed="false">${icon("eye")}</button></div>${d.has_key ? `<label class="key-clear"><input name="clear_key" type="checkbox" ${d.clear_key ? "checked" : ""}>清除已保存的 Key</label>` : ""}`)}
     ${row("base_url", "API Base URL", "API 根地址，包含服务要求的路径前缀。", input(d, "base_url", 'type="url" required placeholder="https://服务地址/v1"'))}
     ${row("model", embedding ? "嵌入模型" : "对话模型", `服务商提供的实际模型名称，与上方配置名称分开。${embedding ? "例如 text-embedding-v4。" : "请以服务文档中的名称为准。"}`, input(d, "model", `required maxlength="300" placeholder="${e(t?.example || (embedding ? "例如 text-embedding-3-small" : "填写实际模型名称"))}"`))}
     ${embedding ? row("dimensions", "嵌入维度", "记录模型实际返回的向量长度，用于检查结果是否一致。留空后点击自动检测。", `<div class="dimension-input">${input(d, "dimensions", 'type="number" min="1" max="65536" step="1" placeholder="尚未检测"')}<button type="button" class="btn tonal" data-detect>自动检测</button></div>`) : ""}
@@ -323,6 +325,20 @@ export function bindModels(app) {
       app.state.modelSaving = false;
     }
   };
+  form
+    .querySelector("[data-toggle-key]")
+    ?.addEventListener("click", (event) => {
+      const field = form.elements.api_key;
+      const visible = field.type === "password";
+      field.type = visible ? "text" : "password";
+      const button = event.currentTarget;
+      button.setAttribute(
+        "aria-label",
+        visible ? "隐藏 API Key" : "显示 API Key",
+      );
+      button.setAttribute("aria-pressed", String(visible));
+      button.innerHTML = icon(visible ? "eyeOff" : "eye");
+    });
   form.querySelector("[data-probe-draft]").onclick = () =>
     probe(app, form, d, false);
   form

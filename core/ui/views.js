@@ -114,7 +114,7 @@ export function renderBindings(app) {
       .join("");
   const field = (type, description) =>
     `<div class="binding-row"><div class="row">${icon(typeIcon(type))}<h3>${typeNames[type]}模型</h3></div><select name="binding_${type}" aria-label="${typeNames[type]}模型">${options(type, c.bindings[type])}</select><p>${description}</p></div>`;
-  return `<form id="bindings-form"><div class="page-heading"><div><div class="eyebrow">MODEL ROUTING</div><h1>使用配置</h1><p>明确选择每种能力使用的模型。未配置的用途保持关闭。</p></div><div class="heading-actions"><button type="submit" class="btn primary">${icon("check")}保存配置</button></div></div><div class="info-banner">${icon("info")}选择已启用的模型，保存后从下一次请求开始生效。</div><div class="bindings-grid"><section class="panel"><div class="panel-header"><h2>工作空间模型</h2><a href="#models" class="btn small link">管理模型 ${icon("arrow")}</a></div><div class="panel-body">${field("chat", "用于鲸鲸的日常对话和会话摘要。")}${field("embedding", "为后续记忆检索选择向量模型。当前支持配置与向量接口测试，检索接入将在后续开发。")}${field("rerank", "为后续检索结果排序预留，可暂时不配置。")}<details style="margin-top:20px"><summary class="muted">更多模型用途</summary><div style="margin-top:20px">${field("image", "图像生成服务的模型选择。")}${field("stt", "语音识别服务的模型选择。")}${field("tts", "语音合成服务的模型选择。")}<p class="hint" style="margin-top:16px">图像、语音与重排序目前仅保存选择，相应能力尚未接入。</p></div></details></div></section><section class="panel"><div class="panel-header"><h2>人格的模型选择</h2></div><div class="panel-body">${c.personas.map((p) => `<div class="binding-row"><div class="row"><span class="avatar">${e(p.name.slice(0, 1))}</span><h3>${e(p.name)}</h3><span class="badge">${e(p.id)}</span></div><select name="persona_${e(p.id)}" aria-label="${e(p.name)}使用的模型">${options("chat", p.model, true)}</select><p>可以使用工作空间模型，也可以为此人格单独选择。</p></div>`).join("")}<div class="hint" style="margin-top:25px">${icon("info")}<span>删除或停用已选中的模型前，需要先切换这里的选择。</span></div></div></section></div><p id="bindings-error" class="form-error" role="alert"></p></form>`;
+  return `<form id="bindings-form"><div class="page-heading"><div><div class="eyebrow">MODEL ROUTING</div><h1>使用配置</h1><p>明确选择每种能力使用的模型。未配置的用途保持关闭。</p></div><div class="heading-actions"><button type="submit" class="btn primary">${icon("check")}保存配置</button></div></div><div class="info-banner">${icon("info")}选择已启用的模型，保存后从下一次请求开始生效。</div><div class="bindings-grid"><section class="panel"><div class="panel-header"><h2>工作空间模型</h2><a href="#models" class="btn small link">管理模型 ${icon("arrow")}</a></div><div class="panel-body">${field("chat", "用于鲸鲸的日常对话和会话摘要。")}${field("embedding", "为后续记忆检索选择向量模型。当前支持配置与向量接口测试，检索接入将在后续开发。")}${field("rerank", "为后续检索结果排序预留，可暂时不配置。")}<details style="margin-top:20px"><summary class="muted">更多模型用途</summary><div style="margin-top:20px">${field("image", "图像生成服务的模型选择。")}${field("stt", "语音识别服务的模型选择。")}${field("tts", "语音合成服务的模型选择。")}<p class="hint" style="margin-top:16px">图像、语音与重排序目前仅保存选择，相应能力尚未接入。</p></div></details></div></section><section class="panel"><div class="panel-header"><h2>人格配置</h2></div><div class="panel-body"><p>人格名称、专用模型和人格内容已集中到人格配置页。</p><a href="#personas" class="btn tonal" style="margin-top:18px">编辑人格 ${icon("arrow")}</a></div></section></div><p id="bindings-error" class="form-error" role="alert"></p></form>`;
 }
 export function bindBindings(app) {
   const form = document.querySelector("#bindings-form");
@@ -126,8 +126,6 @@ export function bindBindings(app) {
     const data = new FormData(form);
     for (const key of ["chat", "embedding", "rerank", "image", "stt", "tts"])
       next.bindings[key] = data.get("binding_" + key) || null;
-    for (const p of app.state.config.personas)
-      next.personaModels[p.id] = data.get("persona_" + p.id) || null;
     try {
       await app.saveConfig(next);
     } catch (error) {
@@ -139,31 +137,10 @@ export function bindBindings(app) {
 }
 
 export function renderPlugins(app) {
-  const filter = app.state.pluginFilter || "all";
-  const plugins = app.state.status.plugins.filter(
-    (p) => filter === "all" || (filter === "builtin") === p.builtin,
-  );
-  return `<div class="page-heading"><div><div class="eyebrow">CAPABILITIES</div><h1>插件管理</h1><p>查看核心服务与扩展插件，按需启停和重载。</p></div><div class="heading-actions"><span class="badge">${app.state.status.plugins.length} 个插件</span></div></div><div class="tabs">${[
-    ["all", "全部"],
-    ["external", "扩展插件"],
-    ["builtin", "核心服务"],
-  ]
-    .map(
-      ([id, label]) =>
-        `<button class="tab ${filter === id ? "active" : ""}" data-plugin-filter="${id}">${label}</button>`,
-    )
-    .join(
-      "",
-    )}</div><div class="plugin-grid">${plugins.map((p) => `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon(p.builtin ? "cube" : "puzzle")}<h3>${e(names[p.id] || p.name || p.id)}</h3><div class="spacer"></div><span class="badge ${p.status === "active" ? "green" : p.status === "failed" ? "red" : ""}">${statusName(p.status)}</span></div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "提供核心能力")}</p><footer>${p.builtin ? '<span class="badge">内置服务</span><small class="spacer"></small><small>随核心启动</small>' : `<button class="btn small" data-plugin-id="${e(p.id)}" data-plugin-action="${p.status === "active" ? "stop" : "start"}">${p.status === "active" ? "停用" : "启用"}</button><button class="btn small tonal" data-plugin-id="${e(p.id)}" data-plugin-action="reload">${icon("refresh")}重载</button>${p.id.includes("/") ? '<small style="margin-left:auto">子插件</small>' : ""}`}</footer></article>`).join("")}</div>`;
+  const plugins = app.state.status.plugins.filter((p) => !p.builtin);
+  return `<div class="page-heading"><div><h1>插件管理</h1><p>管理扩展插件，按需启停和重载。</p></div><span class="badge">${plugins.length} 个扩展插件</span></div><div class="plugin-grid">${plugins.map((p) => `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon("puzzle")}<h3>${e(p.name || p.id)}</h3><div class="spacer"></div><span class="badge ${p.status === "active" ? "green" : p.status === "failed" ? "red" : ""}">${statusName(p.status)}</span></div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "扩展插件")}</p><footer><button class="btn small" data-plugin-id="${e(p.id)}" data-plugin-action="${p.status === "active" ? "stop" : "start"}">${p.status === "active" ? "停用" : "启用"}</button><button class="btn small tonal" data-plugin-id="${e(p.id)}" data-plugin-action="reload">${icon("refresh")}重载</button>${p.id.includes("/") ? '<small style="margin-left:auto">子插件</small>' : ""}</footer></article>`).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
 }
 export function bindPlugins(app) {
-  document.querySelectorAll("[data-plugin-filter]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        app.state.pluginFilter = b.dataset.pluginFilter;
-        app.render();
-      }),
-  );
   document.querySelectorAll("[data-plugin-action]").forEach(
     (b) =>
       (b.onclick = async () => {

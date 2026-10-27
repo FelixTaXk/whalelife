@@ -25,6 +25,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
     "icons.js",
     "models.js",
     "views.js",
+    "personas.js",
   ]);
   const allowedOrigin = (req: any) =>
     !req.headers.origin ||
@@ -109,6 +110,12 @@ export async function startWeb(config: any, services: any, runtime: any) {
         return send(200, { ok: true });
       }
       if (!authorized(req)) return send(401, { error: "请先登录" });
+      if (req.method === "GET" && req.url?.startsWith("/api/persona?")) {
+        const id = new URL(req.url, origin).searchParams.get("id");
+        return send(200, await services.personaFiles.get(id));
+      }
+      if (req.method === "POST" && req.url === "/api/persona")
+        return send(200, await services.personaFiles.save(await body(req)));
       if (req.url === "/api/model-config" && req.method === "GET")
         return send(200, services.modelConfig.snapshot());
       if (req.url === "/api/model-config" && req.method === "POST") {

@@ -10,6 +10,7 @@ import { Runtime } from "./runtime.ts";
 import { Sessions } from "./session.ts";
 import { startWeb } from "./web.ts";
 import { ModelConfig, resolveModel } from "./model-config.ts";
+import { PersonaFiles } from "./persona-config.ts";
 export async function boot(
   root = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
 ) {
@@ -57,6 +58,7 @@ export async function boot(
     tools,
     approval,
     modelConfig,
+    personaFiles: new PersonaFiles(root, config, logger),
     channels: {
       register() {
         throw Error("M0 仅提供 Web 渠道");

@@ -1,6 +1,7 @@
 import { api, escapeHTML as e, uid } from "./api.js";
 import { icon, whale } from "./icons.js";
 import { renderModels, bindModels } from "./models.js";
+import { renderPersonas, bindPersonas } from "./personas.js";
 import {
   renderOverview,
   renderBindings,
@@ -14,6 +15,7 @@ import {
 } from "./views.js";
 
 const pages = {
+  personas: { name: "人格配置", render: renderPersonas, bind: bindPersonas },
   overview: { name: "概览", render: renderOverview },
   models: { name: "模型服务", render: renderModels, bind: bindModels },
   bindings: { name: "使用配置", render: renderBindings, bind: bindBindings },

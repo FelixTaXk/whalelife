@@ -416,8 +416,10 @@ export class ModelConfig {
     this.config.models = this.source.models;
     this.config.model_bindings = this.source.bindings;
     for (const [name, persona] of Object.entries<any>(this.source.personas))
-      if (this.config.personas?.[name])
+      if (this.config.personas?.[name]) {
         this.config.personas[name].model = persona.model ?? null;
+        this.config.personas[name].name = persona.name;
+      }
   }
   snapshot() {
     const raw = readFileSync(this.file, "utf8");
@@ -560,6 +562,8 @@ export class ModelConfig {
       if (!Object.hasOwn(input.personaModels, name))
         throw new ModelConfigError("缺少人格模型绑定");
       p.model = validateBinding(input.personaModels[name], "chat");
+      if (input.personaNames && Object.hasOwn(input.personaNames, name))
+        p.name = text(input.personaNames[name], "人格名称", 100);
     }
     this.protectKeys(providers);
     const next = {

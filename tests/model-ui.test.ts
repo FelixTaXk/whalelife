@@ -186,7 +186,7 @@ test("invalid old embedding records stay stored but never become selectable conn
     visibleModels(config, "embedding").map((m: any) => m.id),
     ["shared-embedding", "text-embedding-v4"],
   );
-  assert.match(html, /3 条旧配置/);
+  assert.match(html, /3 条配置待修复/);
   assert.match(html, /data-issues/);
   for (const id of [
     "bad-deepseek-embedding",
