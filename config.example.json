@@ -1,0 +1,29 @@
+{
+  "web": { "host": "127.0.0.1", "port": 9270 },
+  "log": { "level": "info", "keep_days": 14, "max_web_lines": 1000 },
+  "providers": [
+    {
+      "id": "deepseek",
+      "base_url": "https://api.deepseek.com",
+      "api_key": "填你的 key",
+      "model": "deepseek-chat"
+    }
+  ],
+  "personas": {
+    "whale": {
+      "name": "鲸鲸",
+      "file": "memory/personas/whale.md",
+      "provider": "deepseek",
+      "permission": "ask"
+    }
+  },
+  "channels": {
+    "web": { "persona": "whale", "permission": "full" }
+  },
+  "memory": {
+    "root": "D:/whalelife/memory",
+    "recent_lines": 30,
+    "budget_tokens": 6000,
+    "facts_max_lines": 100
+  }
+}
