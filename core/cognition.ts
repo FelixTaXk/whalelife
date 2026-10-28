@@ -85,6 +85,7 @@ export function applyCognitions(
       ts, status: "active", pinned: previous.some((x) => x.pinned),
       evidence: [...new Set(input.evidence)], persona_revision: input.persona_revision || null,
       uncertain: input.uncertain ?? true,
+      ...(checkpoint.mode === "long" ? { format_version: 2 } : {}),
       ...(previous.length ? { supersedes: previous.map((x) => x.id), change_reason: input.reason } : {}),
     };
     records.push(item);

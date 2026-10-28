@@ -373,7 +373,8 @@ test("daily consolidation reservations persist across restart, cannot overspend 
     restarted.reserveConsolidation("one", 30),
     restarted.reserveConsolidation("one", 30),
   ]);
-  assert.deepEqual(results, [true, false]);
+  // Either concurrent caller may reserve first; exactly one must succeed.
+  assert.deepEqual([...results].sort(), [false, true]);
   assert.equal(await restarted.reserveConsolidation("one", 1), false);
   const current = await restarted.state("one");
   assert.equal(current.daily.reserved, 100);

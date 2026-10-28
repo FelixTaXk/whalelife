@@ -98,6 +98,8 @@ export function validateMemoryState(s: any) {
   const byId = new Map(s.records.map((x: any) => [x.id, x]));
   if (byId.size !== s.records.length) throw Error("记忆ID重复");
   for (const record of s.records) {
+    if (record.kind === "cognition" && record.format_version === 2 && charCount(record.text) > 80)
+      throw Error("新版长期认知每条不能超过80字符");
     if (record.uncertain !== undefined && typeof record.uncertain !== "boolean")
       throw Error("认知不确定性标记损坏");
     if (record.supersedes !== undefined && (!Array.isArray(record.supersedes) ||
@@ -125,6 +127,10 @@ export function validateMemoryState(s: any) {
         (typeof value.text !== "string" || charCount(value.text) > 500))
     )
       throw Error("摘要游标损坏");
+    if (value.mode !== undefined && (!["short", "long"].includes(value.mode) ||
+        (value.text !== undefined && charCount(value.text) > 200) ||
+        (value.mode === "short" && typeof value.start_id !== "string")))
+      throw Error("短期摘要与长期概要各最多200字符，且需有正确范围");
   }
   for (const bucket of [s.usage?.chat, s.usage?.memory])
     if (
@@ -258,6 +264,7 @@ export class MemoryEngine {
         s.settings,
         s.memberships,
         s.records.map((x) => [x.id, x.status, x.pinned, x.text, x.uncertain]),
+        Object.entries(s.summaries).map(([key, x]) => [key, x.text, x.mode]),
         await this.memory.readFacts(),
       ]),
     );
@@ -749,6 +756,10 @@ export class MemoryEngine {
     maintenance?: CognitionMaintenance,
   ) {
     safeId(key);
+    if (value.mode === "short" && (cognitions.length || maintenance?.reviews?.length))
+      throw Error("短期压缩不能产生或修订长期认知");
+    if (value.mode === "long" && cognitions.some((x) => typeof x?.text !== "string" || charCount(x.text) > 80))
+      throw Error("长期认知每条不能超过80字符");
     const known = new Set(
       (await this.memory.readSession(id)).map((x: any) => x.id),
     );
@@ -768,7 +779,9 @@ export class MemoryEngine {
     await this.update(id, (s) => {
       const existing = s.summaries[key];
       if (value.last_id && existing?.last_id === value.last_id &&
-          existing.last_offset === value.last_offset && existing.text === value.text) return;
+          existing.last_offset === value.last_offset && existing.text === value.text &&
+          existing.mode === value.mode && existing.start_id === value.start_id &&
+          existing.covered === value.covered) return;
       applyCognitions(s.records, key, value, cognitions, known, maintenance);
       s.summaries = { ...s.summaries, [key]: value };
     });

@@ -14,7 +14,7 @@ const tabs = [
   ["knowledge", "记忆检索"],
   ["spaces", "共享空间"],
   ["sessions", "会话档案"],
-  ["summaries", "滚动摘要"],
+  ["summaries", "摘要与概览"],
   ["backups", "备份与恢复"],
 ];
 
@@ -96,7 +96,7 @@ export function renderMemory(app) {
         ? `<div class="stats-grid">${[
             ["共享事实", c.facts.count, "跨会话共享"],
             ["会话档案", c.sessions.count, bytes(c.sessions.bytes)],
-            ["滚动摘要", c.summaries.count, bytes(c.summaries.bytes)],
+            ["摘要与概览", c.summaries.count, bytes(c.summaries.bytes)],
             [
               "当前上下文占用",
               s.sessionContext?.usage?.percent == null
@@ -155,7 +155,7 @@ function renderTab(app, tab) {
     return `<form id="memory-search-form" class="row"><input name="search" type="search" aria-label="搜索会话" placeholder="搜索名称、会话 ID 或内容" value="${e(s.memorySearch || "")}"><button class="btn" type="submit">搜索</button></form><div class="memory-table">${list.items.map((item) => `<div class="memory-item"><div><strong>${e(item.name || item.id)} ${item.id === s.session ? '<span class="badge green">当前会话</span>' : ""}</strong><small>${item.name ? e(item.id) + " · " : ""}${time(item.updated_at)} · ${bytes(item.bytes)}</small><small title="${e(item.last_persona?.id || "")}">最后使用人格：${e(item.last_persona?.name || "未记录")}</small></div><div class="row session-actions"><button class="btn small" data-session="${e(item.id)}">查看</button><button class="btn small tonal" data-session-use="${e(item.id)}" ${s.chatBusy ? "disabled" : ""}>设为当前会话</button><button class="btn small" data-session-rename="${e(item.id)}">改名</button><button class="btn small danger" data-session-delete="${e(item.id)}">删除</button></div></div>`).join("") || '<p class="empty">暂无匹配的会话。</p>'}</div><div class="row memory-actions"><small>共 ${list.total} 个匹配会话</small><div class="spacer"></div><button class="btn small" data-memory-prev ${list.offset === 0 ? "disabled" : ""}>上一页</button><button class="btn small" data-memory-next ${list.offset + list.limit >= list.total ? "disabled" : ""}>下一页</button></div>`;
   }
   if (tab === "summaries")
-    return `<h2>滚动摘要</h2><p class="muted">对话达到阈值后自动生成；默认同一会话跨人格共用，按人格隔离时另行保存。</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${time(item.updated_at)} · ${bytes(item.bytes)}</small></div><button class="btn small" data-summary="${e(item.id)}">查看摘要</button></div>`).join("") || '<p class="empty">尚未生成摘要，短会话不会产生滚动摘要。</p>'}</div>`;
+    return `<h2>短期摘要与长期概览</h2><p class="muted">短期摘要仅在历史预算不足时压缩上下文；长期概览随过期且超出保底范围的消息整理，认知单独保存在记忆检索中。新生成的摘要或概览各最多 200 字符，旧摘要保留至下次生成。默认同一会话跨人格共用，按人格隔离时另行保存。</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${item.id.startsWith("s_") ? "短期摘要" : "长期概览"} · ${time(item.updated_at)} · ${bytes(item.bytes)}</small></div><button class="btn small" data-summary="${e(item.id)}">查看内容</button></div>`).join("") || '<p class="empty">尚未生成摘要或概览；仅在满足压缩或长期整理条件时生成。</p>'}</div>`;
   return `<h2>本机备份</h2><p class="muted">完整保存记忆目录，包含目录内的人格文件。恢复前自动备份当前数据；不覆盖模型配置和密钥。</p><p class="memory-location">备份位置：${e(data.directory)}</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${time(item.created_at)} · ${item.files || 0} 个文件 · ${bytes(item.bytes || 0)} · ${item.kind === "before-restore" ? "恢复前自动备份" : "手动备份"}</small>${item.error ? `<p class="form-error">${e(item.error)}</p>` : ""}</div><button class="btn small" data-restore="${e(item.id)}" ${!item.valid || s.chatBusy || s.memoryCatalog.busy ? "disabled" : ""}>恢复此备份</button></div>`).join("") || '<p class="empty">暂无备份，点击右上方“创建备份”。</p>'}</div>`;
 }
 function joinedSpaces(data) {
@@ -211,7 +211,7 @@ function renderKnowledge(s, data) {
       })
       .join("") ||
     '<p class="empty">暂无匹配记忆。可以调整关键词；没有相关内容时不会强行带入。</p>'
-  }</div>${data.trace ? `<details class="memory-recall-trace"><summary>最近召回记录</summary><p class="muted">查询：${e(data.trace.query || "（无）")} · 选中 ${data.trace.selected?.length || 0} 条 · 估算 ${Number(data.trace.estimated_tokens || 0).toLocaleString()} tokens</p></details>` : ""}<details class="memory-settings"><summary>筛选、淡忘与用量</summary><form id="memory-settings-form"><div class="context-fields"><label>普通经历半衰期（天）<input type="number" name="half_life_days" required min="1" max="3650" value="${e(settings.half_life_days ?? 30)}"></label><label>自动召回预算（估算 token）<input type="number" name="recall_tokens" required min="0" max="4000" value="${e(settings.recall_tokens ?? 800)}"></label><label>每日记忆整理预算（估算 token）<input type="number" name="daily_memory_tokens" required min="0" max="200000" step="1" value="${e(settings.daily_memory_tokens ?? 20000)}"><small>0 停止自动摘要和认知提炼；检索与已有摘要仍可使用。</small></label></div><div class="row memory-actions"><label><input type="checkbox" name="enabled" ${settings.enabled !== false ? "checked" : ""}>启用自动记忆召回</label><div class="spacer"></div><button class="btn primary small" type="submit">保存记忆设置</button></div></form><div class="memory-usage"><p>聊天累计：${e(usageText(usage.chat))}</p><p>记忆整理累计：${e(usageText(usage.memory))}</p><small class="muted">累计从启用新版记忆系统后开始，按服务返回用量统计；与上方单次上下文占用分开，未报告用量的请求无法计入准确 token。</small></div></details>`;
+  }</div>${data.trace ? `<details class="memory-recall-trace"><summary>最近召回记录</summary><p class="muted">查询：${e(data.trace.query || "（无）")} · 选中 ${data.trace.selected?.length || 0} 条 · 估算 ${Number(data.trace.estimated_tokens || 0).toLocaleString()} tokens</p></details>` : ""}<details class="memory-settings"><summary>筛选、淡忘与用量</summary><form id="memory-settings-form"><div class="context-fields"><label>普通经历半衰期（天）<input type="number" name="half_life_days" required min="1" max="3650" value="${e(settings.half_life_days ?? 30)}"></label><label>自动召回预算（估算 token）<input type="number" name="recall_tokens" required min="0" max="4000" value="${e(settings.recall_tokens ?? 800)}"></label><label>每日记忆整理预算（估算 token）<input type="number" name="daily_memory_tokens" required min="0" max="200000" step="1" value="${e(settings.daily_memory_tokens ?? 20000)}"><small>0 停止自动摘要和认知提炼（含短期压缩与长期整理）；检索与已有摘要仍可使用。</small></label></div><div class="row memory-actions"><label><input type="checkbox" name="enabled" ${settings.enabled !== false ? "checked" : ""}>启用自动记忆召回</label><div class="spacer"></div><button class="btn primary small" type="submit">保存记忆设置</button></div></form><div class="memory-usage"><p>聊天累计：${e(usageText(usage.chat))}</p><p>记忆整理累计（短期 + 长期）：${e(usageText(usage.memory))}</p><small class="muted">累计从启用新版记忆系统后开始，按服务返回用量统计；与上方单次上下文占用分开，未报告用量的请求无法计入准确 token。</small></div></details>`;
 }
 function renderSpaces(s, data) {
   const joined = new Set(joinedSpaces(data).map((space) => space.id));

@@ -140,10 +140,11 @@ test("chat tools edit only local facts, next request receives them, and context 
 
 test("incremental consolidation catches up after restart without gaps, duplicates, or mixing token meters", async (t) => {
   const f = await fixture(t);
-  f.config.memory.recent_lines = 4;
+  f.config.memory.short_term_min_messages = 4;
   const p = await persona(f.root, f.config, "a");
   for (let i = 0; i < 40; i++) {
     await f.memory.appendEvent({
+      ts: new Date(Date.now() - 30 * 86400000).toISOString(),
       session: "one",
       type: "message",
       role: i % 2 ? "assistant" : "user",
@@ -158,9 +159,9 @@ test("incremental consolidation catches up after restart without gaps, duplicate
   let reservedEstimate = 0;
   f.services.llm.chat = async (request: any) => {
     if (request.messages[0].content.includes("只返回JSON")) {
-      assert.equal(request.max_tokens, 1500);
+      assert.equal(request.max_tokens, 1000);
       reservedEstimate +=
-        estimateTokens(JSON.stringify(request.messages)) + 1500;
+        estimateTokens(JSON.stringify(request.messages)) + 1000;
       const input = JSON.parse(request.messages[1].content);
       batches.push(input.episodes);
       return {
@@ -227,9 +228,10 @@ test("incremental consolidation catches up after restart without gaps, duplicate
 
 test("chat revises cognition inside the existing summary call and accounts for its full input", async (t) => {
   const f = await fixture(t);
-  f.config.memory.recent_lines = 2;
+  f.config.memory.short_term_min_messages = 2;
   const p = await persona(f.root, f.config, "a");
   for (let i = 0; i < 12; i++) await f.memory.appendEvent({
+      ts: new Date(Date.now() - 30 * 86400000).toISOString(),
     session: "one", type: "message", role: "user",
     text: i === 0 ? "我目前居住南京" : "我已经搬到北京，当前居住北京，记录" + i,
     persona_revision: p.revision,
@@ -271,10 +273,11 @@ test("chat revises cognition inside the existing summary call and accounts for i
 
 test("failed consolidation retains its cursor and retries the same uncovered source after backoff", async (t) => {
   const f = await fixture(t);
-  f.config.memory.recent_lines = 2;
+  f.config.memory.short_term_min_messages = 2;
   const p = await persona(f.root, f.config, "a");
   for (let i = 0; i < 12; i++)
     await f.memory.appendEvent({
+      ts: new Date(Date.now() - 30 * 86400000).toISOString(),
       session: "one",
       type: "message",
       role: "user",
@@ -332,7 +335,7 @@ test("failed consolidation retains its cursor and retries the same uncovered sou
 
 test("a zero consolidation budget keeps chat and recall working without extra model calls", async (t) => {
   const f = await fixture(t);
-  f.config.memory.recent_lines = 2;
+  f.config.memory.short_term_min_messages = 2;
   const settings = (await f.memoryEngine.state("one")).settings;
   await f.memoryEngine.settings(
     "one",
@@ -342,6 +345,7 @@ test("a zero consolidation budget keeps chat and recall working without extra mo
   const p = await persona(f.root, f.config, "a");
   for (let i = 0; i < 12; i++)
     await f.memory.appendEvent({
+      ts: new Date(Date.now() - 30 * 86400000).toISOString(),
       session: "one",
       type: "message",
       role: "user",
@@ -380,12 +384,13 @@ test("a zero consolidation budget keeps chat and recall working without extra mo
 
 test("long episodes remain searchable at the tail and consolidate fully across a restart using character offsets", async (t) => {
   const f = await fixture(t);
-  f.config.memory.recent_lines = 2;
+  f.config.memory.short_term_min_messages = 2;
   const p = await persona(f.root, f.config, "a");
   const original =
     "🐋日常记录。".repeat(550) + "尾部唯一关键词：NebulaTail9270";
   assert.ok(Array.from(original).length > 3000);
   await f.memory.appendEvent({
+      ts: new Date(Date.now() - 30 * 86400000).toISOString(),
     session: "one",
     type: "message",
     role: "user",
@@ -395,6 +400,7 @@ test("long episodes remain searchable at the tail and consolidate fully across a
   const longId = (await f.memory.readSession("one"))[0].id;
   for (let i = 0; i < 11; i++)
     await f.memory.appendEvent({
+      ts: new Date(Date.now() - 30 * 86400000).toISOString(),
       session: "one",
       type: "message",
       role: "user",

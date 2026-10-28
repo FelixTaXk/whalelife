@@ -94,7 +94,7 @@ test("context usage reports the latest provider request, caches model limits and
   assert.equal(f.modelReads(), 1);
   const restarted = new Sessions(f.root, f.config, f.services);
   assert.equal((await restarted.contextStatus("one")).usage.percent, 10);
-  const policy = { ...initial.policy, recent_lines: 0 };
+  const policy = { ...initial.policy, history_enabled: false };
   await f.sessions.updateContext("one", policy);
   assert.equal(
     (await f.sessions.contextStatus("one")).usage.settings_changed,
@@ -149,7 +149,7 @@ test("per-session settings control actual history, facts and summary sent to the
   await f.memory.saveSessionMeta("one", { name: "保留名字" });
   const policy = {
     ...contextPolicy(f.config.memory),
-    recent_lines: 0,
+    history_enabled: false,
     include_facts: false,
     include_summary: false,
   };
@@ -160,14 +160,14 @@ test("per-session settings control actual history, facts and summary sent to the
   assert.equal((await f.memory.sessionMeta("one")).name, "保留名字");
   await f.sessions.updateContext("one", {
     ...policy,
-    recent_lines: 30,
+    history_enabled: true,
     history_scope: "session",
   });
   await f.sessions.chat("one", "继续历史", () => {});
   assert.ok(JSON.stringify(f.requests[2]).includes("旧人格的历史"));
   assert.equal(
-    (await f.sessions.contextStatus("unrelated")).policy.recent_lines,
-    30,
+    (await f.sessions.contextStatus("unrelated")).policy.short_term_min_messages,
+    100,
   );
   assert.equal(
     (await f.sessions.contextStatus("unrelated")).policy.include_facts,

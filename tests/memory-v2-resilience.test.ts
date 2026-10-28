@@ -51,7 +51,7 @@ async function fixture(t: TestContext) {
       test: { file: "persona.md", name: "测试助手", provider: "demo" },
     },
     channels: { web: { persona: "test", permission: "off" } },
-    memory: { recent_lines: 10, budget_tokens: 6000 },
+    memory: { short_term_min_messages: 10, budget_tokens: 6000 },
   };
   const engine = new MemoryEngine(memory),
     extractions: any[] = [];
@@ -67,7 +67,7 @@ async function fixture(t: TestContext) {
     },
     llm: {
       chat: async (request: any) => {
-        if (request.max_tokens === 1500) {
+        if (request.max_tokens === 1000) {
           const input = JSON.parse(request.messages[1].content);
           extractions.push(input);
           return {
@@ -95,7 +95,7 @@ async function fixture(t: TestContext) {
   const sessions = new Sessions(root, config, services),
     p = await persona(root, config, "test");
   const policy = {
-    recent_lines: 10,
+    short_term_min_messages: 10,
     budget_tokens: 6000,
     include_facts: true,
     include_summary: true,
@@ -108,6 +108,7 @@ async function fixture(t: TestContext) {
   const seed = async (count: number) => {
     for (let i = 0; i < count; i++)
       await memory.appendEvent({
+        ts: new Date(Date.now() - 30 * 86400000).toISOString(),
         session: "chat",
         type: "message",
         role: i % 2 ? "assistant" : "user",
@@ -131,7 +132,7 @@ async function fixture(t: TestContext) {
   };
 }
 
-test("increasing recent_lines does not rewind a committed summary cursor into already covered history", async (t) => {
+test("increasing short-term minimum retention does not rewind a committed summary cursor into already covered history", async (t) => {
   const f = await fixture(t),
     seeded = await f.seed(46);
   await f.sessions.chat("chat", "第一轮", () => {});
@@ -140,7 +141,7 @@ test("increasing recent_lines does not rewind a committed summary cursor into al
   assert.equal(checkpoint.last_id, seeded[19].id);
   assert.equal(checkpoint.last_offset, 0);
   await f.memory.saveSessionMeta("chat", {
-    context: { ...f.policy, recent_lines: 40 },
+    context: { ...f.policy, short_term_min_messages: 40 },
   });
   await f.sessions.chat("chat", "增加近期消息窗口", () => {});
   assert.equal(
