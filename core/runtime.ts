@@ -119,10 +119,19 @@ export class Runtime {
     const complete = new Promise<void>((r) => (finish = r));
     record.fork = (parent?.cordis ?? this.bus).plugin(async (native: any) => {
       record.cordis = native;
+      let pluginMemory: any;
       const get = (name: string, strict = true) => {
         const value = lookup(name);
         if (value === undefined && strict) throw Error("依赖缺失：" + name);
         if (value !== undefined) record.dependencies.add(name);
+        if (name === "memory" && !manifest.builtin && value?.engine) {
+          pluginMemory ??= value.engine.plugin(id, (dispose: any) =>
+            native.effect(() => dispose),
+          );
+          return pluginMemory;
+        }
+        if (name === "facts" && !manifest.builtin)
+          throw Error("事实管理服务仅供核心使用；插件使用memory接口");
         return value;
       };
       const config: any = (file = manifest.config ?? "config.json") => {
@@ -242,7 +251,7 @@ export class Runtime {
             if (name !== "tools") return service;
             return {
               register: (tool: any) => {
-                const dispose = service.register(tool);
+                const dispose = service.register({ ...tool, owner: id });
                 native.effect(() => dispose);
                 return dispose;
               },

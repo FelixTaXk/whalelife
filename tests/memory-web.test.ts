@@ -138,6 +138,8 @@ test("memory page renders untrusted facts and session identifiers as text", asyn
   );
   const marker = '<img src=x onerror="alert(1)">';
   const state: any = {
+    session: "test",
+    memoryLoadedSession: "test",
     memoryTab: "facts",
     memoryLoadedTab: "facts",
     memoryFactsDraft: marker,

@@ -1,9 +1,11 @@
 import { decision } from "./permission.ts";
 import type { Logger } from "./logger.ts";
+import { randomUUID } from "node:crypto";
 export class Tools {
   entries = new Map<string, any>();
   logger: Logger;
   overrides: any;
+  observe?: (event: any) => Promise<void>;
   constructor(logger: Logger, overrides: any = {}) {
     this.logger = logger;
     this.overrides = { remember_fact: "full", ...overrides };
@@ -32,8 +34,23 @@ export class Tools {
       },
     }));
   }
-  async call(name: string, args: any, session: any) {
+  async call(name: string, args: any, session: any, callId = randomUUID()) {
     const tool = this.entries.get(name);
+    const report = async (ok: boolean, result: any) => {
+      try {
+        await this.observe?.({
+          id: callId,
+          name,
+          source: tool?.owner || "core",
+          session,
+          ok,
+          result,
+        });
+      } catch (error) {
+        this.logger.warn("工具经历记录失败", { name, error });
+      }
+      return { ok, result };
+    };
     try {
       if (!tool) throw Error("工具不存在");
       const verdict = decision(
@@ -53,10 +70,10 @@ export class Tools {
             : "工具已关闭",
         );
       const result = await tool.run(args, session);
-      return { ok: true, result };
+      return report(true, result);
     } catch (error: any) {
       this.logger.error("工具调用失败", { name, error });
-      return { ok: false, result: error.message };
+      return report(false, error.message);
     }
   }
 }

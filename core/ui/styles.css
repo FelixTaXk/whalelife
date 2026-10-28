@@ -1205,3 +1205,57 @@ dialog::backdrop {
     grid-template-columns: 1fr;
   }
 }
+/* Memory records stay compact; long evidence is expanded only on request. */
+.memory-knowledge-search {
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+.memory-knowledge-search > input {
+  flex: 1;
+  min-width: 180px;
+}
+.memory-knowledge-search > label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.memory-knowledge-item {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border, #e6e7ef);
+}
+.memory-knowledge-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 10px 0;
+}
+.memory-recall-reason,
+.memory-usage {
+  font-size: 13px;
+  color: var(--muted, #7f8497);
+}
+.memory-record-actions {
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.memory-settings,
+.memory-recall-trace,
+.memory-local-history {
+  margin-top: 18px;
+}
+.memory-settings > summary,
+.memory-recall-trace > summary,
+.memory-local-history > summary {
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+.memory-local-history .row {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.memory-local-history select {
+  flex: 1;
+  min-width: 180px;
+}

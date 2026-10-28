@@ -61,7 +61,7 @@ test("catalog and record views count, search, paginate, and tolerate a truncated
     text: "answer",
   });
   await f.memory.appendEvent({ session: "beta", role: "user", text: "other" });
-  await appendFile(join(f.memory.root, "sessions/alpha.jsonl"), '{"partial":');
+  await appendFile((await f.memory.episodePaths("alpha"))[0], '{"partial":');
   await f.memory.writeSummary("alpha", "# 摘要\n会话内容\n");
   await f.memory.writeSummary("reset-placeholder", "");
 
@@ -71,7 +71,7 @@ test("catalog and record views count, search, paginate, and tolerate a truncated
   assert.equal(catalog.sessions.total, 2);
   assert.equal(catalog.sessions.items.length, 1);
   assert.equal(catalog.summaries.count, 1);
-  assert.equal(catalog.files, 6);
+  assert.equal(catalog.files, 8);
   assert.ok(catalog.bytes > catalog.facts.bytes + catalog.sessions.bytes);
   assert.ok(Number.isFinite(Date.parse(catalog.updated_at!)));
   assert.equal(catalog.busy, false);
@@ -216,7 +216,7 @@ test("full memory backup and restore preserve files, personas and empty director
   const backup = await f.admin.backup();
   assert.equal(backup.kind, "manual");
   assert.equal(backup.includes_personas, true);
-  assert.equal(backup.files, 6);
+  assert.equal(backup.files, 7);
   assert.ok(backup.bytes > binary.length);
   assert.equal(backup.valid, true);
   await f.memory.addFact("new-private-fact");

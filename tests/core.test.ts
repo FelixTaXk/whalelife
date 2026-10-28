@@ -20,7 +20,7 @@ test("JSONL truncation recovery preserves complete records and next append", asy
     text: "one",
   });
   await writeFile(
-    join(root, "memory/sessions/test.jsonl"),
+    (await mem.episodePaths("test"))[0],
     '{"ts":1,"text":"good"}\n{"broken":',
     "utf8",
   );

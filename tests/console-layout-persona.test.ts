@@ -107,6 +107,7 @@ test("archive persona labels escape names and distinguish missing historical met
       session: "test",
       memoryTab: "sessions",
       memoryLoadedTab: "sessions",
+      memoryLoadedSession: "test",
       memoryCatalog: {
         root: "memory",
         bytes: 0,

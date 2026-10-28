@@ -13,7 +13,7 @@ import {
 import { createHash } from "node:crypto";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, relative } from "node:path";
 import { Memory } from "../core/memory.ts";
 import { MemoryAdmin, MemoryAdminError } from "../core/memory-admin.ts";
 import type { Logger } from "../core/logger.ts";
@@ -62,7 +62,7 @@ test("renaming and later chat writes preserve names, context, and unrelated inde
     history_scope: "persona",
   };
   await f.memory.saveSessionMeta("chat", { context, custom: { keep: true } });
-  assert.equal((await f.admin.catalog()).sessions.count, 0);
+  assert.equal((await f.admin.catalog()).sessions.count, 1);
   await assert.rejects(readFile(join(f.memory.root, "sessions/chat.jsonl")), {
     code: "ENOENT",
   });
@@ -81,7 +81,8 @@ test("renaming and later chat writes preserve names, context, and unrelated inde
   assert.equal(meta.name, "本周计划");
   assert.equal(meta.context.recent_lines, 30);
   assert.deepEqual(meta.custom, { keep: true });
-  assert.equal(meta.file, "sessions/chat.jsonl");
+  assert.match(meta.file, /^sessions\/chat\/episodes\/\d{4}-\d{2}\.jsonl$/);
+  assert.equal(JSON.parse(await readFile(join(f.memory.sessionDir("chat"), "session.json"), "utf8")).name, "本周计划");
   assert.equal((await f.admin.session("chat")).name, "本周计划");
   assert.equal(
     (await f.admin.catalog({ search: "周计划" })).sessions.items[0].name,
@@ -113,7 +114,8 @@ test("delete archives only this session and all known summary variants, persists
     summary_id: "../facts",
     text: "unsafe summary id ignored",
   });
-  await appendFile(join(f.memory.root, "sessions/chat.jsonl"), '{"partial":');
+  const recordPath = (await f.memory.episodePaths("chat"))[0];
+  await appendFile(recordPath, '{"partial":');
   await f.admin.renameSession({ id: "chat", name: "保存我的名字" });
   await f.memory.saveSessionMeta("chat", { context: { include_facts: false } });
   await f.memory.appendEvent({ session: "other", text: "unrelated" });
@@ -126,15 +128,16 @@ test("delete archives only this session and all known summary variants, persists
   for (const id of [...related, "unrelated"])
     await f.memory.writeSummary(id, "summary-" + id);
   await f.memory.addFact("keep-facts");
-  const original = await readFile(join(f.memory.root, "sessions/chat.jsonl"));
+  const summaryPaths = new Map(await Promise.all(related.map(async (id) => [id, await f.memory.summaryPath(id)] as const)));
+  const original = await readFile(recordPath);
   const metadata = await f.memory.sessionMeta("chat");
   const deleted = await f.admin.deleteSession({ id: "chat" });
   assert.equal(deleted.deleted, true);
-  assert.equal(deleted.files, 5);
+  assert.equal(deleted.files, 6);
   assert.match(deleted.trash_id, /^session-\d{8}T\d{9}Z-[a-f0-9]{12}$/);
   const trash = join(f.memory.root, "trash", deleted.trash_id);
   assert.deepEqual(
-    await readFile(join(trash, "sessions/chat.jsonl")),
+    await readFile(join(trash, relative(f.memory.root, recordPath))),
     original,
   );
   const manifest = JSON.parse(
@@ -142,13 +145,13 @@ test("delete archives only this session and all known summary variants, persists
   );
   assert.deepEqual(manifest.metadata, metadata);
   assert.equal(manifest.session_id, "chat");
-  assert.equal(manifest.files.length, 5);
+  assert.equal(manifest.files.length, 6);
   for (const id of related) {
-    await assert.rejects(readFile(join(f.memory.root, `summaries/${id}.md`)), {
+    await assert.rejects(readFile(summaryPaths.get(id)!), {
       code: "ENOENT",
     });
     assert.equal(
-      await readFile(join(trash, `summaries/${id}.md`), "utf8"),
+      await readFile(join(trash, relative(f.memory.root, summaryPaths.get(id)!)), "utf8"),
       "summary-" + id,
     );
   }
@@ -278,7 +281,7 @@ test("a removal failure rolls back original files and index while retaining reco
   const before = await f.memory.sessionMeta("chat"),
     original = fs.unlink;
   fs.unlink = async (path: any) => {
-    if (resolve(String(path)) === join(f.memory.root, "summaries/chat.md"))
+    if (resolve(String(path)) === join(f.memory.sessionDir("chat"), "summaries/chat.md"))
       throw Object.assign(new Error("simulated unlink failure"), {
         code: "EACCES",
       });
@@ -300,7 +303,7 @@ test("a removal failure rolls back original files and index while retaining reco
   const trashId = (await readdir(join(f.memory.root, "trash")))[0];
   assert.ok(
     await readFile(
-      join(f.memory.root, "trash", trashId, "sessions/chat.jsonl"),
+      join(f.memory.root, "trash", trashId, relative(f.memory.root, (await f.memory.episodePaths("chat"))[0])),
     ),
   );
   assert.equal(f.sessions.blockedSessions.size, 0);

@@ -52,6 +52,9 @@ export class LLM {
         "/chat/completions",
         {
           ...parameters,
+          ...(Number.isSafeInteger(opts.max_tokens) && opts.max_tokens > 0
+            ? { max_tokens: opts.max_tokens }
+            : {}),
           model: opts.provider.model,
           messages: opts.messages,
           stream: true,

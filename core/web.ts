@@ -120,6 +120,70 @@ export async function startWeb(config: any, services: any, runtime: any) {
       }
       if (!authorized(req)) return send(401, { error: "请先登录" });
       const memoryUrl = new URL(req.url!, origin);
+      if (memoryUrl.pathname === "/api/memory/local-facts") {
+        if (req.method === "GET")
+          return send(
+            200,
+            await services.memoryEngine.localFacts(
+              memoryUrl.searchParams.get("id"),
+            ),
+          );
+        if (req.method === "POST") {
+          const input = await body(req, 4096);
+          if (typeof input.revision !== "string")
+            throw Error("请先读取事实版本");
+          return send(
+            200,
+            await services.memoryEngine.saveLocalFacts(
+              input.id,
+              input.text,
+              input.revision,
+            ),
+          );
+        }
+      }
+      if (memoryUrl.pathname === "/api/memory/knowledge") {
+        if (req.method === "GET")
+          return send(
+            200,
+            await services.memoryEngine.inspect(
+              memoryUrl.searchParams.get("id"),
+              memoryUrl.searchParams.get("query") || "",
+              memoryUrl.searchParams.get("archived") === "true",
+            ),
+          );
+        if (req.method === "POST") {
+          const input = await body(req);
+          return send(
+            200,
+            await services.memoryEngine.change(
+              input.id,
+              input.record_id,
+              input.action,
+              input.space_id,
+            ),
+          );
+        }
+      }
+      if (
+        req.method === "POST" &&
+        memoryUrl.pathname === "/api/memory/settings"
+      ) {
+        const input = await body(req);
+        return send(
+          200,
+          await services.memoryEngine.settings(
+            input.id,
+            input.settings,
+            input.memberships,
+          ),
+        );
+      }
+      if (req.method === "POST" && memoryUrl.pathname === "/api/memory/spaces")
+        return send(
+          200,
+          await services.memoryEngine.createSpace((await body(req)).name),
+        );
       if (req.method === "GET" && memoryUrl.pathname === "/api/session/context")
         return send(
           200,

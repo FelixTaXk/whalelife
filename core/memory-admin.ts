@@ -25,10 +25,12 @@ import {
 import {
   indexSessionMeta,
   parseSessionIndex,
-  type Memory,
+  atomic,
+  Memory,
   type SessionIndex,
 } from "./memory.ts";
 import type { Logger } from "./logger.ts";
+import { MemoryEngine, validateMemoryState } from "./memory-engine.ts";
 
 type SessionState = {
   root: string;
@@ -222,6 +224,30 @@ function factsCount(text: string) {
     .split(/\r?\n/)
     .filter((line) => line.trim() && !line.trimStart().startsWith("#")).length;
 }
+const summaryFile = (path: string) =>
+  /^(?:sessions\/[a-zA-Z0-9_-]{1,100}\/)?summaries\/[a-zA-Z0-9_-]{1,100}\.md$/.test(
+    path,
+  );
+function sessionEntries(files: FileEntry[], index: SessionIndex) {
+  const groups = new Map<string, FileEntry[]>();
+  for (const file of files) {
+    const id = file.path.match(
+      /^sessions\/([a-zA-Z0-9_-]{1,100})(?:\.jsonl$|\/)/,
+    )?.[1];
+    if (!id || indexSessionMeta(index, id)?.deleted) continue;
+    groups.set(id, [...(groups.get(id) || []), file]);
+  }
+  return [...groups]
+    .map(([id, group]) => ({
+      path: `sessions/${id}.jsonl`,
+      bytes: group.reduce((sum, file) => sum + file.bytes, 0),
+      mtime: Math.max(...group.map((file) => file.mtime)),
+      updated_at: new Date(
+        Math.max(...group.map((file) => file.mtime)),
+      ).toISOString(),
+    }))
+    .sort((a, b) => b.mtime - a.mtime);
+}
 
 export class MemoryAdmin {
   memory: Memory;
@@ -311,7 +337,14 @@ export class MemoryAdmin {
       if (previous?.deleted)
         throw new MemoryAdminError("会话已删除，请新建会话", 409);
       try {
-        await regularFile(await this.file(`sessions/${id}.jsonl`));
+        const paths = await this.memory.episodePaths(id);
+        await regularFile(
+          await this.file(
+            paths.length
+              ? relative(this.root, paths[0]).split(sep).join("/")
+              : `sessions/${id}/session.json`,
+          ),
+        );
       } catch (error: any) {
         if (error.code === "ENOENT")
           throw new MemoryAdminError("会话不存在", 404);
@@ -319,6 +352,12 @@ export class MemoryAdmin {
       }
       index.sessions = { ...index.sessions, [id]: { ...previous, name } };
       await this.writeSessionIndex(index, revision);
+      const folder = this.memory.sessionDir(id);
+      await directoryChain(folder, true);
+      await atomic(
+        join(folder, "session.json"),
+        JSON.stringify(index.sessions[id], null, 2),
+      );
       this.logger.info("会话已改名", { id });
       return { id, name };
     });
@@ -349,7 +388,16 @@ export class MemoryAdmin {
             trash_id: previous.trash_id,
             files: previous.deleted_files ?? 0,
           };
-        const sessionPath = `sessions/${id}.jsonl`;
+        const tree = await inventory(this.root);
+        const ownFiles = tree.files.filter(
+          (file) =>
+            file.path === `sessions/${id}.jsonl` ||
+            file.path.startsWith(`sessions/${id}/`),
+        );
+        if (!ownFiles.length) throw new MemoryAdminError("会话不存在", 404);
+        const sessionPath =
+          ownFiles.find((file) => file.path.endsWith(".jsonl"))?.path ||
+          ownFiles[0].path;
         let raw: Buffer;
         try {
           raw = await boundedRead(
@@ -361,8 +409,25 @@ export class MemoryAdmin {
             throw new MemoryAdminError("会话不存在", 404);
           throw error;
         }
-        const paths = new Set<string>([sessionPath, `summaries/${id}.md`]);
-        for (const line of raw.toString("utf8").split("\n")) {
+        const paths = new Set<string>([
+          ...ownFiles.map((file) => file.path),
+          `summaries/${id}.md`,
+        ]);
+        const episodeRaw = (
+          await Promise.all(
+            ownFiles
+              .filter((file) => file.path.endsWith(".jsonl"))
+              .map(async (file) =>
+                (
+                  await boundedRead(
+                    await this.file(file.path),
+                    MAX_SESSION_BYTES,
+                  )
+                ).toString("utf8"),
+              ),
+          )
+        ).join("\n");
+        for (const line of episodeRaw.split("\n")) {
           try {
             const record = JSON.parse(line);
             if (
@@ -405,6 +470,7 @@ export class MemoryAdmin {
               "会话文件在删除期间被外部修改，请重试",
               409,
             );
+          await directoryChain(dirname(join(trash, ...path.split("/"))), true);
           await writeFile(join(trash, ...path.split("/")), content, {
             flag: "wx",
             mode: 0o600,
@@ -574,43 +640,59 @@ export class MemoryAdmin {
     });
   }
   private async sessionRows(id: string) {
-    const target = await this.file(`sessions/${identifier(id)}.jsonl`);
-    let raw: Buffer;
-    try {
-      raw = await boundedRead(target, MAX_SESSION_BYTES);
-    } catch (error: any) {
-      if (error.code === "ENOENT")
-        throw new MemoryAdminError("会话不存在", 404);
-      throw error;
-    }
-    const info = await regularFile(target),
-      lines = raw.toString("utf8").split("\n"),
+    identifier(id);
+    const paths = await this.memory.episodePaths(id),
       items: any[] = [],
       warnings: string[] = [];
-    for (let index = 0; index < lines.length; index++) {
-      if (!lines[index].trim()) continue;
+    let bytes = 0,
+      mtime = 0;
+    if (!paths.length) {
       try {
-        const value = JSON.parse(lines[index]);
-        if (!value || typeof value !== "object" || Array.isArray(value))
-          throw Error();
-        items.push(value);
-      } catch {
-        warnings.push(
-          index === lines.length - 1
-            ? "已忽略最后一行未完成的记录"
-            : `第 ${index + 1} 行记录损坏，已跳过`,
-        );
+        mtime = (
+          await regularFile(await this.file(`sessions/${id}/session.json`))
+        ).mtimeMs;
+      } catch (error: any) {
+        if (error.code === "ENOENT")
+          throw new MemoryAdminError("会话不存在", 404);
+        throw error;
       }
-      if (warnings.length > 100) {
-        warnings.push("损坏记录过多，已停止读取");
-        break;
+    }
+    for (const path of paths) {
+      const target = await this.file(
+        relative(this.root, path).split(sep).join("/"),
+      );
+      const raw = await boundedRead(target, MAX_SESSION_BYTES),
+        info = await regularFile(target),
+        lines = raw.toString("utf8").split("\n");
+      bytes += raw.length;
+      mtime = Math.max(mtime, info.mtimeMs);
+      if (bytes > MAX_SESSION_BYTES)
+        throw new MemoryAdminError("会话过大，请在本机查看", 413);
+      for (let index = 0; index < lines.length; index++) {
+        if (!lines[index].trim()) continue;
+        try {
+          const value = JSON.parse(lines[index]);
+          if (!value || typeof value !== "object" || Array.isArray(value))
+            throw Error();
+          items.push(value);
+        } catch {
+          warnings.push(
+            index === lines.length - 1
+              ? "已忽略最后一行未完成的记录"
+              : `第 ${index + 1} 行记录损坏，已跳过`,
+          );
+        }
+        if (warnings.length > 100) {
+          warnings.push("损坏记录过多，已停止读取");
+          break;
+        }
       }
     }
     return {
       items,
       warnings,
-      bytes: raw.length,
-      updated_at: info.mtime.toISOString(),
+      bytes,
+      updated_at: new Date(mtime).toISOString(),
     };
   }
   catalog(options: { search?: string; offset?: number; limit?: number } = {}) {
@@ -621,16 +703,15 @@ export class MemoryAdmin {
       const { files } = await inventory(this.root),
         fact = await this.readFacts();
       const { index } = await this.sessionIndex();
-      const allSessions = files
-        .filter(
-          (f) =>
-            /^sessions\/[a-zA-Z0-9_-]{1,100}\.jsonl$/.test(f.path) &&
-            !indexSessionMeta(index, basename(f.path, ".jsonl"))?.deleted,
-        )
-        .sort((a, b) => b.mtime - a.mtime);
+      const allSessions = sessionEntries(files, index);
       const summaryFiles = files.filter(
         (f) =>
-          f.bytes > 0 && /^summaries\/[a-zA-Z0-9_-]{1,100}\.md$/.test(f.path),
+          f.bytes > 0 &&
+          summaryFile(f.path) &&
+          !(
+            f.path.startsWith("summaries/") &&
+            index.summaryOwners?.[basename(f.path, ".md")]
+          ),
       );
       const matched: FileEntry[] = [];
       for (const entry of allSessions) {
@@ -743,12 +824,17 @@ export class MemoryAdmin {
     return this.memory.serial(async () => {
       await this.ensureRoots();
       const { files } = await inventory(this.root);
+      const { index } = await this.sessionIndex();
       return {
         items: files
           .filter(
             (f) =>
               f.bytes > 0 &&
-              /^summaries\/[a-zA-Z0-9_-]{1,100}\.md$/.test(f.path),
+              summaryFile(f.path) &&
+              !(
+                f.path.startsWith("summaries/") &&
+                index.summaryOwners?.[basename(f.path, ".md")]
+              ),
           )
           .sort((a, b) => b.mtime - a.mtime)
           .map((f) => ({
@@ -762,7 +848,11 @@ export class MemoryAdmin {
   summary(id: string) {
     return this.memory.serial(async () => {
       await this.ensureRoots();
-      const target = await this.file(`summaries/${identifier(id)}.md`);
+      const target = await this.file(
+        relative(this.root, await this.memory.summaryPath(identifier(id)))
+          .split(sep)
+          .join("/"),
+      );
       try {
         const raw = await boundedRead(target, MAX_TEXT_BYTES),
           info = await regularFile(target);
@@ -1041,6 +1131,28 @@ export class MemoryAdmin {
               JSON.stringify([...manifest.directories].sort())
           )
             throw new MemoryAdminError("备份内容校验失败，当前记忆未改变");
+          // Upgrade the staged copy before swapping it into the live root. Failure leaves live data untouched.
+          const stagedMemory = new Memory(stage, this.logger);
+          await stagedMemory.init();
+          for (const entry of copied.files) {
+            if (
+              !/^sessions\/[a-zA-Z0-9_-]{1,100}\/knowledge\/state\.json$/.test(
+                entry.path,
+              )
+            )
+              continue;
+            validateMemoryState(
+              JSON.parse(
+                (
+                  await boundedRead(
+                    join(stage, ...entry.path.split("/")),
+                    MAX_SESSION_BYTES,
+                  )
+                ).toString("utf8"),
+              ),
+            );
+          }
+          await new MemoryEngine(stagedMemory).recoverSummaries();
           for (const persona of Object.values(
             this.sessions.config?.personas ?? {},
           )) {

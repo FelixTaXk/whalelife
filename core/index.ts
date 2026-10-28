@@ -12,6 +12,8 @@ import { Sessions } from "./session.ts";
 import { startWeb } from "./web.ts";
 import { ModelConfig, resolveModel } from "./model-config.ts";
 import { PersonaFiles } from "./persona-config.ts";
+import { MemoryEngine } from "./memory-engine.ts";
+import { registerMemoryTools } from "./memory-tools.ts";
 export async function boot(
   root = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
 ) {
@@ -33,6 +35,9 @@ export async function boot(
   const modelConfig = new ModelConfig(root, config, logger);
   const memory = new Memory(resolve(root, config.memory.root), logger);
   await memory.init();
+  const memoryEngine = new MemoryEngine(memory);
+  (memory as any).engine = memoryEngine;
+  await memoryEngine.recoverSummaries();
   for (const [id, p] of Object.entries<any>(config.personas)) {
     const file = resolve(root, p.file);
     await mkdir(dirname(file), { recursive: true });
@@ -55,6 +60,7 @@ export async function boot(
   const services: any = {
     logger,
     memory,
+    memoryEngine,
     llm,
     tools,
     approval,
@@ -72,20 +78,25 @@ export async function boot(
   for (const id of ["logger", "memory", "llm", "tools", "approval", "channels"])
     await runtime.builtin(id, services[id]);
   await runtime.builtin("permission", { approval });
-  await runtime.builtin("facts", memory, (ctx) =>
-    ctx.tools.register({
-      name: "remember_fact",
-      description:
-        "当用户明确要求记下、记住一条长期事实或约定时调用，将事实保存至跨会话共享记忆",
-      schema: { text: { type: "string" } },
-      danger: "ask",
-      async run(args: any) {
-        return memory.addFact(args.text);
-      },
-    }),
+  await runtime.builtin("facts", {}, (ctx) =>
+    registerMemoryTools(ctx.tools, memoryEngine),
   );
   const sessions = new Sessions(root, config, services);
   services.sessions = sessions;
+  memoryEngine.maintenance = (id) =>
+    sessions.memoryMaintenance || !!(id && sessions.blockedSessions.has(id));
+  tools.observe = async (event) => {
+    if (
+      !event.session?.id ||
+      ["recall_memory", "remember_fact", "edit_facts"].includes(event.name)
+    )
+      return;
+    await memoryEngine.experience(event.session.id, event.source, {
+      event_id: event.id,
+      outcome: event.ok ? "succeeded" : "failed",
+      text: `工具 ${event.name} ${event.ok ? "调用完成" : "调用失败"}：${String(JSON.stringify(event.result)).slice(0, 350)}`,
+    });
+  };
   services.memoryAdmin = new MemoryAdmin(memory, sessions, logger);
   await runtime.builtin("chat", sessions);
   const web = await startWeb(config, services, runtime);

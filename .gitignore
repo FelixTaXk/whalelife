@@ -20,5 +20,6 @@ plugins/**/data/
 
 # Memory snapshots and temporary restore directories contain private data.
 /backups/memory/
+/backups/memory-migration/
 .whalelife-memory-restore-*/
 .whalelife-memory-rollback-*/
