@@ -220,8 +220,53 @@ test("incremental consolidation catches up after restart without gaps, duplicate
     (await services.memoryEngine.state("one")).daily.reserved,
     reservedEstimate,
   );
-  assert.equal(records.filter((x: any) => x.kind === "cognition").length, 2);
+  assert.equal(records.filter((x: any) => x.kind === "cognition").length, 1,
+    "identical cognition is consolidated instead of duplicated");
   assert.ok(records.every((x: any) => !x.kind.includes("intent")));
+});
+
+test("chat revises cognition inside the existing summary call and accounts for its full input", async (t) => {
+  const f = await fixture(t);
+  f.config.memory.recent_lines = 2;
+  const p = await persona(f.root, f.config, "a");
+  for (let i = 0; i < 12; i++) await f.memory.appendEvent({
+    session: "one", type: "message", role: "user",
+    text: i === 0 ? "我目前居住南京" : "我已经搬到北京，当前居住北京，记录" + i,
+    persona_revision: p.revision,
+  });
+  const evidence = (await f.memory.readSession("one"))[0].id;
+  const old = await f.memoryEngine.record("one", {
+    kind: "cognition", text: "用户居住南京", evidence: [evidence], persona_revision: p.revision,
+  });
+  let chats = 0, extractions = 0, budget = 0;
+  f.services.llm.chat = async (request: any) => {
+    if (request.messages[0].content.includes("只返回JSON")) {
+      extractions++;
+      budget += estimateTokens(JSON.stringify(request.messages)) + request.max_tokens;
+      const input = JSON.parse(request.messages[1].content);
+      assert.equal(input.candidates[0].id, old.id);
+      assert.equal(input.candidates[0].revision, undefined, "internal concurrency tokens are not model input");
+      return { text: JSON.stringify({ summary: "用户由南京迁居北京", cognition: [{
+        text: "用户居住北京", evidence: [input.episodes[1].id], uncertain: false,
+        replaces: [input.candidates[0].id], reason: "用户明确说明迁居",
+      }], reviews: [] }), toolCalls: [], usage: { prompt_tokens: 90, completion_tokens: 40 } };
+    }
+    chats++;
+    return { text: "你当前居住北京。", toolCalls: [], usage: { prompt_tokens: 200, completion_tokens: 20 } };
+  };
+  await f.sessions.chat("one", "继续整理", () => {});
+  assert.equal(chats, 1);
+  assert.equal(extractions, 1, "maintenance must share the existing summary request");
+  const state = await f.memoryEngine.state("one");
+  assert.equal(state.daily.reserved, budget);
+  assert.equal(state.usage.memory.input_tokens, 90);
+  assert.equal(state.usage.chat.input_tokens, 200);
+  assert.equal(state.records.find((x) => x.id === old.id).status, "superseded");
+  const recalled = await f.memoryEngine.search("one", "用户居住");
+  assert.deepEqual(recalled.items.filter((x) => x.kind === "cognition").map((x) => x.text), ["用户居住北京"]);
+  await f.sessions.chat("one", "你记得我住在哪里吗", () => {});
+  assert.equal(chats, 2);
+  assert.equal(extractions, 1, "short tail must not launch a separate maintenance cycle");
 });
 
 test("failed consolidation retains its cursor and retries the same uncovered source after backoff", async (t) => {

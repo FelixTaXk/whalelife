@@ -41,6 +41,25 @@ function fixture(tab = "local-facts", text = "") {
   };
 }
 
+test("cognition maintenance exposes provenance and rollback without reviving superseded records", () => {
+  const app = fixture("knowledge");
+  app.state.memoryDetails = { items: [
+    { id: "old", kind: "cognition", status: "superseded", superseded_by: "new", text: "旧判断" },
+    { id: "new", kind: "cognition", status: "active", supersedes: ["old"], text: "新判断",
+      change_reason: "<script>unsafe()</script>", uncertain: true },
+    { id: "review", kind: "cognition", status: "review", text: "待确认",
+      review: { reason: "资料矛盾", evidence: ["event"] } },
+  ] };
+  const html = renderMemory(app);
+  assert.match(html, /包含已归档、已替代与待复核/);
+  assert.match(html, /data-knowledge-action="undo" data-record-id="new"/);
+  assert.match(html, /data-knowledge-action="restore" data-record-id="review"/);
+  assert.doesNotMatch(html, /data-knowledge-action="restore" data-record-id="old"/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /含不确定判断/);
+});
+
 test("local fact editor counts Unicode code points and refuses the total beyond 100", async (t) => {
   const app = fixture("local-facts", "鲸".repeat(99) + "🐋");
   let html = renderMemory(app);

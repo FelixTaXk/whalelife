@@ -120,10 +120,17 @@ export class Runtime {
     record.fork = (parent?.cordis ?? this.bus).plugin(async (native: any) => {
       record.cordis = native;
       let pluginMemory: any;
+      let pluginChannels: any;
       const get = (name: string, strict = true) => {
         const value = lookup(name);
         if (value === undefined && strict) throw Error("依赖缺失：" + name);
         if (value !== undefined) record.dependencies.add(name);
+        if (name === "channels" && value?.plugin) {
+          pluginChannels ??= value.plugin(id, (dispose: any) =>
+            native.effect(() => dispose),
+          );
+          return pluginChannels;
+        }
         if (name === "memory" && !manifest.builtin && value?.engine) {
           pluginMemory ??= value.engine.plugin(id, (dispose: any) =>
             native.effect(() => dispose),

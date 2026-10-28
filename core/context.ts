@@ -1,11 +1,13 @@
 import type { Logger } from "./logger.ts";
+import type { ChannelAPI } from "./channels.ts";
+export type { ChannelAPI, ChannelAdapter, ChannelHandle, IncomingMessage, OutgoingMessage, ChannelResult } from "./channels.ts";
 export interface Context {
   logger: Logger;
   tools: any;
   llm: any;
   memory: any;
   approval: any;
-  channels: any;
+  channels: ChannelAPI;
   web: any;
   config: any;
   provide(name: string, value: any): void;

@@ -37,6 +37,7 @@ type SessionState = {
   locks: Set<string>;
   memoryMaintenance?: boolean;
   blockedSessions?: Set<string>;
+  channelOperations?: Map<string, number>;
   config?: { personas?: Record<string, { file?: string }> };
 };
 type FileEntry = {
@@ -367,12 +368,12 @@ export class MemoryAdmin {
       blocked = this.sessions.blockedSessions!;
     if (this.sessions.memoryMaintenance || blocked.has(id))
       throw new MemoryAdminError("会话或记忆正在维护，请稍后重试", 409);
-    if (this.sessions.locks.has(id))
+    if (this.sessions.locks.has(id) || this.sessions.channelOperations?.has(id))
       throw new MemoryAdminError("该会话正在回复，请稍候再删除", 409);
     blocked.add(id);
     return this.memory
       .serial(async () => {
-        if (this.sessions.memoryMaintenance || this.sessions.locks.has(id))
+        if (this.sessions.memoryMaintenance || this.sessions.locks.has(id) || this.sessions.channelOperations?.has(id))
           throw new MemoryAdminError(
             "该会话正在回复或记忆正在恢复，请稍候再删除",
             409,
@@ -788,7 +789,7 @@ export class MemoryAdmin {
           items,
         },
         summaries: aggregate(summaryFiles),
-        busy: this.sessions.locks.size > 0,
+        busy: this.sessions.locks.size > 0 || !!this.sessions.channelOperations?.size,
         restoring: this.sessions.memoryMaintenance === true,
       };
     });
@@ -1091,7 +1092,7 @@ export class MemoryAdmin {
       return Promise.reject(
         new MemoryAdminError("记忆恢复正在进行，请稍后重试", 409),
       );
-    if (this.sessions.locks.size || this.sessions.blockedSessions?.size)
+    if (this.sessions.locks.size || this.sessions.blockedSessions?.size || this.sessions.channelOperations?.size)
       return Promise.reject(
         new MemoryAdminError("对话正在进行，请等待回复完成后再恢复记忆", 409),
       );
@@ -1099,7 +1100,7 @@ export class MemoryAdmin {
     let recoveryRequired = false;
     return this.memory
       .serial(async () => {
-        if (this.sessions.locks.size)
+        if (this.sessions.locks.size || this.sessions.channelOperations?.size)
           throw new MemoryAdminError(
             "对话正在进行，请等待回复完成后再恢复记忆",
             409,

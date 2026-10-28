@@ -155,7 +155,7 @@ function renderTab(app, tab) {
     return `<form id="memory-search-form" class="row"><input name="search" type="search" aria-label="搜索会话" placeholder="搜索名称、会话 ID 或内容" value="${e(s.memorySearch || "")}"><button class="btn" type="submit">搜索</button></form><div class="memory-table">${list.items.map((item) => `<div class="memory-item"><div><strong>${e(item.name || item.id)} ${item.id === s.session ? '<span class="badge green">当前会话</span>' : ""}</strong><small>${item.name ? e(item.id) + " · " : ""}${time(item.updated_at)} · ${bytes(item.bytes)}</small><small title="${e(item.last_persona?.id || "")}">最后使用人格：${e(item.last_persona?.name || "未记录")}</small></div><div class="row session-actions"><button class="btn small" data-session="${e(item.id)}">查看</button><button class="btn small tonal" data-session-use="${e(item.id)}" ${s.chatBusy ? "disabled" : ""}>设为当前会话</button><button class="btn small" data-session-rename="${e(item.id)}">改名</button><button class="btn small danger" data-session-delete="${e(item.id)}">删除</button></div></div>`).join("") || '<p class="empty">暂无匹配的会话。</p>'}</div><div class="row memory-actions"><small>共 ${list.total} 个匹配会话</small><div class="spacer"></div><button class="btn small" data-memory-prev ${list.offset === 0 ? "disabled" : ""}>上一页</button><button class="btn small" data-memory-next ${list.offset + list.limit >= list.total ? "disabled" : ""}>下一页</button></div>`;
   }
   if (tab === "summaries")
-    return `<h2>滚动摘要</h2><p class="muted">对话达到阈值后自动生成，按会话及人格版本隔离。这里只查看已生成内容。</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${time(item.updated_at)} · ${bytes(item.bytes)}</small></div><button class="btn small" data-summary="${e(item.id)}">查看摘要</button></div>`).join("") || '<p class="empty">尚未生成摘要，短会话不会产生滚动摘要。</p>'}</div>`;
+    return `<h2>滚动摘要</h2><p class="muted">对话达到阈值后自动生成；默认同一会话跨人格共用，按人格隔离时另行保存。</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${time(item.updated_at)} · ${bytes(item.bytes)}</small></div><button class="btn small" data-summary="${e(item.id)}">查看摘要</button></div>`).join("") || '<p class="empty">尚未生成摘要，短会话不会产生滚动摘要。</p>'}</div>`;
   return `<h2>本机备份</h2><p class="muted">完整保存记忆目录，包含目录内的人格文件。恢复前自动备份当前数据；不覆盖模型配置和密钥。</p><p class="memory-location">备份位置：${e(data.directory)}</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${time(item.created_at)} · ${item.files || 0} 个文件 · ${bytes(item.bytes || 0)} · ${item.kind === "before-restore" ? "恢复前自动备份" : "手动备份"}</small>${item.error ? `<p class="form-error">${e(item.error)}</p>` : ""}</div><button class="btn small" data-restore="${e(item.id)}" ${!item.valid || s.chatBusy || s.memoryCatalog.busy ? "disabled" : ""}>恢复此备份</button></div>`).join("") || '<p class="empty">暂无备份，点击右上方“创建备份”。</p>'}</div>`;
 }
 function joinedSpaces(data) {
@@ -183,16 +183,31 @@ function renderKnowledge(s, data) {
     active: "有效",
     archived: "已归档",
     superseded: "已替代",
+    review: "待复核",
     invalid: "已失效",
   };
-  return `<h2>当前会话记忆</h2><p class="muted">检索本会话及已加入的共享空间。普通经历会随时间淡忘；归档后不再自动召回，原文仍保留。</p><form id="knowledge-search-form" class="row memory-knowledge-search"><input name="query" type="search" aria-label="搜索记忆" placeholder="输入关键词、名称或旧事" value="${e(s.knowledgeQuery || "")}"><label><input type="checkbox" name="archived" ${s.knowledgeArchived ? "checked" : ""}>包含已归档</label><button class="btn" type="submit">搜索</button></form><div class="memory-table">${
+  return `<h2>当前会话记忆</h2><p class="muted">检索本会话及已加入的共享空间。普通经历会随时间淡忘；归档后不再自动召回，原文仍保留。</p><form id="knowledge-search-form" class="row memory-knowledge-search"><input name="query" type="search" aria-label="搜索记忆" placeholder="输入关键词、名称或旧事" value="${e(s.knowledgeQuery || "")}"><label><input type="checkbox" name="archived" ${s.knowledgeArchived ? "checked" : ""}>包含已归档、已替代与待复核</label><button class="btn" type="submit">搜索</button></form><div class="memory-table">${
     (data.items || [])
       .map((item) => {
         const archived = item.status === "archived";
+        const actionButton = (action, title) => `<button class="btn small" data-knowledge-action="${action}" data-record-id="${e(item.id)}">${title}</button>`;
+        const maintenanceActions = item.superseded_by || item.reverted_at ? "" :
+          actionButton(archived || item.status === "review" ? "restore" : "archive",
+            item.status === "review" ? "确认有效" : archived ? "恢复" : "归档") +
+          (item.supersedes?.length ? actionButton("undo", "撤回修订") : "");
+        const revisionNote = item.kind !== "cognition" ? "" :
+          `<small class="muted">${item.uncertain !== false ? "含不确定判断" : "有明确来源，仍可修订"}${item.reverted_at ? " · 修订已撤回" : ""}</small>` +
+          (item.change_reason || item.review || item.supersedes?.length || item.superseded_by ?
+            `<details><summary>修订记录</summary><pre class="memory-preview">${e([
+              item.change_reason && "修订依据：" + item.change_reason,
+              item.supersedes?.length && "替代：" + item.supersedes.join("、"),
+              item.superseded_by && "由此记录替代：" + item.superseded_by,
+              item.review && "复核依据：" + item.review.reason + "\n来源：" + item.review.evidence.join("、"),
+            ].filter(Boolean).join("\n"))}</pre></details>` : "");
         const fresh = Number.isFinite(item.freshness)
           ? `${(Math.max(0, Math.min(1, item.freshness)) * 100).toFixed(0)}%`
           : "—";
-        return `<article class="memory-knowledge-item"><div class="row"><strong>${e(kinds[item.kind] || item.kind || "记忆")}</strong><span class="badge">${e(statuses[item.status] || item.status || "有效")}</span>${item.pinned ? '<span class="badge green">已置顶</span>' : ""}<div class="spacer"></div><small>${e(time(item.ts))}</small></div><p class="memory-knowledge-text">${e(item.text)}</p><small class="muted">来源：${e(sourceLabel(item.source))} · 鲜活度 ${fresh}${Number.isFinite(item.score) ? ` · 相关得分 ${item.score.toFixed(2)}` : ""}</small>${item.reason ? `<p class="memory-recall-reason">召回依据：${e(typeof item.reason === "string" ? item.reason : JSON.stringify(item.reason))}</p>` : ""}${item.evidence?.length ? `<details><summary>来源引用（${item.evidence.length}）</summary><pre class="memory-preview">${e(item.evidence.map((value) => (typeof value === "string" ? value : JSON.stringify(value))).join("\n"))}</pre></details>` : ""}<div class="row memory-record-actions"><button class="btn small" data-knowledge-action="${item.pinned ? "unpin" : "pin"}" data-record-id="${e(item.id)}">${item.pinned ? "取消置顶" : "置顶"}</button><button class="btn small" data-knowledge-action="${archived ? "restore" : "archive"}" data-record-id="${e(item.id)}">${archived ? "恢复" : "归档"}</button>${joinedSpaces(data).length ? `<button class="btn small" data-knowledge-share="${e(item.id)}">分享到空间</button>` : ""}</div></article>`;
+        return `<article class="memory-knowledge-item"><div class="row"><strong>${e(kinds[item.kind] || item.kind || "记忆")}</strong><span class="badge">${e(statuses[item.status] || item.status || "有效")}</span>${item.pinned ? '<span class="badge green">已置顶</span>' : ""}<div class="spacer"></div><small>${e(time(item.ts))}</small></div><p class="memory-knowledge-text">${e(item.text)}</p><small class="muted">来源：${e(sourceLabel(item.source))} · 鲜活度 ${fresh}${Number.isFinite(item.score) ? ` · 相关得分 ${item.score.toFixed(2)}` : ""}</small>${item.reason ? `<p class="memory-recall-reason">召回依据：${e(typeof item.reason === "string" ? item.reason : JSON.stringify(item.reason))}</p>` : ""}${item.evidence?.length ? `<details><summary>来源引用（${item.evidence.length}）</summary><pre class="memory-preview">${e(item.evidence.map((value) => (typeof value === "string" ? value : JSON.stringify(value))).join("\n"))}</pre></details>` : ""}${revisionNote}<div class="row memory-record-actions"><button class="btn small" data-knowledge-action="${item.pinned ? "unpin" : "pin"}" data-record-id="${e(item.id)}">${item.pinned ? "取消置顶" : "置顶"}</button>${maintenanceActions}${joinedSpaces(data).length ? `<button class="btn small" data-knowledge-share="${e(item.id)}">分享到空间</button>` : ""}</div></article>`;
       })
       .join("") ||
     '<p class="empty">暂无匹配记忆。可以调整关键词；没有相关内容时不会强行带入。</p>'

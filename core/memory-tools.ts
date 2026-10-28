@@ -56,11 +56,13 @@ export function registerMemoryTools(tools: any, engine: MemoryEngine) {
         });
         return found.items.map((x) => ({
           id: x.id,
+          kind: x.kind,
           text: x.text,
           source: x.source,
           ts: x.ts,
           outcome: x.outcome,
           reason: x.reason,
+          ...(x.kind === "cognition" ? { uncertain: x.uncertain ?? true } : {}),
         }));
       },
     }),

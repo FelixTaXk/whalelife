@@ -2,8 +2,10 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
+import { Channels } from "./channels.ts";
 export async function startWeb(config: any, services: any, runtime: any) {
   const { logger, memory, sessions } = services;
+  const channels = services.channels ?? new Channels(memory, sessions, config);
   const { host = "127.0.0.1", port = 9270 } = config.web;
   if (host !== "127.0.0.1" && (!config.web.lan_enabled || !config.web.password))
     throw Error("局域网监听需 lan_enabled 与访问密码");
@@ -396,7 +398,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
       busy = true;
       try {
         const data = JSON.parse(raw.toString());
-        await sessions.chat(
+        await channels.web(
           data.session,
           String(data.text ?? ""),
           (text: string) => send({ type: "chunk", text }),

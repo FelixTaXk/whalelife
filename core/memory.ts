@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { join, dirname, relative, resolve, sep, parse } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Logger } from "./logger.ts";
 export const safeId = (id: string) => {
   if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))
@@ -48,7 +49,18 @@ export async function atomic(file: string, data: string) {
   const temp = file + "." + randomUUID() + ".tmp";
   try {
     await writeFile(temp, data, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    await rename(temp, file);
+    // Windows readers can briefly hold a handle without delete sharing. Keep the
+    // old file and the complete temp intact while retrying the atomic replace.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await rename(temp, file);
+        break;
+      } catch (error: any) {
+        if (attempt >= 4 || !["EPERM", "EACCES", "EBUSY"].includes(error.code))
+          throw error;
+        await delay((attempt + 1) * 10);
+      }
+    }
   } finally {
     await unlink(temp).catch((error: any) => {
       if (error.code !== "ENOENT") throw error;
@@ -325,6 +337,15 @@ export class Memory {
   // Atomic index replacement makes this a snapshot read, so callers holding serial can use it too.
   async sessionMeta(id: string) {
     return indexSessionMeta(await this.sessionIndex(), safeId(id));
+  }
+  // Includes deletion tombstones so channel bindings cannot silently resurrect them.
+  async listSessionMeta() {
+    return this.serial(async () => {
+      const index = await this.sessionIndex();
+      return Object.fromEntries(
+        Object.keys(index.sessions).map((id) => [id, indexSessionMeta(index, id)]),
+      );
+    });
   }
   saveSessionMeta(id: string, patch: Record<string, unknown>) {
     safeId(id);

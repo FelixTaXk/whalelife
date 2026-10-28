@@ -2,6 +2,7 @@ import { readFile, mkdir, lstat } from "node:fs/promises";
 import { join, relative, resolve, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { atomic, safeId, type Memory } from "./memory.ts";
+import { applyCognitions, cognitionRevision, undoCognition, type CognitionMaintenance } from "./cognition.ts";
 
 export const charCount = (text: string) => Array.from(text).length;
 export function estimateTokens(text: string) {
@@ -86,7 +87,7 @@ export function validateMemoryState(s: any) {
       !object(record) ||
       typeof record.id !== "string" ||
       typeof record.kind !== "string" ||
-      !["active", "archived"].includes(record.status) ||
+      !["active", "archived", "superseded", "review"].includes(record.status) ||
       typeof record.pinned !== "boolean" ||
       (record.kind !== "event-state" &&
         (typeof record.text !== "string" ||
@@ -94,6 +95,24 @@ export function validateMemoryState(s: any) {
           !Array.isArray(record.evidence)))
     )
       throw Error("记忆记录损坏");
+  const byId = new Map(s.records.map((x: any) => [x.id, x]));
+  if (byId.size !== s.records.length) throw Error("记忆ID重复");
+  for (const record of s.records) {
+    if (record.uncertain !== undefined && typeof record.uncertain !== "boolean")
+      throw Error("认知不确定性标记损坏");
+    if (record.supersedes !== undefined && (!Array.isArray(record.supersedes) ||
+        record.supersedes.length > 4 || record.supersedes.some((id: any) =>
+          id === record.id || (byId.get(id) as any)?.kind !== "cognition")))
+      throw Error("认知替代来源损坏");
+    if (record.superseded_by !== undefined &&
+        (record.status !== "superseded" || !(byId.get(record.superseded_by) as any)?.supersedes?.includes(record.id)))
+      throw Error("认知替代关系损坏");
+    if (record.status === "superseded" && !record.superseded_by)
+      throw Error("认知缺少替代记录");
+    if (record.review !== undefined && (typeof record.review.reason !== "string" ||
+        charCount(record.review.reason) > 100 || !Array.isArray(record.review.evidence)))
+      throw Error("认知复核依据损坏");
+  }
   for (const [key, value] of Object.entries<any>(s.summaries)) {
     safeId(key);
     if (
@@ -238,7 +257,7 @@ export class MemoryEngine {
         s.facts.revision,
         s.settings,
         s.memberships,
-        s.records.map((x) => [x.id, x.status, x.pinned, x.text]),
+        s.records.map((x) => [x.id, x.status, x.pinned, x.text, x.uncertain]),
         await this.memory.readFacts(),
       ]),
     );
@@ -556,6 +575,7 @@ export class MemoryEngine {
         ts: item.ts,
         text: (offset ? "…" : "") + cut(item.text.slice(offset), 500),
         outcome: item.outcome || undefined,
+        ...(item.kind === "cognition" ? { uncertain: item.uncertain ?? true } : {}),
       };
       const size = estimateTokens(JSON.stringify(snippet));
       if (used + size > budget) continue;
@@ -602,7 +622,7 @@ export class MemoryEngine {
     };
   }
   async change(id: string, recordId: string, action: string, spaceId?: string) {
-    if (!["pin", "unpin", "archive", "restore", "share"].includes(action))
+    if (!["pin", "unpin", "archive", "restore", "share", "undo"].includes(action))
       throw Error("记忆操作无效");
     const record = (await this.candidates(id)).find((x) => x.id === recordId);
     if (!record) throw Error("记录不属于当前会话");
@@ -638,9 +658,23 @@ export class MemoryEngine {
         };
         s.records.push(item);
       }
+      if (action === "undo") {
+        undoCognition(s.records, item);
+        return;
+      }
+      if (["archive", "restore"].includes(action) && item.superseded_by)
+        throw Error("该认知已被替代；请在新认知上撤回修订");
+      if (action === "restore" && item.reverted_at)
+        throw Error("已撤回的修订不能直接恢复，请根据新证据重新整理");
       if (action === "pin" || action === "unpin")
         item.pinned = action === "pin";
-      else item.status = action === "archive" ? "archived" : "active";
+      else {
+        item.status = action === "archive" ? "archived" : "active";
+        if (action === "restore" && item.review) {
+          item.review_resolved = { ...item.review, at: new Date().toISOString(), by: "user" };
+          delete item.review;
+        }
+      }
     });
     return { ok: true };
   }
@@ -686,11 +720,33 @@ export class MemoryEngine {
       ? checkpoint.text
       : this.memory.readSummary(key);
   }
+  async cognitionCandidates(id: string, text: string, revision?: string) {
+    const terms = new Set(words(text));
+    const state = await this.state(id);
+    const ranked = state.records
+      .filter((x) => x.kind === "cognition" && ["active", "review"].includes(x.status) &&
+        !x.reverted_at && (!revision || !x.persona_revision || x.persona_revision === revision))
+      .map((x) => ({ record: x, score: words(x.text).filter((t) => terms.has(t)).length }))
+      .filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+    const result = [];
+    let used = 0;
+    for (const { record } of ranked) {
+      const candidate = { id: record.id, text: record.text, status: record.status,
+        uncertain: record.uncertain ?? true, revision: cognitionRevision(record) };
+      const size = estimateTokens(JSON.stringify(candidate));
+      if (used + size > 800) continue;
+      result.push(candidate);
+      used += size;
+      if (result.length === 4) break;
+    }
+    return result;
+  }
   async commitSummary(
     id: string,
     key: string,
     value: any,
     cognitions: any[] = [],
+    maintenance?: CognitionMaintenance,
   ) {
     safeId(key);
     const known = new Set(
@@ -710,24 +766,11 @@ export class MemoryEngine {
     )
       throw Error("认知缺少有效来源或超出长度");
     await this.update(id, (s) => {
+      const existing = s.summaries[key];
+      if (value.last_id && existing?.last_id === value.last_id &&
+          existing.last_offset === value.last_offset && existing.text === value.text) return;
+      applyCognitions(s.records, key, value, cognitions, known, maintenance);
       s.summaries = { ...s.summaries, [key]: value };
-      cognitions.forEach((input, n) => {
-        const rid = hash(
-          key + ":" + value.last_id + ":" + value.last_offset + ":" + n,
-        ).slice(0, 32);
-        if (!s.records.some((x) => x.id === rid))
-          s.records.push({
-            id: rid,
-            kind: "cognition",
-            text: input.text,
-            source: "consolidation",
-            ts: new Date().toISOString(),
-            status: "active",
-            pinned: false,
-            evidence: input.evidence,
-            persona_revision: input.persona_revision || null,
-          });
-      });
     });
   }
   async recoverSummaries() {

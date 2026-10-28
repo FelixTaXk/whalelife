@@ -9,6 +9,7 @@ import { Tools } from "./tools.ts";
 import { approval } from "./permission.ts";
 import { Runtime } from "./runtime.ts";
 import { Sessions } from "./session.ts";
+import { Channels } from "./channels.ts";
 import { startWeb } from "./web.ts";
 import { ModelConfig, resolveModel } from "./model-config.ts";
 import { PersonaFiles } from "./persona-config.ts";
@@ -66,23 +67,16 @@ export async function boot(
     approval,
     modelConfig,
     personaFiles: new PersonaFiles(root, config, logger),
-    channels: {
-      register() {
-        throw Error("M0 仅提供 Web 渠道");
-      },
-      send() {
-        throw Error("M0 渠道接口预留");
-      },
-    },
   };
+  const sessions = new Sessions(root, config, services);
+  services.sessions = sessions;
+  services.channels = new Channels(memory, sessions, config);
   for (const id of ["logger", "memory", "llm", "tools", "approval", "channels"])
     await runtime.builtin(id, services[id]);
   await runtime.builtin("permission", { approval });
   await runtime.builtin("facts", {}, (ctx) =>
     registerMemoryTools(ctx.tools, memoryEngine),
   );
-  const sessions = new Sessions(root, config, services);
-  services.sessions = sessions;
   memoryEngine.maintenance = (id) =>
     sessions.memoryMaintenance || !!(id && sessions.blockedSessions.has(id));
   tools.observe = async (event) => {
