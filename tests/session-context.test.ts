@@ -126,6 +126,9 @@ test("context usage reports the latest provider request, caches model limits and
 
 test("per-session settings control actual history, facts and summary sent to the model", async () => {
   const f = await fixture();
+  await f.memory.saveSessionMeta("one", {
+    context: { history_scope: "persona" },
+  });
   await f.memory.writeFacts(["只存在于共享事实"]);
   await f.memory.appendEvent({
     session: "one",

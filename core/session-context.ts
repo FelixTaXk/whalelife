@@ -11,7 +11,7 @@ export function contextPolicy(config: any, saved: any = {}): ContextPolicy {
     budget_tokens: saved.budget_tokens ?? config.budget_tokens ?? 6000,
     include_facts: saved.include_facts ?? true,
     include_summary: saved.include_summary ?? true,
-    history_scope: saved.history_scope ?? "persona",
+    history_scope: saved.history_scope ?? config.history_scope ?? "session",
   };
 }
 export function validateContext(input: any): ContextPolicy {

@@ -32,7 +32,7 @@ export function personaSystemPrompt(
     "用户明确要求记住事实且有可用的记忆工具时，调用工具，不要仅口头承诺。",
     "【参考记忆】",
     facts.join("\n") || "无",
-    "【当前人格的会话摘要】",
+    "【当前历史范围的会话摘要】",
     summary || "无",
   ].join("\n");
 }

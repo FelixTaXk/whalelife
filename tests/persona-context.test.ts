@@ -8,12 +8,88 @@ import { Sessions } from "../core/session.ts";
 import { persona } from "../core/persona.ts";
 import { Memory } from "../core/memory.ts";
 import { Logger } from "../core/logger.ts";
+import { MemoryEngine } from "../core/memory-engine.ts";
+import { contextPolicy } from "../core/session-context.ts";
+
+test("default session history and summary survive persona switches and edits, with explicit isolation still available", async () => {
+  assert.equal(contextPolicy({}).history_scope, "session");
+  assert.equal(
+    contextPolicy({}, { history_scope: "persona" }).history_scope,
+    "persona",
+  );
+  const root = await mkdtemp(join(tmpdir(), "whale-shared-personas-"));
+  const logger: any = { info() {}, warn() {}, error() {} };
+  const memory = new Memory(join(root, "memory"), logger);
+  await memory.init();
+  const engine = new MemoryEngine(memory);
+  await writeFile(join(root, "a.md"), "当前名字ALPHA");
+  await writeFile(join(root, "b.md"), "当前名字BETA");
+  const config: any = {
+    providers: [
+      { id: "demo", model: "chat", base_url: "https://unused.example/v1" },
+    ],
+    personas: {
+      a: { name: "A", file: "a.md", provider: "demo" },
+      b: { name: "B", file: "b.md", provider: "demo" },
+    },
+    channels: { web: { persona: "a", permission: "off" } },
+    memory: { recent_lines: 30 },
+  };
+  const requests: any[] = [];
+  const sessions = new Sessions(root, config, {
+    memory,
+    memoryEngine: engine,
+    logger,
+    tools: {},
+    llm: {
+      chat: async (r: any) => {
+        requests.push(structuredClone(r.messages));
+        return { text: "收到", toolCalls: [] };
+      },
+    },
+  });
+  engine.maintenance = (id) =>
+    sessions.memoryMaintenance || !!(id && sessions.blockedSessions.has(id));
+  await sessions.chat("same", "共同暗号：海蓝123", () => {});
+  const rows = await memory.readSession("same"),
+    key = rows.at(-1).summary_id;
+  await engine.commitSummary("same", key, {
+    text: "共同摘要：下次讨论星空摄影",
+    covered: 2,
+    last_id: rows.at(-1).id,
+    last_offset: 0,
+  });
+  config.channels.web.persona = "b";
+  await sessions.chat("same", "换人格后继续", () => {});
+  assert.match(requests[1][0].content, /当前名字BETA/);
+  assert.match(requests[1][0].content, /共同摘要：下次讨论星空摄影/);
+  assert.match(JSON.stringify(requests[1]), /共同暗号：海蓝123/);
+  assert.equal((await memory.readSession("same")).at(-1).summary_id, key);
+  await writeFile(join(root, "b.md"), "当前名字GAMMA");
+  await sessions.chat("same", "修改人格后继续", () => {});
+  assert.match(requests[2][0].content, /当前名字GAMMA/);
+  assert.match(requests[2][0].content, /共同摘要/);
+  assert.match(JSON.stringify(requests[2]), /共同暗号/);
+  const status = await sessions.updateContext(
+    "same",
+    contextPolicy(config.memory),
+  );
+  assert.equal(
+    status.policy.history_scope,
+    "session",
+    "status reads after releasing the maintenance lock",
+  );
+  assert.equal((await memory.readSession("same")).length, 6);
+});
 
 test("persona changes isolate history and summaries while retaining the saved transcript", async () => {
   const root = await mkdtemp(join(tmpdir(), "whale-persona-context-"));
   const logger = new Logger(join(root, "logs"));
   const memory = new Memory(join(root, "memory"), logger);
   await memory.init();
+  await memory.saveSessionMeta("same", {
+    context: { history_scope: "persona" },
+  });
   await writeFile(join(root, "a.md"), "我叫 ALPHA");
   await writeFile(join(root, "b.md"), "我叫 BETA");
   await memory.writeFacts(["重复的共享事实", "重复的共享事实"]);

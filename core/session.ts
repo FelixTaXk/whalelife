@@ -117,10 +117,10 @@ export class Sessions {
     this.blockedSessions.add(id);
     try {
       await this.services.memory.saveSessionMeta(id, { context: policy });
-      return await this.contextStatus(id);
     } finally {
       this.blockedSessions.delete(id);
     }
+    return this.contextStatus(id);
   }
   async chat(
     id: string,
@@ -150,10 +150,9 @@ export class Sessions {
         "p_" +
         createHash("sha256")
           .update(
-            id +
-              ":" +
-              p.revision +
-              (policy.history_scope === "session" ? ":session" : ""),
+            policy.history_scope === "session"
+              ? id + ":session"
+              : id + ":" + p.revision,
           )
           .digest("hex")
           .slice(0, 40);
@@ -172,6 +171,36 @@ export class Sessions {
         permission: channel.permission ?? p.permission,
       };
       const storedHistory = await memory.readSession(id);
+      // Adopt the newest previous all-persona checkpoint once; it must not be
+      // reset or re-extracted merely because the active persona changes.
+      if (policy.history_scope === "session") {
+        const existing = engine
+          ? await engine.summaryState(id, summaryId)
+          : null;
+        if (
+          engine
+            ? existing.text === undefined && !existing.last_id
+            : !(await memory.readSummary(summaryId))
+        ) {
+          const previous = storedHistory.findLast(
+            (row: any) =>
+              row.summary_id &&
+              row.summary_id !== summaryId &&
+              row.context_policy?.history_scope === "session",
+          );
+          if (previous) {
+            const checkpoint = engine
+              ? await engine.summaryState(id, previous.summary_id)
+              : null;
+            const text = engine
+              ? await engine.readSummary(id, previous.summary_id)
+              : await memory.readSummary(previous.summary_id);
+            if (engine)
+              await engine.summaryState(id, summaryId, { ...checkpoint, text });
+            await memory.writeSummary(summaryId, text, id);
+          }
+        }
+      }
       // Only the final contiguous segment belongs to the current persona version.
       const history = matchingHistory(
         storedHistory,
@@ -264,6 +293,7 @@ export class Sessions {
       ];
       let final = "";
       let measured: any = null;
+      let memoryWriteRejected = false;
       const limit = await this.modelLimit(p.provider);
       const toolList = session.permission === "off" ? [] : tools.list();
       const reserve = Math.max(
@@ -302,7 +332,7 @@ export class Sessions {
         const reply = await llm.chat({
           provider: p.provider,
           messages,
-          tools: toolList,
+          tools: memoryWriteRejected ? [] : toolList,
           onChunk,
         });
         measured = requestUsage(reply.usage, p.provider, limit.tokens);
@@ -332,6 +362,8 @@ export class Sessions {
           } catch (error: any) {
             result = { ok: false, result: error.message };
           }
+          if (!result.ok && ["remember_fact", "edit_facts"].includes(call.name))
+            memoryWriteRejected = true;
           await memory.appendEvent({
             type: "tool",
             channel: "web",

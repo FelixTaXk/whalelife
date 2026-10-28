@@ -65,6 +65,39 @@ async function fixture(t: TestContext) {
   return { root, config, memory, memoryEngine, tools, services, sessions };
 }
 
+test("a rejected fact write disables further tools for this reply instead of repeatedly spending tokens", async (t) => {
+  const f = await fixture(t);
+  let calls = 0;
+  f.services.llm.chat = async (request: any) => {
+    calls++;
+    if (calls === 1)
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "over-limit",
+            name: "edit_facts",
+            arguments: JSON.stringify({ text: "字".repeat(101) }),
+          },
+        ],
+        usage: { prompt_tokens: 100, completion_tokens: 100 },
+      };
+    assert.deepEqual(request.tools, []);
+    assert.match(JSON.stringify(request.messages), /不能超过100/);
+    return {
+      text: "超过100字符，原内容未改动。",
+      toolCalls: [],
+      usage: { prompt_tokens: 200, completion_tokens: 15 },
+    };
+  };
+  assert.match(
+    await f.sessions.chat("one", "写入超过限制的独立事实", () => {}),
+    /未改动/,
+  );
+  assert.equal(calls, 2);
+  assert.equal((await f.memoryEngine.localFacts("one")).text, "");
+});
+
 test("chat tools edit only local facts, next request receives them, and context usage excludes earlier tool rounds", async (t) => {
   const f = await fixture(t);
   await f.memory.writeFacts(["共享事实由用户维护"]);

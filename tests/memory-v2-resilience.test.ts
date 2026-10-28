@@ -104,10 +104,7 @@ async function fixture(t: TestContext) {
   await memory.saveSessionMeta("chat", { context: policy });
   const key =
     "p_" +
-    createHash("sha256")
-      .update("chat:" + p.revision + ":session")
-      .digest("hex")
-      .slice(0, 40);
+    createHash("sha256").update("chat:session").digest("hex").slice(0, 40);
   const seed = async (count: number) => {
     for (let i = 0; i < count; i++)
       await memory.appendEvent({

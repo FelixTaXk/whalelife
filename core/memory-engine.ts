@@ -257,6 +257,7 @@ export class MemoryEngine {
           status: 409,
         });
       const next = append && s.facts.text ? s.facts.text + "\n" + text : text;
+      if (append && s.facts.text.split("\n").includes(text)) return;
       if (charCount(next) > 100)
         throw Error("独立事实合计不能超过100个字符，请精简已有内容后再保存");
       if (next === s.facts.text) return;
