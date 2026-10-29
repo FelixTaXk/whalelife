@@ -1,4 +1,5 @@
 import type { MemoryEngine } from "./memory-engine.ts";
+import { attribution } from "./provenance.ts";
 
 export function registerMemoryTools(tools: any, engine: MemoryEngine) {
   const save = async (id: string, text: string, append = false) => {
@@ -59,6 +60,7 @@ export function registerMemoryTools(tools: any, engine: MemoryEngine) {
           kind: x.kind,
           text: x.text,
           source: x.source,
+          ...attribution(x),
           ts: x.ts,
           outcome: x.outcome,
           reason: x.reason,

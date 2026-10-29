@@ -87,6 +87,7 @@ export async function boot(
       return;
     await memoryEngine.experience(event.session.id, event.source, {
       event_id: event.id,
+      origin: event.origin,
       outcome: event.ok ? "succeeded" : "failed",
       text: `工具 ${event.name} ${event.ok ? "调用完成" : "调用失败"}：${String(JSON.stringify(event.result)).slice(0, 350)}`,
     });

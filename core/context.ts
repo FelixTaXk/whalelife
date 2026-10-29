@@ -1,5 +1,6 @@
 import type { Logger } from "./logger.ts";
 import type { ChannelAPI } from "./channels.ts";
+export type { Origin, OriginDetails } from "./provenance.ts";
 export type { ChannelAPI, ChannelAdapter, ChannelHandle, IncomingMessage, OutgoingMessage, ChannelResult } from "./channels.ts";
 export interface Context {
   logger: Logger;

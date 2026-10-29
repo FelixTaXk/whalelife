@@ -79,6 +79,8 @@
 
 插件是可信的进程内代码，隔离指受管理生命周期与捕获边界中的异常处理。插件不得创建未登记资源或绕过上下文直接执行异步副作用。
 
+新平台和业务通过插件扩展，不在主干添加平台专属判断。渠道可声明 `name`；工具、能力经历和扩展记忆可声明 `origin: { platform, action }`，实际插件归属由核心填写。来源会随当前对话、历史、检索和摘要传给模型，同一会话允许混合来源，外部内容不自动成为用户观点。具体字段、长度及旧数据兼容见 [渠道接口](architecture/CHANNELS.md) 和 [记忆说明](architecture/MEMORY.md)。
+
 ## 验证
 
 使用 Node 24 执行 `npm test` 和 `npm run check`。`node tests/acceptance.ts` 在核心已监听 9270 时进行真实供应商验收（会消耗少量 token，并写入带“验收测试”标记的记忆）。报告和证据在本机 `docs/M0-REPORT.md`、`docs/acceptance/`。

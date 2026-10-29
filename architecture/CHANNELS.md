@@ -55,7 +55,7 @@ export async function apply(ctx: Context) {
 }
 ```
 
-`register({id, account, persona?, permission?, send})` 返回：
+`register({id, name?, account, persona?, permission?, send})` 返回：
 
 | 方法 | 行为 |
 | --- | --- |
@@ -69,6 +69,10 @@ export async function apply(ctx: Context) {
 `ctx.channels.send({channel,account,peer,messageId,text}, options?)` 是同插件已注册账号的直接发送便捷入口。它不能使用其他插件的账号。`send` 不是授权机制：插件须在自己的工具权限与业务授权范围内调用。
 
 ## 路由、人格与信任
+
+渠道由插件注册，不在核心维护平台枚举或按平台名称分支。`id` 是稳定渠道标识，`name` 是可选的平台显示名（1–32 个 Unicode 码点、不含控制字符），未填时显示 `id`。核心绑定实际插件归属，将平台来源写入每条消息并传给模型。来源来自注册信息，外部入站消息不能指定 `origin/platform/action` 或路由策略。显示名只是资料，不是提示词指令。
+
+例如插件注册 `{id:'nebula',name:'星港交流',account:'main',persona:'a',send}` 即可接入一个核心从未见过的平台，无需改主干。平台适配、业务动作和配置属于插件；核心只校验通用接口和统一处理会话、记忆及回执。业务经历的扩展方式见 [MEMORY.md](MEMORY.md)。
 
 路由键为 `(channel, account, peer)`；`sender` 不拆分群聊会话。平台插件必须使用不会相互冲突的 peer 命名，例如 `direct:123`、`group:123`。不同 channel、不同登录账号或不同 peer 默认得到不同 `ch_<hash>` 会话；同一路由重启后仍使用原会话。显式绑定让多个渠道共享一个已有会话及其上下文，且不会重置历史。
 

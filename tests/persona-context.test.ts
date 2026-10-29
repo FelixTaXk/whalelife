@@ -143,7 +143,7 @@ test("persona changes isolate history and summaries while retaining the saved tr
   await talk("继续 A");
   assert.deepEqual(
     requests[1].slice(1).map((x: any) => x.content),
-    ["首次 A", "回复 1", "继续 A"],
+    ['【历史来源 {"channel":"web"}】\n首次 A', "回复 1", "继续 A"],
   );
   assert.equal(contexts[1].contextReset, false);
   const a = await persona(root, config, "a");

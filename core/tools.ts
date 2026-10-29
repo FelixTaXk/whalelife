@@ -1,6 +1,7 @@
 import { decision } from "./permission.ts";
 import type { Logger } from "./logger.ts";
 import { randomUUID } from "node:crypto";
+import { pluginOrigin } from "./provenance.ts";
 export class Tools {
   entries = new Map<string, any>();
   logger: Logger;
@@ -12,7 +13,8 @@ export class Tools {
   }
   register(tool: any) {
     if (this.entries.has(tool.name)) throw Error("工具重名：" + tool.name);
-    this.entries.set(tool.name, tool);
+    const origin = pluginOrigin(tool.owner || "core", tool.origin);
+    this.entries.set(tool.name, { ...tool, origin });
     return () => {
       this.entries.delete(tool.name);
     };
@@ -42,6 +44,7 @@ export class Tools {
           id: callId,
           name,
           source: tool?.owner || "core",
+          origin: { ...(tool?.origin ?? { plugin: "core" }), action: tool?.origin?.action ?? "工具调用" },
           session,
           ok,
           result,

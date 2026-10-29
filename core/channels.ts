@@ -3,6 +3,7 @@ import { safeId } from "./memory.ts";
 import type { Memory } from "./memory.ts";
 import type { Sessions } from "./session.ts";
 import type { Permission } from "./permission.ts";
+import { validateOrigin, type Origin } from "./provenance.ts";
 
 export type ChannelRoute = {
   channel: string;
@@ -13,6 +14,7 @@ export type ChannelRoute = {
   persona: string;
   permission: Permission;
   signal?: AbortSignal;
+  origin?: Origin;
 };
 export type IncomingMessage = {
   peer: string;
@@ -31,6 +33,7 @@ export type OutgoingMessage = {
 };
 export type ChannelAdapter = {
   id: string;
+  name?: string;
   account: string;
   persona?: string;
   permission?: Permission;
@@ -127,6 +130,7 @@ export class Channels {
     return {
       channel: reg.adapter.id, account: reg.adapter.account, peer,
       sender: message?.sender, messageId: message?.messageId,
+      origin: { plugin: reg.owner, channel: reg.adapter.id, platform: reg.adapter.name ?? reg.adapter.id },
       ...this.policy(reg.adapter), signal,
     };
   }
@@ -250,6 +254,7 @@ export class Channels {
         try {
           await this.sessions.services.memoryEngine?.experience(id, "channel:" + reg.owner, {
             event_id: receipt.delivery_id, outcome: "succeeded",
+            origin: { ...route.origin, action: "发送消息" },
             text: Array.from("已通过 " + route.channel + " 向 " + route.peer + " 发送文本：" + receipt.text!).slice(0, 500).join(""),
           });
         } catch (error: any) {
@@ -276,7 +281,7 @@ export class Channels {
   private incoming(reg: Registration, input: IncomingMessage | SendMessage, options: ReceiveOptions, direction: "in" | "out") {
     this.alive(reg, options.signal);
     if (!input || typeof input !== "object") throw Error("消息无效");
-    for (const key of ["persona", "permission", "session", "sessionId", "owner", "channel", "account"])
+    for (const key of ["persona", "permission", "session", "sessionId", "owner", "channel", "account", "origin", "platform", "action"])
       if (Object.hasOwn(input, key)) throw Error("消息不能指定路由策略：" + key);
     const peer = identifier(input.peer, "peer"), messageId = identifier(input.messageId, "messageId"), text = messageText(input.text);
     const sender = direction === "in" ? identifier((input as IncomingMessage).sender, "sender") : undefined;
@@ -326,12 +331,15 @@ export class Channels {
   /** Web keeps its explicit session and streaming protocol, sharing the trusted dispatch path. */
   web(id: string, text: string, onChunk: (text: string) => void, onContext?: (value: any) => void, expectedPersona?: string) {
     safeId(id);
-    return this.generate(id, text, { channel: "web", account: "local", peer: id, ...this.policy({ id: "web", account: "local" }) }, onChunk, onContext, expectedPersona);
+    return this.generate(id, text, { channel: "web", account: "local", peer: id,
+      origin: { plugin: "core", channel: "web", platform: "控制台" },
+      ...this.policy({ id: "web", account: "local" }) }, onChunk, onContext, expectedPersona);
   }
   register(adapter: ChannelAdapter, owner = "core"): ChannelHandle {
     if (!adapter || !/^[a-z][a-z0-9-]{0,39}$/.test(adapter.id) || adapter.id === "web")
       throw Error("渠道 ID 无效或保留");
     identifier(adapter.account, "account");
+    validateOrigin({ plugin: owner, ...(adapter.name === undefined ? {} : { platform: adapter.name }) });
     if (typeof adapter.send !== "function") throw Error("渠道需要 send 文本发送函数");
     this.policy(adapter);
     const key = this.registrationKey(adapter.id, adapter.account);

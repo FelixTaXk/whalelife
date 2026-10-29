@@ -3,6 +3,7 @@ import { join, relative, resolve, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { atomic, safeId, type Memory } from "./memory.ts";
 import { applyCognitions, cognitionRevision, undoCognition, type CognitionMaintenance } from "./cognition.ts";
+import { attribution, collectOrigins, originOf, pluginOrigin, validateAttribution, validateOrigin } from "./provenance.ts";
 
 export const charCount = (text: string) => Array.from(text).length;
 export function estimateTokens(text: string) {
@@ -98,6 +99,7 @@ export function validateMemoryState(s: any) {
   const byId = new Map(s.records.map((x: any) => [x.id, x]));
   if (byId.size !== s.records.length) throw Error("记忆ID重复");
   for (const record of s.records) {
+    validateAttribution(record);
     if (record.kind === "cognition" && record.format_version === 2 && charCount(record.text) > 80)
       throw Error("新版长期认知每条不能超过80字符");
     if (record.uncertain !== undefined && typeof record.uncertain !== "boolean")
@@ -116,6 +118,7 @@ export function validateMemoryState(s: any) {
       throw Error("认知复核依据损坏");
   }
   for (const [key, value] of Object.entries<any>(s.summaries)) {
+    if (value && typeof value === "object") validateAttribution(value);
     safeId(key);
     if (
       !object(value) ||
@@ -263,8 +266,8 @@ export class MemoryEngine {
         s.facts.revision,
         s.settings,
         s.memberships,
-        s.records.map((x) => [x.id, x.status, x.pinned, x.text, x.uncertain]),
-        Object.entries(s.summaries).map(([key, x]) => [key, x.text, x.mode]),
+        s.records.map((x) => [x.id, x.status, x.pinned, x.text, x.uncertain, attribution(x)]),
+        Object.entries(s.summaries).map(([key, x]) => [key, x.text, x.mode, attribution(x)]),
         await this.memory.readFacts(),
       ]),
     );
@@ -365,6 +368,7 @@ export class MemoryEngine {
     return this.inspect(id);
   }
   async record(id: string, input: any) {
+    const origin = input.origin === undefined ? undefined : validateOrigin(input.origin);
     const kind = input.kind;
     if (!["episode", "cognition"].includes(kind) && !this.types.has(kind))
       throw Error("记忆类型未注册或已停用");
@@ -399,6 +403,7 @@ export class MemoryEngine {
         kind,
         text: input.text,
         source: String(input.source || "core"),
+        ...(origin ? { origin } : {}),
         ts: new Date().toISOString(),
         status: "active",
         pinned: false,
@@ -443,6 +448,7 @@ export class MemoryEngine {
         kind: "episode",
         text: row.text,
         source: row.role === "user" ? "user" : "assistant",
+        ...(originOf(row) ? { origin: originOf(row) } : {}),
         ts: row.ts,
         status: muted.get(rid)?.status || "active",
         pinned: muted.get(rid)?.pinned || false,
@@ -528,7 +534,7 @@ export class MemoryEngine {
     );
     const indexed = candidates.map((item) => ({
       item,
-      terms: words(item.text),
+      terms: words(item.text + " " + JSON.stringify(attribution(item))),
     }));
     const frequency = new Map<string, number>();
     for (const entry of indexed)
@@ -579,6 +585,7 @@ export class MemoryEngine {
         id: item.id,
         kind: item.kind,
         source: item.source,
+        ...attribution(item),
         ts: item.ts,
         text: (offset ? "…" : "") + cut(item.text.slice(offset), 500),
         outcome: item.outcome || undefined,
@@ -739,7 +746,7 @@ export class MemoryEngine {
     let used = 0;
     for (const { record } of ranked) {
       const candidate = { id: record.id, text: record.text, status: record.status,
-        uncertain: record.uncertain ?? true, revision: cognitionRevision(record) };
+        uncertain: record.uncertain ?? true, revision: cognitionRevision(record), ...attribution(record) };
       const size = estimateTokens(JSON.stringify(candidate));
       if (used + size > 800) continue;
       result.push(candidate);
@@ -760,9 +767,9 @@ export class MemoryEngine {
       throw Error("短期压缩不能产生或修订长期认知");
     if (value.mode === "long" && cognitions.some((x) => typeof x?.text !== "string" || charCount(x.text) > 80))
       throw Error("长期认知每条不能超过80字符");
-    const known = new Set(
-      (await this.memory.readSession(id)).map((x: any) => x.id),
-    );
+    const evidenceRows = await this.memory.readSession(id);
+    const byEvidence = new Map(evidenceRows.map((x: any) => [x.id, x]));
+    const known = new Set(evidenceRows.map((x: any) => x.id));
     if (
       !Array.isArray(cognitions) ||
       cognitions.length > 2 ||
@@ -783,6 +790,10 @@ export class MemoryEngine {
           existing.mode === value.mode && existing.start_id === value.start_id &&
           existing.covered === value.covered) return;
       applyCognitions(s.records, key, value, cognitions, known, maintenance);
+      for (const record of s.records) {
+        if (record.kind !== "cognition" || !record.evidence?.some((id: string) => cognitions.some((x) => x.evidence.includes(id)))) continue;
+        Object.assign(record, collectOrigins(undefined, record.evidence.map((id: string) => byEvidence.get(id))));
+      }
       s.summaries = { ...s.summaries, [key]: value };
     });
   }
@@ -830,7 +841,7 @@ export class MemoryEngine {
       },
       recordExperience: async (id: string, input: any) => {
         check();
-        return this.experience(id, owner, input);
+        return this.experience(id, owner, { ...input, origin: pluginOrigin(owner, input.origin) });
       },
       registerType: (name: string, version = 1) => {
         check();
@@ -851,6 +862,7 @@ export class MemoryEngine {
       },
       saveExtension: async (id: string, input: any) => {
         check();
+        const origin = pluginOrigin(owner, input.origin);
         if (
           !input.kind?.startsWith(namespace) ||
           this.types.get(input.kind)?.owner !== owner
@@ -895,6 +907,7 @@ export class MemoryEngine {
             kind: input.kind,
             text: input.text,
             source: owner,
+            origin,
             ts: new Date().toISOString(),
             status: input.active === false ? "archived" : "active",
             pinned: false,
