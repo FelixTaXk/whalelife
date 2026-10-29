@@ -6,22 +6,27 @@ import { pathToFileURL } from "node:url";
 import { parse } from "yaml";
 import { atomic } from "./memory.ts";
 import type { Logger } from "./logger.ts";
+import { PluginState, validPluginId } from "./plugin-state.ts";
 export class Runtime {
   bus = new Cordis();
   records = new Map<string, any>();
   services = new Map<string, any>();
   root: string;
   logger: Logger;
+  pluginState: PluginState;
+  private actions: Promise<unknown> = Promise.resolve();
   constructor(root: string, logger: Logger) {
     this.root = root;
     this.logger = logger;
+    this.pluginState = new PluginState(root);
     this.bus.on("internal/error", (...args: any[]) =>
       logger.error("cordis 错误", args.map(String)),
     );
   }
   list() {
     return [...this.records.values()].map(
-      ({ id, manifest, status, error }) => ({ ...manifest, id, status, error }),
+      ({ id, manifest, status, error }) => ({ ...manifest, id, status, error,
+        enabled: manifest.builtin || this.pluginState.enabled(id) }),
     );
   }
   async builtin(id: string, value: any, setup?: (ctx: any) => any) {
@@ -41,24 +46,65 @@ export class Runtime {
     );
   }
   async scan() {
-    await mkdir(join(this.root, "plugins"), { recursive: true });
-    for (const dir of await readdir(join(this.root, "plugins"), {
-      withFileTypes: true,
-    }))
-      if (dir.isDirectory()) await this.loadPath(dir.name);
+    return this.serial(async () => {
+      await mkdir(join(this.root, "plugins"), { recursive: true });
+      for (const dir of await readdir(join(this.root, "plugins"), {
+        withFileTypes: true,
+      }))
+        if (dir.isDirectory()) await this.loadPath(dir.name);
+      await this.resumeBlocked();
+    });
+  }
+  private serial<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.actions.then(task);
+    this.actions = result.catch(() => {});
+    return result;
+  }
+  private lookup(record: any, name: string) {
+    let at = record;
+    while (at) {
+      if (at.local?.has(name)) return at.local.get(name);
+      at = at.parent;
+    }
+    return this.services.get(name)?.value;
+  }
+  private async children(record: any) {
+    let dirs;
+    try { dirs = await readdir(join(record.dir, "sub"), { withFileTypes: true }); }
+    catch (error: any) { if (error.code === "ENOENT") return; throw error; }
+    for (const child of dirs) {
+      if (!child.isDirectory() || (Array.isArray(record.manifest.sub) && !record.manifest.sub.includes(child.name))) continue;
+      const id = record.id + "/" + child.name;
+      if (this.records.get(id)?.parent !== record) await this.loadPath(id);
+    }
+  }
+  private async resumeBlocked() {
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (const record of [...this.records.values()]) {
+        if (record.status !== "blocked" || !record.dir || !this.pluginState.enabled(record.id)) continue;
+        const parent = record.parent ? this.records.get(record.parent.id) : undefined;
+        if (parent && parent.status !== "active") continue;
+        const dependencies = new Set([...(record.manifest.depends ?? []),
+          ...[...(record.dependencies ?? [])].filter((name) => !record.provided?.has(name)), ...(record.missingDependencies ?? [])]);
+        if ([...dependencies].some((name) => this.lookup({ parent }, name as string) === undefined)) continue;
+        const loaded = await this.loadPath(record.id);
+        if (loaded.status === "active") progress = true;
+      }
+    }
   }
   async loadPath(id: string) {
+    if (!validPluginId(id)) throw Error("插件 ID 无效");
+    if (this.records.get(id)?.status === "active") return this.records.get(id);
     const parts = id.split("/");
-    if (parts.some((p) => !/^[a-z][a-z0-9-]*$/.test(p)))
-      throw Error("插件 ID 无效");
     const parent =
       parts.length > 1
         ? this.records.get(parts.slice(0, -1).join("/"))
         : undefined;
     const dir = join(this.root, "plugins", parts.join("/sub/"));
     try {
-      if (parts.length > 1 && !["active", "loading"].includes(parent?.status))
-        throw Error("父插件缺失");
+      await this.pluginState.load();
       const manifest = parse(await readFile(join(dir, "plugin.yaml"), "utf8"));
       for (const key of ["id", "name", "description", "version"])
         if (typeof manifest[key] !== "string")
@@ -66,6 +112,20 @@ export class Runtime {
       if (manifest.id !== basename(dir))
         throw Error("manifest ID 必须匹配目录");
       manifest.builtin = false;
+      if (manifest.depends !== undefined && (!Array.isArray(manifest.depends) || manifest.depends.some((name: any) => typeof name !== "string")))
+        throw Error("插件依赖必须是服务名称数组");
+      const enabled = this.pluginState.enabled(id);
+      const missing = (manifest.depends ?? []).filter((name: string) => this.lookup({ parent }, name) === undefined);
+      const blocked = parts.length > 1 && !["active", "loading"].includes(parent?.status)
+        ? "父插件未启用：" + parts.slice(0, -1).join("/")
+        : missing.length ? "等待依赖：" + missing.join("、") : undefined;
+      if (!enabled || blocked) {
+        const record = { id, manifest, dir, parent, status: enabled ? "blocked" : "stopped",
+          error: enabled ? blocked : undefined, dependencies: new Set(manifest.depends ?? []), local: new Map() };
+        this.records.set(id, record);
+        await this.children(record);
+        return record;
+      }
       const module = await import(
         pathToFileURL(join(dir, "index.ts")).href + "?v=" + crypto.randomUUID()
       );
@@ -99,6 +159,8 @@ export class Runtime {
       status: "loading",
       local: new Map(),
       dependencies: new Set(),
+      missingDependencies: new Set(),
+      provided: new Set(),
       pending: [],
     };
     this.records.set(id, record);
@@ -111,7 +173,7 @@ export class Runtime {
       return this.services.get(name)?.value;
     };
     const fail = (error: any) => {
-      record.status = "failed";
+      record.status = record.missingDependencies.size ? "blocked" : "failed";
       record.error = error.message;
       this.logger.error("插件失败", { id, error });
     };
@@ -123,7 +185,10 @@ export class Runtime {
       let pluginChannels: any;
       const get = (name: string, strict = true) => {
         const value = lookup(name);
-        if (value === undefined && strict) throw Error("依赖缺失：" + name);
+        if (value === undefined && strict) {
+          record.missingDependencies.add(name);
+          throw Error("依赖缺失：" + name);
+        }
         if (value !== undefined) record.dependencies.add(name);
         if (name === "channels" && value?.plugin) {
           pluginChannels ??= value.plugin(id, (dispose: any) =>
@@ -189,6 +254,7 @@ export class Runtime {
           if (record.local.has(name) || (!parent && this.services.has(name)))
             throw Error("服务重名：" + name);
           record.local.set(name, value);
+          record.provided.add(name);
           if (!parent) this.services.set(name, { value, owner: id });
           native.effect(() => () => {
             record.local.delete(name);
@@ -273,24 +339,7 @@ export class Runtime {
         await apply(ctx);
         record.status = "active";
         await Promise.all(record.pending);
-        if (dir) {
-          let children: string[] = [];
-          try {
-            children = (
-              await readdir(join(dir, "sub"), { withFileTypes: true })
-            )
-              .filter((d) => d.isDirectory())
-              .map((d) => d.name);
-          } catch (error: any) {
-            if (error.code !== "ENOENT") throw error;
-          }
-          for (const child of children)
-            if (
-              (!Array.isArray(manifest.sub) || manifest.sub.includes(child)) &&
-              this.records.get(id + "/" + child)?.status !== "active"
-            )
-              await this.loadPath(id + "/" + child);
-        }
+        if (dir) await this.children(record);
         this.logger.info("插件加载", { id });
       } catch (error) {
         fail(error);
@@ -299,7 +348,7 @@ export class Runtime {
       }
     });
     await complete;
-    if (record.status === "failed") {
+    if (["failed", "blocked"].includes(record.status)) {
       for (const child of this.records.values())
         if (child.parent === record && child.status === "active")
           await this.stop(child.id, true);
@@ -307,15 +356,16 @@ export class Runtime {
     }
     return record;
   }
-  async stop(id: string, internal = false) {
+  async stop(id: string, internal = false, reason?: string) {
     const record = this.records.get(id);
     if (!record) throw Error("插件不存在");
     if (record.manifest.builtin && !internal) throw Error("内置插件不可卸载");
     for (const child of this.records.values())
       if (child.parent === record && child.status === "active")
-        await this.stop(child.id, true);
+        await this.stop(child.id, true, "父插件未启用：" + id);
     record.fork?.dispose();
-    if (record.status !== "failed") record.status = "stopped";
+    if (record.status !== "failed") { record.status = "stopped"; record.error = undefined; }
+    if (reason && this.pluginState.enabled(id)) { record.status = "blocked"; record.error = reason; }
     this.logger.info("插件卸载", { id });
     for (const other of this.records.values())
       if (
@@ -329,14 +379,29 @@ export class Runtime {
           return !this.services.has(n);
         })
       )
-        await this.stop(other.id, true);
+        await this.stop(other.id, true, "等待依赖恢复");
   }
   async action(id: string, action: string) {
-    const record = this.records.get(id);
-    if (record?.manifest.builtin) throw Error("内置插件不可管理");
-    if (action === "stop") return this.stop(id);
-    if (action === "reload" && record) await this.stop(id);
-    if (!["start", "reload"].includes(action)) throw Error("操作无效");
-    return this.loadPath(id);
+    return this.serial(async () => {
+      if (!validPluginId(id)) throw Error("插件 ID 无效");
+      const record = this.records.get(id);
+      if (!record) throw Error("插件不存在");
+      if (record?.manifest.builtin) throw Error("内置插件不可管理");
+      if (!["stop", "start", "reload"].includes(action)) throw Error("操作无效");
+      await this.pluginState.load();
+      if (action === "stop") {
+        await this.pluginState.setEnabled(id, false);
+        return this.stop(id);
+      }
+      if (action === "start") {
+        if (record.parent && this.records.get(record.parent.id)?.status !== "active")
+          throw Error("请先启用父插件：" + record.parent.id);
+        await this.pluginState.setEnabled(id, true);
+      }
+      if (action === "reload" && record) await this.stop(id);
+      const loaded = await this.loadPath(id);
+      await this.resumeBlocked();
+      return loaded;
+    });
   }
 }

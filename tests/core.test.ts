@@ -68,7 +68,7 @@ test("cordis nested cleanup, independent child, reload, bad plugin isolation", a
   await runtime.action("hello/extra", "start");
   assert.equal(runtime.records.get("hello/extra").status, "active");
   await runtime.stop("hello");
-  assert.equal(runtime.records.get("hello/extra").status, "stopped");
+  assert.equal(runtime.records.get("hello/extra").status, "blocked");
   assert.ok(!runtime.services.has("hello"));
   assert.equal(tools.list().length, 0);
   await runtime.action("hello", "reload");
