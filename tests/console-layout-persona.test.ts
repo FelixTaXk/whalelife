@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { join } from "node:path";
 import { Memory } from "../core/memory.ts";
 import { MemoryAdmin } from "../core/memory-admin.ts";
@@ -38,7 +37,7 @@ test("chat context uses a compact line while memory retains detailed usage", asy
 });
 
 test("archive records the last used persona without binding or changing shared context", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whale-last-persona-"));
+  const root = await temporaryDirectory("whale-last-persona-");
   const logger = new Logger(join(root, "logs")),
     memory = new Memory(join(root, "memory"), logger);
   await memory.init();

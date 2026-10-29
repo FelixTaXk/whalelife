@@ -1,14 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { once } from "node:events";
 import { WebSocket } from "ws";
 import { Logger } from "../core/logger.ts";
 import { startWeb } from "../core/web.ts";
 test("authenticated HTTP/WS, cross-origin rejection and same-source logs", async () => {
-  const logger = new Logger(await mkdtemp(join(tmpdir(), "whale-web-")));
+  const logger = new Logger(await temporaryDirectory("whale-web-"));
   const config = {
     web: { host: "127.0.0.1", port: 19271, password: "测试密码" },
     providers: [],

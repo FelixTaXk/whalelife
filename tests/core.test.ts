@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, cp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile, readFile, cp } from "node:fs/promises";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { basename, join, resolve } from "node:path";
 import { Logger } from "../core/logger.ts";
 import { Memory } from "../core/memory.ts";
@@ -9,7 +9,7 @@ import { Runtime } from "../core/runtime.ts";
 import { Tools } from "../core/tools.ts";
 import { decision } from "../core/permission.ts";
 test("JSONL truncation recovery preserves complete records and next append", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whale-memory-"));
+  const root = await temporaryDirectory("whale-memory-");
   const logger = new Logger(join(root, "logs"));
   const mem = new Memory(join(root, "memory"), logger);
   await mem.init();
@@ -46,8 +46,8 @@ test("permissions deny off, allow safe, require approval, respect override", () 
   assert.equal(decision("full", "full"), "allow");
   assert.equal(decision("full", "ask", "ask"), "ask");
 });
-test("cordis nested cleanup, independent child, reload, bad plugin isolation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whale-runtime-"));
+test("cordis nested cleanup, independent child, reload, bad plugin isolation", async (t) => {
+  const root = await temporaryDirectory("whale-runtime-");
   await mkdir(join(root, "plugins"));
   await cp(resolve("examples/plugins/hello"), join(root, "plugins/hello"), {
     recursive: true,
@@ -55,6 +55,7 @@ test("cordis nested cleanup, independent child, reload, bad plugin isolation", a
   });
   const logger = new Logger(join(root, "logs"));
   const runtime = new Runtime(root, logger);
+  t.after(() => runtime.bus.stop());
   const tools = new Tools(logger);
   await runtime.builtin("tools", tools);
   await runtime.bus.start();
@@ -90,7 +91,7 @@ test("cordis nested cleanup, independent child, reload, bad plugin isolation", a
   await runtime.bus.stop();
 });
 test("logger appends across restart, redacts secrets and bounds web ring", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whale-log-"));
+  const root = await temporaryDirectory("whale-log-");
   const one = new Logger(root, { max_web_lines: 2 }, ["secret"]);
   one.info("first secret");
   one.info("second");

@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 import { boot } from "../core/index.ts";
@@ -46,7 +46,7 @@ test("console config API persists model selection, protects secrets and changes 
   });
   await new Promise<void>((r) => provider.listen(0, "127.0.0.1", r));
   const providerPort = (provider.address() as any).port;
-  const root = await mkdtemp(join(tmpdir(), "whale-console-"));
+  const root = await temporaryDirectory("whale-console-");
   await mkdir(join(root, "config"));
   const config = {
     web: { host: "127.0.0.1", port: 19274 },

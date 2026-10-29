@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { join } from "node:path";
 import { Logger } from "../core/logger.ts";
 import { ModelConfig, resolveChatModel } from "../core/model-config.ts";
@@ -11,7 +11,7 @@ const { renderBindings, bindBindings } = await import(
 );
 
 async function fixture(activePersona = "whale") {
-  const root = await mkdtemp(join(tmpdir(), "whale-bindings-"));
+  const root = await temporaryDirectory("whale-bindings-");
   await mkdir(join(root, "config"));
   const config: any = {
     providers: [

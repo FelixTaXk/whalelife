@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { join } from "node:path";
 import { Logger } from "../core/logger.ts";
 import { LLM } from "../core/llm.ts";
@@ -14,7 +14,7 @@ import {
 } from "../core/model-config.ts";
 
 async function fixture(alter?: (config: any) => void) {
-  const root = await mkdtemp(join(tmpdir(), "whale-context-window-"));
+  const root = await temporaryDirectory("whale-context-window-");
   await mkdir(join(root, "config"));
   const config: any = {
     providers: [

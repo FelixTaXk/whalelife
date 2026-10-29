@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Sessions } from "../core/session.ts";
@@ -11,7 +11,7 @@ import { persona } from "../core/persona.ts";
 import { contextPolicy, requestUsage } from "../core/session-context.ts";
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "whale-session-context-"));
+  const root = await temporaryDirectory("whale-session-context-");
   const logger = new Logger(join(root, "logs"));
   const memory = new Memory(join(root, "memory"), logger);
   await memory.init();

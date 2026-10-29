@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { boot } from "../core/index.ts";
 
 test("memory console routes require authentication and support revision-safe editing, browsing and recovery", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whale-memory-web-"));
+  const root = await temporaryDirectory("whale-memory-web-");
   await mkdir(join(root, "config"));
   await writeFile(
     join(root, "config/config.json"),

@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { boot } from "../core/index.ts";
 
 test("memory V2 routes enforce login, local-fact limits and revisions, and explicit sharing settings", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whale-memory-v2-web-"));
+  const root = await temporaryDirectory("whale-memory-v2-web-");
   await mkdir(join(root, "config"));
   await mkdir(join(root, "memory"));
   const shared = "# facts\n仅用户维护的共享事实\n";

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Sessions } from "../core/session.ts";
@@ -17,7 +17,7 @@ test("default session history and summary survive persona switches and edits, wi
     contextPolicy({}, { history_scope: "persona" }).history_scope,
     "persona",
   );
-  const root = await mkdtemp(join(tmpdir(), "whale-shared-personas-"));
+  const root = await temporaryDirectory("whale-shared-personas-");
   const logger: any = { info() {}, warn() {}, error() {} };
   const memory = new Memory(join(root, "memory"), logger);
   await memory.init();
@@ -83,7 +83,7 @@ test("default session history and summary survive persona switches and edits, wi
 });
 
 test("persona changes isolate history and summaries while retaining the saved transcript", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whale-persona-context-"));
+  const root = await temporaryDirectory("whale-persona-context-");
   const logger = new Logger(join(root, "logs"));
   const memory = new Memory(join(root, "memory"), logger);
   await memory.init();

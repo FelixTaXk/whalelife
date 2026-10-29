@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { temporaryDirectory } from "./temporary-directory.ts";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -17,7 +17,7 @@ import { connect, type Socket } from "node:net";
 import { resolveModel } from "../core/model-config.ts";
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "whale-models-"));
+  const root = await temporaryDirectory("whale-models-");
   await mkdir(join(root, "config"));
   const config: any = {
     providers: [
