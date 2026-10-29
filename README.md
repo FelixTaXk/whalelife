@@ -35,6 +35,8 @@
 
 插件可显式调用 `ctx.llm.chat({ model: '<模型配置 ID>', messages })`，模型 ID 对应 `config.models[].id`。配置 ID 与提供方的模型名称是两个字段。
 
+插件自行决定调用频率、是否设置费用预算及超额处理；主干不统一设置插件额度或因插件预算拦截调用。未来若接入插件用量上报，仅用于汇总展示，目前尚未实现。
+
 模型页按服务连接分组，一个连接可管理多个模型。填写连接后点击“获取模型列表”，搜索并勾选多个模型批量添加；已添加模型会标记，重复添加不会生成新记录。也可用“自定义模型”手动填写模型 ID。连接地址、密钥、代理与超时共享，模型参数与使用选择独立。获取列表不会保存连接或切换模型；支持 OpenAI 兼容 `/models`，DashScope 原生嵌入接口使用自定义添加。
 
 ## 配置与记忆
@@ -85,6 +87,6 @@
 
 使用 Node 24 执行 `npm test` 和 `npm run check`。`node tests/acceptance.ts` 在核心已监听 9270 时进行真实供应商验收（会消耗少量 token，并写入带“验收测试”标记的记忆）。报告和证据在本机 `docs/M0-REPORT.md`、`docs/acceptance/`。
 
-本机需求文档：`docs/HANDOFF-CODEX.md`、`docs/CORE-DESIGN.md`、`docs/PLUGIN-SPEC.md`。通用文本渠道与本地长期检索记忆已实现；QQ等具体平台插件、审批流 UI、插件直接调用模型的统一计费仍留待后续。控制台改造记录和截图见 `docs/CONSOLE-REPORT.md`、`docs/console-redesign/`。
+本机需求文档：`docs/HANDOFF-CODEX.md`、`docs/CORE-DESIGN.md`、`docs/PLUGIN-SPEC.md`。通用文本渠道与本地长期检索记忆已实现；QQ等具体平台插件、审批流 UI、插件上报用量的汇总展示仍留待后续。控制台改造记录和截图见 `docs/CONSOLE-REPORT.md`、`docs/console-redesign/`。
 
 `docs/`、`memory/`、`logs/`、`config/`、`runtime/` 和插件 `data/` 均不提交。公开配置模板不预选任何提供商或模型。
