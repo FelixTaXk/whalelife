@@ -46,6 +46,19 @@ export class Sessions {
       this.flights.delete(flight);
     }
   }
+  create(name = "", externalSignal?: AbortSignal) {
+    return this.operation(externalSignal, async (signal) => {
+      const check = () => {
+        signal.throwIfAborted();
+        if (this.memoryMaintenance) throw Error("记忆恢复中，请稍后新建会话");
+      };
+      check();
+      if (typeof name !== "string" || name.length > 100) throw Error("会话名称最长100字");
+      const id = "plugin_" + crypto.randomUUID().replaceAll("-", "");
+      await this.services.memory.saveSessionMeta(id, name ? { name } : {}, check);
+      return id;
+    });
+  }
   async modelLimit(provider: any, signal?: AbortSignal) {
     signal?.throwIfAborted();
     if (provider.context_window)

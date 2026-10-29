@@ -117,6 +117,7 @@ export async function boot(
     services.channels.beginClose();
     runtime.beginClose();
     await Promise.all([web.close(), sessions.close(), services.channels.close(), runtime.bus.stop()]);
+    await runtime.events.drain();
     await memory.queue;
   })();
   return { config, ...services, runtime, close };

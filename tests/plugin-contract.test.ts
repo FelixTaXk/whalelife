@@ -144,3 +144,50 @@ test("core shutdown cancels plugin model work and HTTP handlers before waiting f
   await closing;
   assert.ok(ctx.signal.aborted);
 });
+
+test("plugin session creation is excluded from memory restore, including queued admission", async (t) => {
+  const { app, plugin } = await fixture(t);
+  const { ctx } = plugin();
+  app.sessions.memoryMaintenance = true;
+  await assert.rejects(ctx.sessions.create("blocked"), /记忆恢复/);
+  app.sessions.memoryMaintenance = false;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const lock = app.memory.serial(() => gate);
+  const creation = ctx.sessions.create("queued");
+  const rejected = assert.rejects(creation, /记忆恢复/);
+  try {
+    await new Promise<void>((r) => setImmediate(r));
+    app.sessions.memoryMaintenance = true;
+  } finally { release(); }
+  await lock; await rejected;
+  app.sessions.memoryMaintenance = false;
+  assert.deepEqual(await ctx.sessions.list(), []);
+  const id = await ctx.sessions.create("normal");
+  assert.equal((await ctx.sessions.list())[0].id, id);
+});
+
+test("shutdown waits for admitted plugin handlers and event cleanup after cancellation", async (t) => {
+  const { app, plugin, request } = await fixture(t);
+  const { ctx } = plugin();
+  let enterWeb!: () => void, enterEvent!: () => void, release!: () => void;
+  const enteredWeb = new Promise<void>((r) => { enterWeb = r; });
+  const enteredEvent = new Promise<void>((r) => { enterEvent = r; });
+  const gate = new Promise<void>((r) => { release = r; });
+  let webDone = false, eventDone = false, closed = false;
+  ctx.web.api("/plugins/contract-check/cleanup", async (_req: any, res: any) => {
+    enterWeb(); await gate; webDone = true; if (!res.writableEnded) res.end("done");
+  });
+  ctx.on("plugin:contract-check:cleanup", async () => { enterEvent(); await gate; eventDone = true; });
+  ctx.emit("plugin:contract-check:cleanup", {});
+  const response = request("/plugins/contract-check/cleanup", {});
+  await Promise.all([enteredWeb, enteredEvent]);
+  const closing = app.close().then(() => { closed = true; });
+  try {
+    assert.equal((await response).status, 503);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(closed, false, "closing the HTTP response must not discard running handler cleanup");
+  } finally { release(); }
+  await closing;
+  assert.ok(webDone && eventDone && closed);
+});

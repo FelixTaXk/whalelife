@@ -9,8 +9,15 @@ export interface PluginWeb {
 }
 export class PluginWebRegistry {
   private routes = new Map<string, { handler: PluginHandler; signal: AbortSignal; entry?: PluginPage }>();
+  private controller = new AbortController();
+  private pending = new Set<Promise<unknown>>();
+  async close() {
+    this.controller.abort(Error("插件页面服务已关闭"));
+    await Promise.allSettled([...this.pending]);
+  }
   pages() { return [...this.routes.values()].flatMap((r) => r.entry && !r.signal.aborted ? [{ ...r.entry }] : []); }
   register(owner: string, signal: AbortSignal, method: string, path: string, handler: PluginHandler, entry?: PageOptions) {
+    signal = AbortSignal.any([this.controller.signal, signal]);
     signal.throwIfAborted();
     const prefix = owner ? `/plugins/${owner}/` : "/plugins/";
     if (typeof path !== "string" || !path.startsWith(prefix) || /[?#%\\\s]/.test(path) || new URL(path, "http://local").pathname !== path)
@@ -28,6 +35,7 @@ export class PluginWebRegistry {
     return dispose;
   }
   async serve(method: string, path: string, req: IncomingMessage, res: ServerResponse) {
+    this.controller.signal.throwIfAborted();
     const row = this.routes.get(method + " " + path);
     if (!row) return false;
     const request = new AbortController();
@@ -35,8 +43,10 @@ export class PluginWebRegistry {
     const close = () => { if (!res.writableEnded) request.abort(Error("页面请求已断开")); };
     const abort = () => { if (!res.writableEnded) { if (!res.headersSent) res.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" }); res.end("插件已停用或请求已取消"); } };
     res.on("close", close); signal.addEventListener("abort", abort, { once: true });
-    try { signal.throwIfAborted(); await row.handler(req, res, { signal }); }
-    finally { res.off("close", close); signal.removeEventListener("abort", abort); }
+    const work = Promise.resolve().then(() => { signal.throwIfAborted(); return row.handler(req, res, { signal }); });
+    this.pending.add(work);
+    try { await work; }
+    finally { this.pending.delete(work); res.off("close", close); signal.removeEventListener("abort", abort); }
     return true;
   }
 }

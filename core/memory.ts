@@ -396,13 +396,15 @@ export class Memory {
       return changed.result;
     });
   }
-  saveSessionMeta(id: string, patch: Record<string, unknown>) {
+  saveSessionMeta(id: string, patch: Record<string, unknown>, guard?: () => void) {
     safeId(id);
     return this.serial(async () => {
+      guard?.();
       if (!patch || typeof patch !== "object" || Array.isArray(patch))
         throw Error("会话元数据无效");
       const index = await this.sessionIndex(),
         previous = indexSessionMeta(index, id);
+      guard?.();
       if (previous?.deleted) throw Error("会话已删除，请新建会话");
       const meta = { ...previous, ...patch };
       index.sessions = { ...index.sessions, [id]: meta };

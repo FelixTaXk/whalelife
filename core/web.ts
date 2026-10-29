@@ -430,9 +430,10 @@ export async function startWeb(config: any, services: any, runtime: any) {
     pages: () => routes.pages(),
     async close() {
       lifetime.abort(Error("核心正在关闭"));
+      const handlers = routes.close();
       for (const ws of wss.clients) ws.terminate();
       wss.close();
-      await new Promise<void>((r) => server.close(() => r()));
+      await Promise.all([handlers, new Promise<void>((r) => server.close(() => r()))]);
     },
   };
 }

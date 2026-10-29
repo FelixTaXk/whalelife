@@ -33,8 +33,7 @@ export function pluginServices(config: any, modelConfig: ModelConfig, sessions: 
       };
       return {
         async list() { check(); return Object.entries<any>(await memory.listSessionMeta()).filter(([, s]) => !s.deleted).map(([id, s]) => ({ id, name: s.name || id, updatedAt: s.updatedAt })); },
-        async create(name = "") { check(); if (typeof name !== "string" || name.length > 100) throw Error("会话名称最长100字");
-          const id = "plugin_" + crypto.randomUUID().replaceAll("-", ""); await memory.saveSessionMeta(id, { ...(name ? { name } : {}) }); return id; },
+        create(name = "") { check(); return sessions.create(name, signal); },
         context(id, persona) { return sessions.contextStatus(id, route(id, persona)); },
         async run(input) {
           const resolved = route(input.sessionId, input.persona, input.permission, input.origin, input.signal);
