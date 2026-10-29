@@ -7,7 +7,7 @@ import { Memory } from "../core/memory.ts";
 import { MemoryEngine, validateMemoryState } from "../core/memory-engine.ts";
 import { Sessions } from "../core/session.ts";
 import { contextPolicy, memoryWindow, validateContext } from "../core/session-context.ts";
-import { shortSummaryKey, compressShort } from "../core/memory-lifecycle.ts";
+import { shortSummaryKey, shortContext, compressShort } from "../core/memory-lifecycle.ts";
 import { createHash } from "node:crypto";
 
 test("time and minimum retention must both be exceeded; message volume alone never ages memories", () => {
@@ -234,4 +234,109 @@ test("cancellation during budget reservation cannot start a new compression mode
     signal: controller.signal, rows, overflow: rows.slice(0, 2), checkpoint: { covered: 0 } });
   assert.equal(f.requests.length, 0);
   assert.equal((await f.engine.state("one")).usage.memory.requests, 0);
+});
+
+test("short compression resumes Unicode fragments across a cold reopen without skipping or replaying text", async (t) => {
+  const f = await fixture(t), key = "s_fragments";
+  const original = "🐋短期原文。".repeat(750) + "末尾唯一约定Tail7392";
+  await f.memory.appendEvent({ session: "one", type: "message", role: "user", text: original });
+  await f.memory.appendEvent({ session: "one", type: "message", role: "assistant", text: "继续交流" });
+  const rows = await f.memory.readSession("one");
+  let services = f.services;
+  for (let turn = 0; turn < 5; turn++) {
+    const current = await shortContext(services.memoryEngine, "one", key, rows);
+    if (current.remaining[0]?.id !== rows[0].id) break;
+    assert.equal(await compressShort({ services, id: "one", key, provider: {}, limit: 200000,
+      rows, overflow: current.remaining.slice(0, 1), checkpoint: current.checkpoint }), true);
+    if (!turn) {
+      const saved = await f.engine.summaryState("one", key);
+      assert.ok(saved.last_offset > 0 && saved.last_offset < Array.from(original).length);
+      const reopened = new Memory(f.memory.root, f.services.logger);
+      await reopened.init();
+      services = { ...f.services, memory: reopened, memoryEngine: new MemoryEngine(reopened) };
+      await services.memoryEngine.recoverSummaries();
+    }
+  }
+  const fragments = f.requests.flatMap((r) => JSON.parse(r.messages[1].content).episodes);
+  assert.equal(fragments.map((x: any) => x.text).join(""), original);
+  let offset = 0;
+  for (const part of fragments) { assert.equal(part.offset, offset); offset += Array.from(part.text).length; }
+  const remaining = (await shortContext(services.memoryEngine, "one", key, rows)).remaining;
+  assert.deepEqual(remaining, rows.slice(1));
+  assert.equal((await services.memoryEngine.state("one")).records.length, 0);
+  assert.deepEqual(await services.memory.readSession("one"), rows);
+  assert.equal(memoryWindow(rows, contextPolicy({})).long.length, 0);
+});
+
+test("failed short-summary commit preserves the previous bridge and retries exactly the uncommitted material", async (t) => {
+  const f = await fixture(t), key = "s_failure";
+  await f.seed(6, 0, 200);
+  const rows = await f.memory.readSession("one"), base = { services: f.services, id: "one", key, provider: {}, limit: 200000, rows };
+  await compressShort({ ...base, overflow: rows.slice(0, 2), checkpoint: { covered: 0 } });
+  const previous = await f.engine.summaryState("one", key);
+  const commit = f.engine.commitSummary.bind(f.engine);
+  f.engine.commitSummary = async () => { throw Error("simulated atomic write failure"); };
+  await compressShort({ ...base, overflow: rows.slice(2, 4), checkpoint: previous });
+  const failed = await f.engine.summaryState("one", key);
+  assert.equal(failed.last_id, previous.last_id);
+  assert.equal(failed.text, previous.text);
+  assert.equal(failed.covered, previous.covered);
+  assert.ok(failed.retry_at > Date.now());
+  assert.equal(await compressShort({ ...base, overflow: rows.slice(2, 4), checkpoint: failed }), false);
+  assert.equal(f.requests.length, 2);
+  f.engine.commitSummary = commit;
+  await compressShort({ ...base, overflow: rows.slice(2, 4), checkpoint: { ...failed, retry_at: 0 } });
+  const batches = f.requests.slice(1).map((r) => JSON.parse(r.messages[1].content).episodes);
+  assert.deepEqual(batches[1], batches[0]);
+  assert.equal((await f.engine.summaryState("one", key)).last_id, rows[3].id);
+  assert.deepEqual(await f.memory.readSession("one"), rows);
+});
+
+test("short-summary display write failure is repaired on cold reopen without losing the committed cursor", async (t) => {
+  const f = await fixture(t), key = "s_projection";
+  await f.seed(4, 0, 200);
+  const rows = await f.memory.readSession("one");
+  f.memory.writeSummary = async () => { throw Error("simulated display write failure"); };
+  await compressShort({ services: f.services, id: "one", key, provider: {}, limit: 200000,
+    rows, overflow: rows.slice(0, 2), checkpoint: { covered: 0 } });
+  const committed = await f.engine.summaryState("one", key);
+  assert.equal(committed.last_id, rows[1].id);
+  assert.equal(committed.retry_at, undefined);
+  const reopened = new Memory(f.memory.root, f.services.logger);
+  await reopened.init();
+  const engine = new MemoryEngine(reopened);
+  await engine.recoverSummaries();
+  assert.deepEqual(await engine.summaryState("one", key), committed);
+  assert.equal(await reopened.readSummary(key), committed.text);
+  assert.deepEqual((await shortContext(engine, "one", key, rows)).remaining, rows.slice(2));
+});
+
+test("no model call or cursor advance occurs when the short-summary quota or model window is insufficient", async (t) => {
+  const f = await fixture(t), key = "s_budget";
+  await f.seed(4, 0, 200);
+  const rows = await f.memory.readSession("one"), settings = (await f.engine.state("one")).settings;
+  const args = { services: f.services, id: "one", key, provider: {}, limit: 200000,
+    rows, overflow: rows.slice(0, 2), checkpoint: { covered: 0 } };
+  await f.engine.settings("one", { ...settings, daily_memory_tokens: 0 }, []);
+  assert.equal(await compressShort(args), false);
+  await f.engine.settings("one", settings, []);
+  assert.equal(await compressShort({ ...args, limit: 100 }), false);
+  assert.equal(f.requests.length, 0);
+  assert.deepEqual(await f.engine.summaryState("one", key), { covered: 0 });
+  assert.equal((await f.engine.state("one")).daily.reserved, 0);
+  assert.deepEqual(await f.memory.readSession("one"), rows);
+});
+
+test("expanding the short window invalidates a bridge whose source starts later without discarding raw history", async (t) => {
+  const f = await fixture(t), key = "s_expand";
+  await f.seed(6, 0, 200);
+  const rows = await f.memory.readSession("one"), narrowed = rows.slice(2);
+  await compressShort({ services: f.services, id: "one", key, provider: {}, limit: 200000,
+    rows: narrowed, overflow: narrowed.slice(0, 2), checkpoint: { covered: 0 } });
+  const saved = await f.engine.summaryState("one", key);
+  assert.ok((await shortContext(f.engine, "one", key, narrowed)).text);
+  const expanded = await shortContext(f.engine, "one", key, rows);
+  assert.equal(expanded.text, "");
+  assert.deepEqual(expanded.remaining, rows);
+  assert.deepEqual(await f.engine.summaryState("one", key), saved);
 });
