@@ -4,6 +4,7 @@ import { renderModels, bindModels } from "./models.js";
 import { renderPersonas, bindPersonas } from "./personas.js";
 import { renderMemory, bindMemory, loadMemory } from "./memory.js";
 import { renderContextMeter } from "./context.js";
+import { extensionPage, extensionNavigation } from "./extensions.js";
 import {
   renderOverview,
   renderBindings,
@@ -93,7 +94,8 @@ class ConsoleApp {
     });
   }
   pageFromHash() {
-    return pages[location.hash.slice(1)] ? location.hash.slice(1) : "overview";
+    const key = location.hash.slice(1);
+    return pages[key] || key.startsWith("extension:") ? key : "overview";
   }
   get chatConnected() {
     return this.chatWS?.readyState === WebSocket.OPEN;
@@ -193,6 +195,17 @@ class ConsoleApp {
   }
   async syncView() {
     const page = this.state.page;
+    if (this.authenticated && page.startsWith("extension:") && !this.syncing) {
+      this.syncing = true;
+      try {
+        await this.refreshStatus();
+        $("extension-nav").innerHTML = extensionNavigation(this.state.status);
+        $("extension-nav-group").hidden = !$("extension-nav").innerHTML;
+        if (!this.state.status.pluginPages?.some((p) => "extension:" + encodeURIComponent(p.path) === page)) this.render();
+      } catch (error) { this.toast(error.message, true); }
+      finally { this.syncing = false; }
+      return;
+    }
     if (
       !this.authenticated ||
       this.state.chatBusy ||
@@ -227,7 +240,10 @@ class ConsoleApp {
   }
   render() {
     if (!this.state.config || !this.state.status) return;
-    const page = pages[this.state.page];
+    const page = pages[this.state.page] || extensionPage(this);
+    const navigation = extensionNavigation(this.state.status);
+    $("extension-nav").innerHTML = navigation;
+    $("extension-nav-group").hidden = !navigation;
     $("breadcrumb").textContent = page.name;
     document.title = page.name + " · WhaleLife";
     document.querySelectorAll("[data-page]").forEach((a) => {

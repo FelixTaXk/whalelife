@@ -774,6 +774,7 @@ export class ModelConfig {
     provider: ProviderConfig,
     endpoint: string,
     payload?: unknown,
+    signal?: AbortSignal,
   ) {
     return withModelResponse(provider, endpoint, payload, async (response) => {
       try {
@@ -795,11 +796,11 @@ export class ModelConfig {
       } catch {
         throw new ModelConfigError("模型服务返回了无效或过大的 JSON 响应", 502);
       }
-    });
+    }, signal);
   }
-  async listModels(providerId: string) {
+  async listModels(providerId: string, signal?: AbortSignal) {
     const provider = this.provider(providerId);
-    return this.fetchModels(provider);
+    return this.fetchModels(provider, signal);
   }
   async listDraftModels(input: any) {
     if (!object(input?.provider))
@@ -813,12 +814,12 @@ export class ModelConfig {
     this.protectKeys([provider]);
     return this.fetchModels(provider);
   }
-  private async fetchModels(provider: ProviderConfig) {
+  private async fetchModels(provider: ProviderConfig, signal?: AbortSignal) {
     if (provider.protocol !== "openai-compatible")
       throw new ModelConfigError(
         "DashScope 原生协议请手动填写模型标识，或使用 OpenAI 兼容地址获取模型列表",
       );
-    const data = await this.request(provider, "/models");
+    const data = await this.request(provider, "/models", undefined, signal);
     if (!Array.isArray(data.data))
       throw new ModelConfigError("模型服务未返回兼容的模型列表", 502);
     return {

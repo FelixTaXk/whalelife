@@ -242,11 +242,14 @@ export class MemoryEngine {
       await this.memory.saveSessionMeta(id, {});
     return this.memory.serial(async () => {
       const s = await this.state(id);
+      const before = JSON.stringify([s.facts, s.records, s.summaries]);
       const result = await fn(s);
       validateMemoryState(s);
       const file = await this.file(id);
       await mkdir(dirname(file), { recursive: true });
       await atomic(file, JSON.stringify(s, null, 2));
+      if (before !== JSON.stringify([s.facts, s.records, s.summaries]))
+        this.memory.notify("memory/updated", { session: id });
       return result;
     });
   }

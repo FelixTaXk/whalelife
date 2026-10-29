@@ -62,7 +62,7 @@ async function request(options: Options, messages: any[], maxTokens: number) {
   if ((limit && budget > limit) || !(await services.memoryEngine.reserveConsolidation(id, budget)))
     return { attempted: false, text: null };
   signal?.throwIfAborted();
-  const result = await services.llm.chat({ provider, messages, max_tokens: maxTokens });
+  const result = await services.llm.chat({ provider, messages, max_tokens: maxTokens, signal });
   await services.memoryEngine.usage(id, "memory", result.usage);
   signal?.throwIfAborted();
   return { attempted: true, text: result.text };

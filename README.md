@@ -2,7 +2,7 @@
 
 本地机器人核心：OpenAI 兼容模型、人格、流式 Web 聊天、可扩展的文件记忆、三路日志和 cordis 插件树。
 
-架构与开发说明：[记忆系统](architecture/MEMORY.md) · [通用渠道](architecture/CHANNELS.md)。这两份公开文档说明实际实现、调用成本、扩展契约与边界，不包含本机私有资料。
+架构与开发说明：[插件扩展契约](architecture/PLUGINS.md) · [记忆系统](architecture/MEMORY.md) · [通用渠道](architecture/CHANNELS.md)。这些公开文档说明实际实现、调用成本、扩展契约与边界，不包含本机私有资料。
 
 ## 启动
 
@@ -36,6 +36,8 @@
 插件可显式调用 `ctx.llm.chat({ model: '<模型配置 ID>', messages })`，模型 ID 对应 `config.models[].id`。配置 ID 与提供方的模型名称是两个字段。
 
 插件自行决定调用频率、是否设置费用预算及超额处理；主干不统一设置插件额度或因插件预算拦截调用。未来若接入插件用量上报，仅用于汇总展示，目前尚未实现。
+
+插件可用 `ctx.models.list()`、`ctx.personas.list()` 获取选择项，用 `ctx.sessions.run()` 复用完整人格、会话、记忆与统计流程。注册 `ctx.web.page(path,handler,{title,settings:true,navigation:true})` 后，控制台自动展示设置按钮和侧栏入口，停用时自动撤销。消息、工具、记忆与生命周期通知通过 `ctx.on` 订阅；模型请求、工具和Web处理器接收插件取消信号。接口和可运行示例见插件扩展契约。
 
 模型页按服务连接分组，一个连接可管理多个模型。填写连接后点击“获取模型列表”，搜索并勾选多个模型批量添加；已添加模型会标记，重复添加不会生成新记录。也可用“自定义模型”手动填写模型 ID。连接地址、密钥、代理与超时共享，模型参数与使用选择独立。获取列表不会保存连接或切换模型；支持 OpenAI 兼容 `/models`，DashScope 原生嵌入接口使用自定义添加。
 

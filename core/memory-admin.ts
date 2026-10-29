@@ -1087,6 +1087,94 @@ export class MemoryAdmin {
       };
     });
   }
+  private async channelSnapshot(memory: Memory, index: SessionIndex) {
+    const object = (value: any) => !!value && typeof value === "object" && !Array.isArray(value);
+    const label = (value: any) => typeof value === "string" && value.trim() && value.length <= 200 && !/[\u0000-\u001f]/.test(value);
+    if (index.channel_routes !== undefined && !object(index.channel_routes))
+      throw new MemoryAdminError("渠道回执索引损坏，不能安全恢复记忆");
+    const routes: Record<string, any> = structuredClone(index.channel_routes ?? {});
+    const bindings = new Map<string, { id: string; binding: any; meta: any }>();
+    for (const id of Object.keys(index.sessions)) {
+      const meta = indexSessionMeta(index, id);
+      if (meta?.channel_bindings !== undefined && !object(meta.channel_bindings))
+        throw new MemoryAdminError("渠道绑定索引损坏，不能安全恢复记忆");
+      for (const [key, binding] of Object.entries<any>(meta?.channel_bindings ?? {})) {
+        if (!object(binding) || !/^[a-z][a-z0-9-]{0,39}$/.test(binding.channel) ||
+            !label(binding.account) || !label(binding.peer) || !label(binding.owner) ||
+            key !== digest(JSON.stringify([binding.channel, binding.account, binding.peer])) || bindings.has(key))
+          throw new MemoryAdminError("渠道绑定冲突或损坏，不能安全恢复记忆");
+        bindings.set(key, { id, binding, meta });
+        if (!Object.hasOwn(routes, key)) {
+          const receipts: Record<string, any> = {};
+          if (!meta.deleted) for (const receipt of await memory.readSession(id)) {
+            if (receipt.type === "channel_receipt" && receipt.channel_key === key)
+              receipts[digest(JSON.stringify([receipt.external_message_id, receipt.direction]))] = { sessionId: id, receipt };
+          }
+          routes[key] = { ...binding, sessionId: id, receipts, ...(meta.deleted ? { receiptHistoryIncomplete: true } : {}) };
+        }
+      }
+    }
+    for (const [key, route] of Object.entries(routes)) {
+      const found = bindings.get(key);
+      if (!object(route) || !found || route.sessionId !== found.id ||
+          ["channel", "account", "peer", "owner"].some((name) => route[name] !== found.binding[name]) ||
+          !object(route.receipts) || (route.receiptHistoryIncomplete !== undefined && typeof route.receiptHistoryIncomplete !== "boolean"))
+        throw new MemoryAdminError("渠道绑定与回执索引冲突，不能安全恢复记忆");
+      identifier(route.sessionId);
+      for (const [messageKey, stored] of Object.entries<any>(route.receipts)) {
+        const receipt = stored?.receipt;
+        if (!object(stored) || !object(receipt) || receipt.type !== "channel_receipt" || receipt.channel_key !== key ||
+            !label(receipt.external_message_id) || !["in", "out"].includes(receipt.direction) ||
+            !HASH.test(receipt.fingerprint) || messageKey !== digest(JSON.stringify([receipt.external_message_id, receipt.direction])) ||
+            receipt.delivery_id !== "delivery_" + digest(JSON.stringify([key, receipt.external_message_id, receipt.direction])) ||
+            !["pending", "delivering", "sent", "generated", "generation_failed", "delivery_failed", "uncertain"].includes(receipt.status) ||
+            (receipt.text !== undefined && typeof receipt.text !== "string") ||
+            (receipt.error !== undefined && typeof receipt.error !== "string"))
+          throw new MemoryAdminError("渠道消息回执损坏，不能安全恢复记忆");
+        identifier(stored.sessionId);
+      }
+    }
+    return routes;
+  }
+  private async retainChannelReceipts(staged: Memory) {
+    const readIndex = async (memory: Memory) => parseSessionIndex(
+      (await boundedRead(join(memory.root, "index.json"), MAX_SESSION_BYTES)).toString("utf8"),
+    );
+    const currentIndex = await readIndex(this.memory), stagedIndex = await readIndex(staged);
+    const current = await this.channelSnapshot(this.memory, currentIndex);
+    const restored = await this.channelSnapshot(staged, stagedIndex);
+    for (const [key, live] of Object.entries(current)) {
+      const previous = restored[key];
+      if (previous && ["channel", "account", "peer", "owner"].some((name) => live[name] !== previous[name]))
+        throw new MemoryAdminError("备份渠道归属与当前绑定冲突，不能安全恢复记忆");
+      const receipts = { ...previous?.receipts };
+      for (const [messageKey, saved] of Object.entries<any>(live.receipts)) {
+        const older = receipts[messageKey];
+        if (older && (older.sessionId !== saved.sessionId || older.receipt.fingerprint !== saved.receipt.fingerprint))
+          throw new MemoryAdminError("备份渠道消息 ID 与当前回执冲突，不能安全恢复记忆");
+        // Restoring conversation history cannot undo an already confirmed external send.
+        receipts[messageKey] = older?.receipt.status === "sent" ? older : saved;
+      }
+      restored[key] = { ...(previous ?? live), receipts, receiptHistoryIncomplete: !!live.receiptHistoryIncomplete };
+    }
+    if (!Object.keys(restored).length) return;
+    const mirrors = new Set<string>();
+    for (const [key, route] of Object.entries(restored)) {
+      const id = route.sessionId, previous = indexSessionMeta(stagedIndex, id);
+      // A route created after the backup keeps its receipts but cannot recreate missing history.
+      const meta = previous ?? { deleted: true, deleted_at: new Date().toISOString() };
+      stagedIndex.sessions[id] = { ...meta, channel_bindings: { ...meta.channel_bindings,
+        [key]: { channel: route.channel, account: route.account, peer: route.peer, owner: route.owner },
+      } };
+      if (!meta.deleted) mirrors.add(id);
+    }
+    stagedIndex.channel_routes = restored;
+    await atomic(join(staged.root, "index.json"), JSON.stringify(stagedIndex, null, 2));
+    for (const id of mirrors) {
+      await directoryChain(staged.sessionDir(id), true);
+      await atomic(join(staged.sessionDir(id), "session.json"), JSON.stringify(stagedIndex.sessions[id], null, 2));
+    }
+  }
   restore(input: { id: string }) {
     if (this.sessions.memoryMaintenance)
       return Promise.reject(
@@ -1135,6 +1223,7 @@ export class MemoryAdmin {
           // Upgrade the staged copy before swapping it into the live root. Failure leaves live data untouched.
           const stagedMemory = new Memory(stage, this.logger);
           await stagedMemory.init();
+          await this.retainChannelReceipts(stagedMemory);
           for (const entry of copied.files) {
             if (
               !/^sessions\/[a-zA-Z0-9_-]{1,100}\/knowledge\/state\.json$/.test(

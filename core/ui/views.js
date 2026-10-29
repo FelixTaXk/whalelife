@@ -1,3 +1,4 @@
+import { extensionSettings } from "./extensions.js";
 import {
   api,
   escapeHTML as e,
@@ -174,7 +175,7 @@ export function bindBindings(app) {
 
 export function renderPlugins(app) {
   const plugins = extensionPlugins(app.state.status);
-  return `<div class="page-heading"><div><h1>插件管理</h1><p>插件开关会保存，重启后保持选择；依赖恢复后会自动恢复原本启用的插件。</p></div><span class="badge">${plugins.length} 个扩展插件</span></div><div class="plugin-grid">${plugins.map((p) => `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon("puzzle")}<h3>${e(p.name || p.id)}</h3><div class="spacer"></div><span class="badge ${p.status === "active" ? "green" : p.status === "failed" ? "red" : ""}">${statusName(p.status)}</span></div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "扩展插件")}</p><footer><button class="btn small" data-plugin-id="${e(p.id)}" data-plugin-action="${(p.enabled ?? p.status === "active") ? "stop" : "start"}">${(p.enabled ?? p.status === "active") ? "停用" : "启用"}</button><button class="btn small tonal" data-plugin-id="${e(p.id)}" data-plugin-action="reload">${icon("refresh")}重载</button>${p.id.includes("/") ? '<small style="margin-left:auto">子插件</small>' : ""}</footer></article>`).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
+  return `<div class="page-heading"><div><h1>插件管理</h1><p>插件开关会保存，重启后保持选择；依赖恢复后会自动恢复原本启用的插件。</p></div><span class="badge">${plugins.length} 个扩展插件</span></div><div class="plugin-grid">${plugins.map((p) => `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon("puzzle")}<h3>${e(p.name || p.id)}</h3><div class="spacer"></div><span class="badge ${p.status === "active" ? "green" : p.status === "failed" ? "red" : ""}">${statusName(p.status)}</span></div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "扩展插件")}</p><footer>${extensionSettings(app.state.status, p.id)}<button class="btn small" data-plugin-id="${e(p.id)}" data-plugin-action="${(p.enabled ?? p.status === "active") ? "stop" : "start"}">${(p.enabled ?? p.status === "active") ? "停用" : "启用"}</button><button class="btn small tonal" data-plugin-id="${e(p.id)}" data-plugin-action="reload">${icon("refresh")}重载</button>${p.id.includes("/") ? '<small style="margin-left:auto">子插件</small>' : ""}</footer></article>`).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
 }
 export function bindPlugins(app) {
   document.querySelectorAll("[data-plugin-action]").forEach(

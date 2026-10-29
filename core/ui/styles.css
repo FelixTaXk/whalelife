@@ -214,7 +214,9 @@ hr {
   flex-direction: column;
   z-index: 30;
   transition: transform 0.2s;
+  overflow-y: auto;
 }
+.sidebar > * { flex-shrink: 0; }
 .brand {
   display: flex;
   gap: 10px;
@@ -1259,3 +1261,5 @@ dialog::backdrop {
   flex: 1;
   min-width: 180px;
 }
+.extension-panel { overflow: hidden; min-height: 480px; }
+.extension-frame { display: block; width: 100%; height: max(480px, calc(100dvh - 230px)); border: 0; background: white; }

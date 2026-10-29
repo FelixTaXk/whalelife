@@ -50,9 +50,16 @@ export type ChannelResult = {
 };
 export type ReceiveOptions = { signal?: AbortSignal };
 export type SendMessage = { peer: string; messageId: string; text: string };
+export type RebindOptions = {
+  /** null permits only a previously unbound route; otherwise this must match its current session. */
+  expectedSessionId: string | null;
+  /** Omit to explicitly create a fresh session. */
+  sessionId?: string;
+};
 export interface ChannelHandle {
   receive(message: IncomingMessage, options?: ReceiveOptions): Promise<ChannelResult>;
   bind(peer: string, sessionId: string): Promise<string>;
+  rebind(peer: string, options: RebindOptions): Promise<string>;
   retry(peer: string, messageId: string, options?: ReceiveOptions & { direction?: "in" | "out" }): Promise<ChannelResult>;
   send(message: SendMessage, options?: ReceiveOptions): Promise<ChannelResult>;
   context(peer: string): Promise<any>;
@@ -74,10 +81,20 @@ type Receipt = {
   external_message_id: string;
   direction: "in" | "out";
   fingerprint: string;
-  status: "pending" | ChannelResult["status"];
+  status: "pending" | "delivering" | ChannelResult["status"];
   delivery_id: string;
   text?: string;
   error?: string;
+};
+type StoredReceipt = { sessionId: string; receipt: Receipt };
+type RouteState = {
+  channel: string;
+  account: string;
+  peer: string;
+  owner: string;
+  sessionId: string;
+  receipts: Record<string, StoredReceipt>;
+  receiptHistoryIncomplete?: boolean;
 };
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 function identifier(value: unknown, label: string) {
@@ -101,6 +118,11 @@ export class Channels {
   private sessionQueues = new Map<string, Promise<unknown>>();
   private transportQueues = new Map<string, Promise<unknown>>();
   private bindingQueue: Promise<unknown> = Promise.resolve();
+  private routeOperations = new Map<string, number>();
+  private operations = new Set<Promise<unknown>>();
+  private closing = false;
+  private closePromise?: Promise<void>;
+  private controller = new AbortController();
   constructor(memory: Memory, sessions: Sessions, config: any) {
     this.memory = memory;
     this.sessions = sessions;
@@ -110,6 +132,7 @@ export class Channels {
     return JSON.stringify([id, account]);
   }
   private alive(reg: Registration, signal?: AbortSignal) {
+    if (this.closing) throw Error("渠道服务已关闭");
     if (reg.controller.signal.aborted || this.registrations.get(this.registrationKey(reg.adapter.id, reg.adapter.account)) !== reg)
       throw Error("渠道已停用，请使用重新注册后的接口");
     signal?.throwIfAborted();
@@ -142,39 +165,87 @@ export class Channels {
     // Restore checks this set; the marker cannot collide with a valid session ID.
     const marker = "channel:" + randomUUID();
     this.sessions.blockedSessions.add(marker);
-    return Promise.resolve().then(fn).finally(() => this.sessions.blockedSessions.delete(marker));
+    return this.watch(Promise.resolve().then(fn).finally(() => this.sessions.blockedSessions.delete(marker)));
   }
-  private resolve(reg: Registration, peer: string, target?: string): Promise<string> {
+  private watch<T>(promise: Promise<T>): Promise<T> {
+    const tracked = promise.finally(() => this.operations.delete(tracked));
+    this.operations.add(tracked);
+    return tracked;
+  }
+  private lease<T>(reg: Registration, peer: string, fn: () => Promise<T>): Promise<T> {
+    const key = this.key(reg, peer);
+    this.routeOperations.set(key, (this.routeOperations.get(key) ?? 0) + 1);
+    return Promise.resolve().then(fn).finally(() => {
+      const count = (this.routeOperations.get(key) ?? 1) - 1;
+      if (count) this.routeOperations.set(key, count);
+      else this.routeOperations.delete(key);
+    });
+  }
+  private receiptKey(messageId: string, direction: "in" | "out") {
+    return hash([messageId, direction]);
+  }
+  private async state(reg: Registration, peer: string, route: RouteState | undefined, entries: Record<string, any>): Promise<RouteState | undefined> {
+    const key = this.key(reg, peer);
+    const matches = Object.entries(entries).filter(([, meta]) => meta?.channel_bindings?.[key]);
+    if (matches.length > 1) throw Error("渠道绑定冲突，请检查记忆备份");
+    const found = matches[0];
+    if (route && (!found || route.sessionId !== found[0])) throw Error("渠道绑定与回执索引冲突，请检查记忆备份");
+    if (route && ["channel", "account", "peer", "owner"].some((name) => (route as any)[name] !== found[1].channel_bindings[key][name]))
+      throw Error("渠道绑定归属与回执索引冲突，请检查记忆备份");
+    const binding = route ?? found?.[1].channel_bindings[key];
+    if (binding) {
+      if (binding.channel !== reg.adapter.id || binding.account !== reg.adapter.account || binding.peer !== peer)
+        throw Error("渠道绑定损坏，请检查记忆备份");
+      if (binding.owner !== reg.owner) throw Error("渠道绑定属于其他插件");
+    }
+    if (route) {
+      if (!route.receipts || typeof route.receipts !== "object" || Array.isArray(route.receipts))
+        throw Error("渠道回执索引损坏，请检查记忆备份");
+      if (route.receiptHistoryIncomplete) throw Error("旧渠道回执不完整，不能安全恢复或重绑此路由");
+      return route;
+    }
+    if (!found) return undefined;
+    const [id, meta] = found;
+    // Deletion removes legacy episodes. Guessing an empty receipt set could replay tools.
+    if (meta.deleted) throw Error("渠道绑定的会话已删除且缺少独立回执，请恢复备份后重绑");
+    const receipts: Record<string, StoredReceipt> = {};
+    for (const row of await this.memory.readSession(id)) {
+      if (row.type === "channel_receipt" && row.channel_key === key)
+        receipts[this.receiptKey(row.external_message_id, row.direction)] = { sessionId: id, receipt: row };
+    }
+    return { ...binding, sessionId: id, receipts };
+  }
+  private resolve(reg: Registration, peer: string, target?: string, rebind?: RebindOptions): Promise<string> {
     const job = this.bindingQueue.then(async () => {
       this.alive(reg);
       const key = this.key(reg, peer);
-      const entries = Object.entries(await this.memory.listSessionMeta());
-      const matches = entries.filter(([, meta]) => meta?.channel_bindings?.[key]);
-      if (matches.length > 1) throw Error("渠道绑定冲突，请检查记忆备份");
-      if (matches.length) {
-        const [id, meta] = matches[0];
-        const binding = meta.channel_bindings[key];
-        if (binding.channel !== reg.adapter.id || binding.account !== reg.adapter.account || binding.peer !== peer)
-          throw Error("渠道绑定损坏，请检查记忆备份");
-        if (meta.deleted) throw Error("渠道绑定的会话已删除，不能自动重建");
-        if (binding.owner !== reg.owner) throw Error("渠道绑定属于其他插件");
-        if (target && target !== id) throw Error("渠道已绑定会话；当前版本不支持迁移已绑定路由");
-        return id;
-      }
-      const id = target ?? "ch_" + key;
-      const meta = await this.memory.serial(() => this.memory.sessionMeta(id));
-      if (meta?.deleted) throw Error("渠道绑定的会话已删除，不能自动重建");
-      if (target && !meta) throw Error("显式绑定的会话不存在");
-      if (!target && meta) throw Error("渠道会话 ID 已被占用");
-      if (this.sessions.blockedSessions.has(id)) throw Error("会话维护中，请稍后重试");
-      this.alive(reg);
-      await this.memory.saveSessionMeta(id, {
-        channel_bindings: {
-          ...meta?.channel_bindings,
-          [key]: { channel: reg.adapter.id, account: reg.adapter.account, peer, owner: reg.owner },
-        },
+      return this.memory.channelRoute(key, async (saved, entries) => {
+        const previous = await this.state(reg, peer, saved, entries);
+        this.alive(reg);
+        if (rebind && rebind.expectedSessionId !== (previous?.sessionId ?? null))
+          throw Error("渠道绑定已改变，预期的前一会话不匹配");
+        if (previous && !rebind) {
+          if (entries[previous.sessionId]?.deleted) throw Error("渠道绑定的会话已删除，不能自动重建");
+          if (target && target !== previous.sessionId) throw Error("bind 不支持迁移已绑定路由，请显式 rebind");
+          return { ...(saved ? {} : { route: previous }), result: previous.sessionId };
+        }
+        const id = target ?? (rebind ? "ch_" + randomUUID().replaceAll("-", "") : "ch_" + key);
+        const meta = Object.hasOwn(entries, id) ? entries[id] : undefined;
+        if (meta?.deleted) throw Error("渠道绑定的会话已删除，不能自动重建");
+        if (target && !meta) throw Error("显式绑定的会话不存在");
+        if (!target && meta) throw Error("渠道会话 ID 已被占用");
+        if (rebind && previous?.sessionId !== id && this.routeOperations.has(key))
+          throw Error("渠道正在收发或读取上下文，请等待完成后重绑");
+        for (const sessionId of new Set([id, ...(previous ? [previous.sessionId] : [])])) {
+          if (this.sessions.blockedSessions.has(sessionId) || (rebind && (this.sessions.locks.has(sessionId) || this.sessions.channelOperations.has(sessionId))))
+            throw Error("会话维护或处理中，请稍后重试绑定");
+        }
+        const route: RouteState = {
+          channel: reg.adapter.id, account: reg.adapter.account, peer, owner: reg.owner,
+          sessionId: id, receipts: previous?.receipts ?? {},
+        };
+        return { route, result: id };
       });
-      return id;
     });
     this.bindingQueue = job.catch(() => {});
     return job;
@@ -182,31 +253,51 @@ export class Channels {
   private result(id: string, receipt: Receipt, duplicate = false): ChannelResult {
     return {
       sessionId: id, messageId: receipt.external_message_id, deliveryId: receipt.delivery_id,
-      status: receipt.status === "pending" ? "uncertain" : receipt.status,
+      status: ["pending", "delivering"].includes(receipt.status) ? "uncertain" : receipt.status as ChannelResult["status"],
       ...(receipt.text === undefined ? {} : { text: receipt.text }),
       ...(receipt.error ? { error: receipt.error } : {}),
       ...(receipt.status === "pending" ? { error: "上次生成被中断，可能已执行工具；不会自动重放，请人工核对" } : {}),
+      ...(receipt.status === "delivering" ? { error: "上次发送结果未确认；不会自动重发，请人工核对" } : {}),
       ...(duplicate ? { duplicate: true } : {}),
     };
   }
-  private async receipt(id: string, key: string, messageId: string, direction: "in" | "out"): Promise<Receipt | undefined> {
-    return (await this.memory.serial(() => this.memory.readSession(id))).findLast((row: any) =>
-      row.type === "channel_receipt" && row.channel_key === key &&
-      row.external_message_id === messageId && row.direction === direction,
-    );
+  private receipt(key: string, messageId: string, direction: "in" | "out"): Promise<StoredReceipt | undefined> {
+    return this.memory.channelRoute(key, async (route: RouteState) => ({
+      result: route?.receipts[this.receiptKey(messageId, direction)],
+    }));
   }
-  private save(id: string, route: ChannelRoute, receipt: Receipt) {
-    return this.memory.appendEvent({
+  private async save(id: string, route: ChannelRoute, receipt: Receipt, mode: "update" | "reserve" | "delivery" = "update"): Promise<StoredReceipt | undefined> {
+    const previous = await this.memory.channelRoute(receipt.channel_key, async (state: RouteState | undefined) => {
+      if (!state || state.sessionId !== id) throw Error("渠道绑定已改变，不能保存旧会话回执");
+      const key = this.receiptKey(receipt.external_message_id, receipt.direction);
+      const stored = state.receipts[key];
+      if (mode === "reserve" && stored) return { result: stored };
+      if (mode === "delivery" && (!stored || !["generated", "delivery_failed"].includes(stored.receipt.status))) {
+        if (!stored) throw Error("待发送消息回执不存在");
+        return { result: stored };
+      }
+      return { route: { ...state, receipts: {
+        ...state.receipts, [key]: { sessionId: id, receipt },
+      } }, result: undefined as StoredReceipt | undefined };
+    });
+    if (previous) return previous;
+    await this.memory.appendEvent({
       ...receipt, session: id, channel: route.channel, account: route.account, peer: route.peer,
     });
   }
   private single(reg: Registration, peer: string, messageId: string, direction: "in" | "out", fingerprint: string | undefined, fn: () => Promise<ChannelResult>) {
-    const key = JSON.stringify([this.key(reg, peer), messageId, direction]);
+    const key = JSON.stringify([reg.owner, this.key(reg, peer), messageId, direction]);
     const current = this.flights.get(key);
     if (current) {
       if (fingerprint && current.fingerprint && fingerprint !== current.fingerprint)
         return Promise.reject(Error("相同消息 ID 的内容不一致"));
-      return current.promise.then((result) => ({ ...result, duplicate: true }));
+      return this.watch(current.promise.then(async (result) => {
+        if (fingerprint && !current.fingerprint) {
+          const stored = await this.receipt(this.key(reg, peer), messageId, direction);
+          if (stored && stored.receipt.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
+        }
+        return { ...result, duplicate: true };
+      }));
     }
     const promise = fn().finally(() => {
       if (this.flights.get(key)?.promise === promise) this.flights.delete(key);
@@ -241,6 +332,9 @@ export class Channels {
       const meta = await this.memory.serial(() => this.memory.sessionMeta(id));
       if (meta?.deleted) throw Error("会话已删除");
       this.alive(reg, signal);
+      const claimed = await this.save(id, route, { ...receipt, status: "delivering" }, "delivery");
+      if (claimed) return this.result(claimed.sessionId, claimed.receipt, true);
+      this.alive(reg, signal);
       called = true;
       await reg.adapter.send({
         channel: route.channel, account: route.account, peer: route.peer, sessionId: id,
@@ -249,7 +343,13 @@ export class Channels {
       }, { signal });
       // A confirmed transport completion is recorded even if disposal happened meanwhile.
       const sent: Receipt = { ...receipt, status: "sent", error: undefined };
-      await this.save(id, route, sent);
+      try {
+        await this.save(id, route, sent);
+      } catch (error: any) {
+        // The transport already confirmed success. Storage failure cannot undo it.
+        sent.error = "发送已确认，但回执保存失败：" + error.message;
+        this.sessions.services.logger.warn("渠道发送已确认，回执保存失败", { error });
+      }
       if (receipt.direction === "out") {
         try {
           await this.sessions.services.memoryEngine?.experience(id, "channel:" + reg.owner, {
@@ -288,15 +388,15 @@ export class Channels {
     const message = { peer, sender: sender ?? reg.adapter.account, messageId, text };
     const fingerprint = hash([sender, text]);
     const signal = AbortSignal.any([reg.controller.signal, ...(options.signal ? [options.signal] : [])]);
-    return this.single(reg, peer, messageId, direction, fingerprint, () => this.operation(reg, signal, async () => {
+    return this.single(reg, peer, messageId, direction, fingerprint, () => this.operation(reg, signal, () => this.lease(reg, peer, async () => {
       const id = await this.resolve(reg, peer);
       return this.tracked(id, () => {
       const run = async () => {
       const route = this.route(reg, peer, message, signal), key = this.key(reg, peer);
-      const previous = await this.receipt(id, key, messageId, direction);
+      const previous = await this.receipt(key, messageId, direction);
       if (previous) {
-        if (previous.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
-        return this.result(id, previous, true);
+        if (previous.receipt.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
+        return this.result(previous.sessionId, previous.receipt, true);
       }
       this.alive(reg, signal);
       if ((direction === "in" && this.sessions.locks.has(id)) || this.sessions.blockedSessions.has(id))
@@ -305,7 +405,11 @@ export class Channels {
         type: "channel_receipt", channel_key: key, external_message_id: messageId, direction,
         fingerprint, delivery_id: "delivery_" + hash([key, messageId, direction]), status: "pending",
       };
-      await this.save(id, route, receipt);
+      const reserved = await this.save(id, route, receipt, "reserve");
+      if (reserved) {
+        if (reserved.receipt.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
+        return this.result(reserved.sessionId, reserved.receipt, true);
+      }
       let response = text;
       if (direction === "in") {
         try {
@@ -322,7 +426,7 @@ export class Channels {
       };
       return direction === "in" ? this.queue(this.sessionQueues, id, run) : run();
       });
-    }));
+    })));
   }
   private generate(id: string, text: string, route: ChannelRoute, onChunk: (text: string) => void = () => {}, onContext?: (value: any) => void, expectedPersona?: string) {
     route.signal?.throwIfAborted();
@@ -330,12 +434,14 @@ export class Channels {
   }
   /** Web keeps its explicit session and streaming protocol, sharing the trusted dispatch path. */
   web(id: string, text: string, onChunk: (text: string) => void, onContext?: (value: any) => void, expectedPersona?: string) {
+    if (this.closing) throw Error("渠道服务已关闭");
     safeId(id);
-    return this.generate(id, text, { channel: "web", account: "local", peer: id,
+    return this.watch(this.generate(id, text, { channel: "web", account: "local", peer: id, signal: this.controller.signal,
       origin: { plugin: "core", channel: "web", platform: "控制台" },
-      ...this.policy({ id: "web", account: "local" }) }, onChunk, onContext, expectedPersona);
+      ...this.policy({ id: "web", account: "local" }) }, onChunk, onContext, expectedPersona));
   }
   register(adapter: ChannelAdapter, owner = "core"): ChannelHandle {
+    if (this.closing) throw Error("渠道服务已关闭");
     if (!adapter || !/^[a-z][a-z0-9-]{0,39}$/.test(adapter.id) || adapter.id === "web")
       throw Error("渠道 ID 无效或保留");
     identifier(adapter.account, "account");
@@ -349,27 +455,38 @@ export class Channels {
       receive: (message, options = {}) => this.incoming(reg, message, options, "in"),
       send: (message, options = {}) => this.incoming(reg, message, options, "out"),
       bind: (peer, id) => this.operation(reg, undefined, () => this.resolve(reg, identifier(peer, "peer"), safeId(id))),
-      context: (peer) => this.operation(reg, undefined, async () => {
+      rebind: (peer, options) => this.operation(reg, undefined, () => {
         identifier(peer, "peer");
-        return this.sessions.contextStatus(await this.resolve(reg, peer), this.route(reg, peer));
+        if (!options || typeof options !== "object" || !Object.hasOwn(options, "expectedSessionId"))
+          throw Error("重绑必须明确提供预期的前一会话 expectedSessionId");
+        if (options.expectedSessionId !== null) safeId(options.expectedSessionId);
+        if (options.sessionId !== undefined) safeId(options.sessionId);
+        return this.resolve(reg, peer, options.sessionId, { ...options });
       }),
+      context: (peer) => this.operation(reg, undefined, () => this.lease(reg, peer, async () => {
+        identifier(peer, "peer");
+        const id = await this.resolve(reg, peer);
+        return this.tracked(id, () => this.sessions.contextStatus(id, this.route(reg, peer, undefined, reg.controller.signal)));
+      })),
       retry: (peer, messageId, options = {}) => {
         this.alive(reg, options.signal);
         identifier(peer, "peer"); identifier(messageId, "messageId");
         const direction = options.direction ?? "in";
         if (!["in", "out"].includes(direction)) throw Error("发送方向无效");
         const signal = AbortSignal.any([reg.controller.signal, ...(options.signal ? [options.signal] : [])]);
-        return this.single(reg, peer, messageId, direction, undefined, () => this.operation(reg, signal, async () => {
+        return this.single(reg, peer, messageId, direction, undefined, () => this.operation(reg, signal, () => this.lease(reg, peer, async () => {
           const id = await this.resolve(reg, peer), route = this.route(reg, peer, undefined, signal);
           return this.tracked(id, async () => {
-          const receipt = await this.receipt(id, this.key(reg, peer), messageId, direction);
-          if (!receipt) throw Error("没有可重试的消息");
-          if (receipt.status === "sent") return this.result(id, receipt, true);
+          const previous = await this.receipt(this.key(reg, peer), messageId, direction);
+          if (!previous) throw Error("没有可重试的消息");
+          const { receipt } = previous;
+          if (receipt.status === "sent") return this.result(previous.sessionId, receipt, true);
+          if (previous.sessionId !== id) throw Error("消息属于重绑前的会话，不能跨会话重试发送");
           if (!["generated", "delivery_failed"].includes(receipt.status) || typeof receipt.text !== "string")
             throw Error("没有已保存的最终回复；不能重放模型或工具");
           return this.deliver(reg, id, route, receipt, signal);
           });
-        }));
+        })));
       },
       dispose: () => {
         reg.controller.abort(Error("渠道已停用"));
@@ -379,6 +496,28 @@ export class Channels {
     reg.handle = handle;
     this.registrations.set(key, reg);
     return handle;
+  }
+  /** Reject new work and ask every active transport/model operation to stop. */
+  beginClose() {
+    if (this.closing) return;
+    this.closing = true;
+    const reason = Error("渠道服务已关闭");
+    this.controller.abort(reason);
+    for (const reg of this.registrations.values()) reg.controller.abort(reason);
+  }
+  /** Wait for accepted operations, including transports which finish after abort. */
+  async drain() {
+    while (this.operations.size || this.flights.size || this.sessionQueues.size || this.transportQueues.size) {
+      await Promise.allSettled([
+        ...this.operations, ...[...this.flights.values()].map((flight) => flight.promise),
+        ...this.sessionQueues.values(), ...this.transportQueues.values(), this.bindingQueue,
+      ]);
+    }
+    await this.bindingQueue;
+  }
+  close(): Promise<void> {
+    this.beginClose();
+    return this.closePromise ??= this.drain();
   }
   plugin(owner: string, onDispose: (dispose: () => void) => void): ChannelAPI {
     let active = true;

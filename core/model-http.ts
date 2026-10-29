@@ -59,7 +59,9 @@ export async function withModelResponse<T>(
   endpoint: string,
   payload: unknown | undefined,
   consume: (response: Response) => Promise<T>,
+  externalSignal?: AbortSignal,
 ): Promise<T> {
+  externalSignal?.throwIfAborted();
   const seconds = timeoutSeconds(provider.timeout_seconds);
   const proxy = proxyURL(provider.proxy_url);
   let url: URL;
@@ -82,7 +84,19 @@ export async function withModelResponse<T>(
   const dispatcher = proxy
     ? new ProxyAgent({ uri: proxy, proxyTunnel: true })
     : undefined;
-  const signal = AbortSignal.timeout(seconds * 1000);
+  const timeout = AbortSignal.timeout(seconds * 1000);
+  const signal = externalSignal
+    ? AbortSignal.any([externalSignal, timeout])
+    : timeout;
+  const checkAbort = () => {
+    if (!signal.aborted) return;
+    if (externalSignal?.aborted && signal.reason === externalSignal.reason)
+      throw signal.reason;
+    throw new ModelRequestError(
+      `模型请求超时（${seconds} 秒），请检查服务或调整超时时间`,
+      504,
+    );
+  };
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -103,11 +117,7 @@ export async function withModelResponse<T>(
         init,
       );
     } catch {
-      if (signal.aborted)
-        throw new ModelRequestError(
-          `模型请求超时（${seconds} 秒），请检查服务或调整超时时间`,
-          504,
-        );
+      checkAbort();
       throw new ModelRequestError(
         "无法连接模型服务，请检查 API 地址、代理和网络",
         502,
@@ -120,11 +130,7 @@ export async function withModelResponse<T>(
     try {
       return await consume(response);
     } catch (error) {
-      if (signal.aborted)
-        throw new ModelRequestError(
-          `模型请求超时（${seconds} 秒），请检查服务或调整超时时间`,
-          504,
-        );
+      checkAbort();
       throw error;
     }
   } finally {

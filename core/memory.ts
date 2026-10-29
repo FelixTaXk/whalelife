@@ -113,6 +113,11 @@ export class Memory {
   root: string;
   logger: Logger;
   queue: Promise<any> = Promise.resolve();
+  onChange?: (name: string, payload: any) => void;
+  notify(name: string, payload: any) {
+    try { this.onChange?.(name, payload); }
+    catch (error) { this.logger.warn("记忆通知失败", { error }); }
+  }
   constructor(root: string, logger: Logger) {
     this.root = root;
     this.logger = logger;
@@ -347,6 +352,50 @@ export class Memory {
       );
     });
   }
+  /** Channel route/receipt commits share the authoritative index transaction. */
+  channelRoute<T>(
+    key: string,
+    update: (route: any, sessions: Record<string, any>) => Promise<{ route?: any; result: T }>,
+  ): Promise<T> {
+    if (!/^[a-f0-9]{64}$/.test(key)) throw Error("渠道绑定键无效");
+    return this.serial(async () => {
+      const index = await this.sessionIndex();
+      if (index.channel_routes !== undefined && (!index.channel_routes || typeof index.channel_routes !== "object" || Array.isArray(index.channel_routes)))
+        throw Error("渠道回执索引损坏，请检查记忆备份");
+      const changed = await update(index.channel_routes?.[key], index.sessions);
+      if (changed.route === undefined) return changed.result;
+      const route = changed.route, id = safeId(route.sessionId);
+      const binding = { channel: route.channel, account: route.account, peer: route.peer, owner: route.owner };
+      const mirrors = new Set<string>();
+      for (const other of Object.keys(index.sessions)) {
+        const meta = indexSessionMeta(index, other);
+        if (other === id || !meta?.channel_bindings?.[key]) continue;
+        const bindings = { ...meta.channel_bindings };
+        delete bindings[key];
+        index.sessions[other] = { ...meta, channel_bindings: bindings };
+        if (!meta.deleted) mirrors.add(other);
+      }
+      const previous = indexSessionMeta(index, id);
+      if (JSON.stringify(previous?.channel_bindings?.[key]) !== JSON.stringify(binding)) {
+        if (previous?.deleted) throw Error("渠道绑定的会话已删除");
+        index.sessions[id] = { ...previous, channel_bindings: { ...previous?.channel_bindings, [key]: binding } };
+        mirrors.add(id);
+      }
+      for (const sessionId of mirrors) await directory(this.sessionDir(sessionId));
+      index.channel_routes = { ...index.channel_routes, [key]: route };
+      // One rename commits the route, both binding ends and all deduplication receipts.
+      await atomic(join(this.root, "index.json"), JSON.stringify(index, null, 2));
+      for (const sessionId of mirrors) {
+        try {
+          await atomic(join(this.sessionDir(sessionId), "session.json"), JSON.stringify(index.sessions[sessionId], null, 2));
+        } catch (error) {
+          // session.json is a projection. Never report an already committed CAS as failed.
+          this.logger.warn("渠道绑定已保存，会话元数据副本更新失败", { sessionId, error });
+        }
+      }
+      return changed.result;
+    });
+  }
   saveSessionMeta(id: string, patch: Record<string, unknown>) {
     safeId(id);
     return this.serial(async () => {
@@ -437,14 +486,8 @@ export class Memory {
           this.logger.warn("修复 JSONL 尾部", { file });
         }
       }
-      await appendFile(
-        file,
-        JSON.stringify({
-          ts: new Date().toISOString(),
-          ...line,
-          id: line.id || randomUUID(),
-        }) + "\n",
-      );
+      const saved = { ts: new Date().toISOString(), ...line, id: line.id || randomUUID() };
+      await appendFile(file, JSON.stringify(saved) + "\n");
       index.sessions = {
         ...index.sessions,
         [line.session]: {
@@ -463,6 +506,8 @@ export class Memory {
         JSON.stringify(index.sessions[line.session], null, 2),
       );
       this.logger.info("记忆写入", { file, count: 1 });
+      this.notify("memory/recorded", saved);
+      if (saved.type === "message") this.notify(saved.role === "user" ? "channel/message" : "channel/reply", saved);
     });
   }
   writeSummary(id: string, md: string, sessionId?: string) {

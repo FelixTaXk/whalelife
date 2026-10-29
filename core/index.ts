@@ -15,6 +15,7 @@ import { ModelConfig, resolveModel } from "./model-config.ts";
 import { PersonaFiles } from "./persona-config.ts";
 import { MemoryEngine } from "./memory-engine.ts";
 import { registerMemoryTools } from "./memory-tools.ts";
+import { pluginServices } from "./plugin-services.ts";
 export async function boot(
   root = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
 ) {
@@ -71,6 +72,9 @@ export async function boot(
   const sessions = new Sessions(root, config, services);
   services.sessions = sessions;
   services.channels = new Channels(memory, sessions, config);
+  memory.onChange = (name, payload) => runtime.events.emit(name, payload);
+  const extensionServices = pluginServices(config, modelConfig, sessions, memory);
+  for (const [name, service] of Object.entries(extensionServices)) await runtime.builtin(name, service);
   for (const id of ["logger", "memory", "llm", "tools", "approval", "channels"])
     await runtime.builtin(id, services[id]);
   await runtime.builtin("permission", { approval });
@@ -80,6 +84,8 @@ export async function boot(
   memoryEngine.maintenance = (id) =>
     sessions.memoryMaintenance || !!(id && sessions.blockedSessions.has(id));
   tools.observe = async (event) => {
+    runtime.events.emit("tool/called", { id: event.id, name: event.name, source: event.source,
+      origin: event.origin, session: event.session?.id, ok: event.ok, result: event.result });
     if (
       !event.session?.id ||
       ["recall_memory", "remember_fact", "edit_facts"].includes(event.name)
@@ -99,16 +105,20 @@ export async function boot(
   await runtime.builtin("web", web);
   await runtime.bus.start();
   await runtime.scan();
+  runtime.events.emit("whalelife/ready", { at: new Date().toISOString() });
   logger.info("核心就绪");
-  let closing = false;
-  const close = async () => {
-    if (closing) return;
-    closing = true;
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= (async () => {
     logger.info("WhaleLife 关闭");
-    await web.close();
-    await runtime.bus.stop();
+    runtime.events.emit("whalelife/shutdown", { at: new Date().toISOString() });
+    // Let shutdown listeners receive the notification before their subscriptions are removed.
+    await new Promise<void>((r) => setImmediate(r));
+    sessions.beginClose();
+    services.channels.beginClose();
+    runtime.beginClose();
+    await Promise.all([web.close(), sessions.close(), services.channels.close(), runtime.bus.stop()]);
     await memory.queue;
-  };
+  })();
   return { config, ...services, runtime, close };
 }
 if (

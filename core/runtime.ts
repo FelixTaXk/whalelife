@@ -7,6 +7,7 @@ import { parse } from "yaml";
 import { atomic } from "./memory.ts";
 import type { Logger } from "./logger.ts";
 import { PluginState, validPluginId } from "./plugin-state.ts";
+import { PluginEvents } from "./plugin-events.ts";
 export class Runtime {
   bus = new Cordis();
   records = new Map<string, any>();
@@ -14,11 +15,18 @@ export class Runtime {
   root: string;
   logger: Logger;
   pluginState: PluginState;
+  events: PluginEvents;
   private actions: Promise<unknown> = Promise.resolve();
+  private closing = false;
+  beginClose() {
+    this.closing = true;
+    for (const record of this.records.values()) record.controller?.abort(Error("核心正在关闭"));
+  }
   constructor(root: string, logger: Logger) {
     this.root = root;
     this.logger = logger;
     this.pluginState = new PluginState(root);
+    this.events = new PluginEvents(logger);
     this.bus.on("internal/error", (...args: any[]) =>
       logger.error("cordis 错误", args.map(String)),
     );
@@ -95,6 +103,7 @@ export class Runtime {
     }
   }
   async loadPath(id: string) {
+    if (this.closing) throw Error("核心正在关闭");
     if (!validPluginId(id)) throw Error("插件 ID 无效");
     if (this.records.get(id)?.status === "active") return this.records.get(id);
     const parts = id.split("/");
@@ -150,6 +159,7 @@ export class Runtime {
     parent?: any,
     dir?: string,
   ) {
+    if (this.closing) throw Error("核心正在关闭");
     if (this.records.get(id)?.status === "active") return this.records.get(id);
     const record: any = {
       id,
@@ -181,9 +191,15 @@ export class Runtime {
     const complete = new Promise<void>((r) => (finish = r));
     record.fork = (parent?.cordis ?? this.bus).plugin(async (native: any) => {
       record.cordis = native;
+      const controller = new AbortController();
+      record.controller = controller;
+      const alive = () => controller.signal.throwIfAborted();
+      native.effect(() => () => controller.abort(Error("插件已停用")));
       let pluginMemory: any;
       let pluginChannels: any;
+      const facades = new Map<string, any>();
       const get = (name: string, strict = true) => {
+        alive();
         const value = lookup(name);
         if (value === undefined && strict) {
           record.missingDependencies.add(name);
@@ -204,9 +220,29 @@ export class Runtime {
         }
         if (name === "facts" && !manifest.builtin)
           throw Error("事实管理服务仅供核心使用；插件使用memory接口");
+        if (name === "chat" && !manifest.builtin)
+          throw Error("请使用 ctx.sessions 调用带人格和记忆的会话");
+        if (!manifest.builtin && ["web", "tools", "llm", "models", "personas", "sessions"].includes(name) && value) {
+          if (facades.has(name)) return facades.get(name);
+          let facade: any;
+          if (name === "web") facade = {
+            page: (path: string, handler: any, entry?: any) => { alive(); const dispose = value.registerPlugin(id, controller.signal, "GET", path, handler, entry); native.effect(() => dispose); return dispose; },
+            api: (path: string, handler: any) => { alive(); const dispose = value.registerPlugin(id, controller.signal, "POST", path, handler); native.effect(() => dispose); return dispose; },
+          };
+          if (name === "tools") facade = {
+            register: (tool: any) => { alive(); const dispose = value.register({ ...tool, owner: id }, controller.signal); native.effect(() => dispose); return dispose; },
+            list: () => { alive(); return value.list(); },
+            call: (name: string, args: any, session: any, ...rest: any[]) => { alive(); return value.call(name, args, { ...session, signal: AbortSignal.any([controller.signal, ...(session?.signal ? [session.signal] : [])]) }, ...rest); },
+          };
+          if (name === "llm") facade = { chat: (options: any) => { alive(); return value.chat({ ...options, signal: AbortSignal.any([controller.signal, ...(options.signal ? [options.signal] : [])]) }); } };
+          if (name === "models" || name === "personas") facade = { list: (...args: any[]) => { alive(); return value.list(...args); } };
+          if (name === "sessions") facade = value.plugin(id, controller.signal);
+          facades.set(name, facade); return facade;
+        }
         return value;
       };
       const config: any = (file = manifest.config ?? "config.json") => {
+        alive();
         const target = configPath(file);
         try {
           return JSON.parse(requireRead(target));
@@ -233,6 +269,7 @@ export class Runtime {
         }
       };
       config.read = async (file = manifest.config ?? "config.json") => {
+        alive();
         try {
           return JSON.parse(await readFile(configPath(file), "utf8"));
         } catch (error: any) {
@@ -242,6 +279,7 @@ export class Runtime {
         }
       };
       config.save = async (file: string, value: any) => {
+        alive();
         const target = configPath(file);
         await mkdir(join(target, ".."), { recursive: true });
         await atomic(target, JSON.stringify(value, null, 2));
@@ -249,8 +287,10 @@ export class Runtime {
       const ctx: any = {
         get,
         logger: this.logger,
+        signal: controller.signal,
         config,
         provide: (name: string, value: any) => {
+          alive();
           if (record.local.has(name) || (!parent && this.services.has(name)))
             throw Error("服务重名：" + name);
           record.local.set(name, value);
@@ -262,17 +302,27 @@ export class Runtime {
               this.services.delete(name);
           });
         },
-        effect: (fn: any) => native.effect(fn),
-        on: (event: string, fn: any) =>
-          native.on(event, async (...args: any[]) => {
+        effect: (fn: any) => { alive(); return native.effect(fn); },
+        on: (event: string, fn: any) => {
+          alive();
+          const dispose = this.events.on(event, async (...args: any[]) => {
+            if (controller.signal.aborted) return;
             try {
               await fn(...args);
             } catch (error) {
+              if (controller.signal.aborted || this.records.get(id) !== record) return;
               fail(error);
               await this.stop(id, true);
             }
-          }),
+          });
+          native.effect(() => dispose); return dispose;
+        },
+        emit: (event: string, payload: any) => { alive();
+          if (!event.startsWith(`plugin:${id}:`) || event.length > 200) throw Error("插件只能发布 plugin:<自身ID>:<事件>，不能伪造核心事件");
+          this.events.emit(event, payload);
+        },
         plugin: (module: any) => {
+          alive();
           const task = Promise.resolve(module).then(async (mod) => {
             let target = mod.id;
             if (!target && dir) {
@@ -303,10 +353,14 @@ export class Runtime {
         "approval",
         "channels",
         "web",
+        "models",
+        "personas",
+        "sessions",
       ])
         Object.defineProperty(ctx, name, {
           get: () => {
             const service = get(name);
+            if (!manifest.builtin) return service;
             if (name === "web")
               return {
                 ...service,
@@ -352,7 +406,7 @@ export class Runtime {
       for (const child of this.records.values())
         if (child.parent === record && child.status === "active")
           await this.stop(child.id, true);
-      record.fork.dispose();
+      await record.fork.dispose();
     }
     return record;
   }
@@ -360,10 +414,11 @@ export class Runtime {
     const record = this.records.get(id);
     if (!record) throw Error("插件不存在");
     if (record.manifest.builtin && !internal) throw Error("内置插件不可卸载");
+    record.controller?.abort(Error("插件已停用"));
     for (const child of this.records.values())
       if (child.parent === record && child.status === "active")
         await this.stop(child.id, true, "父插件未启用：" + id);
-    record.fork?.dispose();
+    await record.fork?.dispose();
     if (record.status !== "failed") { record.status = "stopped"; record.error = undefined; }
     if (reason && this.pluginState.enabled(id)) { record.status = "blocked"; record.error = reason; }
     this.logger.info("插件卸载", { id });
@@ -383,6 +438,7 @@ export class Runtime {
   }
   async action(id: string, action: string) {
     return this.serial(async () => {
+      if (this.closing) throw Error("核心正在关闭");
       if (!validPluginId(id)) throw Error("插件 ID 无效");
       const record = this.records.get(id);
       if (!record) throw Error("插件不存在");

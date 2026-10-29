@@ -119,6 +119,7 @@ export class LLM {
           });
           return { text, toolCalls: calls.filter(Boolean), usage };
         },
+        opts.signal,
       );
     } catch (error) {
       this.logger.error("LLM 请求失败", { error, ms: Date.now() - start });

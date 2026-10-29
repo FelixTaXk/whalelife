@@ -143,6 +143,12 @@ test("generation failures and pending crash receipts never replay tools on dupli
   await assert.rejects(() => handle.retry("friend", "m1"), /不能重放/);
   const row = (await f.memory.readSession(result.sessionId)).find((r) => r.type === "channel_receipt");
   await f.memory.appendEvent({ ...row, id: undefined, status: "pending" });
+  await f.memory.channelRoute(row.channel_key, async (route) => ({
+    route: { ...route, receipts: Object.fromEntries(Object.entries(route.receipts).map(([key, value]: [string, any]) =>
+      [key, value.receipt.external_message_id === "m1" && value.receipt.direction === "in"
+        ? { ...value, receipt: { ...value.receipt, status: "pending" } } : value],
+    )) }, result: undefined,
+  }));
   assert.equal((await handle.receive(input("m1"))).status, "uncertain");
   await assert.rejects(() => handle.retry("friend", "m1"), /不能重放/);
   assert.equal(models, 1);
