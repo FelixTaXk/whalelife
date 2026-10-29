@@ -6,8 +6,8 @@
   "exports": "./core/context.ts",
   "scripts": {
     "start": "node core/index.ts",
-    "test": "node --test tests/*.test.ts",
-    "test:compat": "node --test --test-reporter=dot tests/plugin-contract.test.ts tests/plugin-cancellation.test.ts tests/plugin-state.test.ts tests/core.test.ts tests/channel-rebinding.test.ts tests/provenance.test.ts",
+    "test": "node --test --test-concurrency=4 tests/*.test.ts",
+    "test:compat": "node --test --test-concurrency=4 --test-reporter=dot tests/plugin-contract.test.ts tests/plugin-cancellation.test.ts tests/plugin-state.test.ts tests/plugin-compatibility.test.ts tests/plugin-model-connection.test.ts tests/plugin-http-bridge.test.ts tests/plugin-rpc.test.ts tests/plugin-disposal.test.ts tests/plugin-isolation.test.ts tests/core.test.ts tests/channel-rebinding.test.ts tests/provenance.test.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {

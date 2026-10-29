@@ -1,0 +1,227 @@
+/** Public plugin data contracts. Do not export core implementation classes here. */
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ModelChoice, ModelConnection, ModelsAPI } from "./model-connection.ts";
+export type { ModelChoice, ModelConnection, ModelsAPI } from "./model-connection.ts";
+
+export type Permission = "off" | "ask" | "full";
+export type Origin = { plugin?: string; channel?: string; platform?: string; action?: string };
+export type OriginDetails = Pick<Origin, "platform" | "action">;
+export type Dispose = () => void | Promise<void>;
+export type Disposable = Dispose | { dispose: Dispose };
+
+export interface PluginLogger {
+  log(level: "debug" | "info" | "warn" | "error", message: string, extra?: unknown): void;
+  debug(message: string, extra?: unknown): void;
+  info(message: string, extra?: unknown): void;
+  warn(message: string, extra?: unknown): void;
+  error(message: string, extra?: unknown): void;
+}
+export interface PluginConfig {
+  <T = Record<string, unknown>>(file?: string): T;
+  read<T = Record<string, unknown>>(file?: string): Promise<T>;
+  save<T>(file: string, value: T): Promise<void>;
+}
+export interface ApprovalAPI {
+  request(): Promise<{ approved: boolean; reason?: string }>;
+}
+
+export interface ToolSession {
+  id?: string;
+  permission: Permission;
+  signal?: AbortSignal;
+  personaId?: string;
+  origin?: Origin;
+  channel?: string;
+  account?: string;
+  peer?: string;
+  sender?: string;
+  [field: string]: unknown;
+}
+export type ToolSchema = Record<string, unknown>;
+export interface ToolDefinition<Arguments = Record<string, unknown>, Result = unknown> {
+  name: string;
+  description: string;
+  schema: ToolSchema;
+  danger?: "safe" | "ask" | "full";
+  origin?: OriginDetails;
+  run(args: Arguments, session: ToolSession): Result | Promise<Result>;
+}
+export interface ModelTool {
+  type: "function";
+  function: { name: string; description: string; parameters: ToolSchema };
+}
+export type ToolResult<Result = unknown> = { ok: true; result: Result } | { ok: false; result: string };
+export interface ToolsAPI {
+  register<Arguments = Record<string, unknown>, Result = unknown>(tool: ToolDefinition<Arguments, Result>): () => void;
+  list(): ModelTool[];
+  call<Result = unknown>(name: string, args: unknown, session: ToolSession, callId?: string): Promise<ToolResult<Result>>;
+}
+export interface ChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_call_id?: string;
+  tool_calls?: { id: string; type: "function"; function: { name: string; arguments: string } }[];
+}
+export interface ModelUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  [field: string]: unknown;
+}
+export interface ChatOptions {
+  model: string;
+  messages: ChatMessage[];
+  tools?: ModelTool[];
+  max_tokens?: number;
+  signal?: AbortSignal;
+  onChunk?: (text: string) => void;
+}
+export interface ChatReply {
+  text: string;
+  toolCalls: { id: string; name: string; arguments: string }[];
+  usage?: ModelUsage;
+}
+export interface LLMAPI { chat(options: ChatOptions): Promise<ChatReply>; }
+
+export type PersonaChoice = { id: string; name: string; model: string | null };
+export interface PersonasAPI { list(): PersonaChoice[]; }
+export type SessionRun = {
+  sessionId: string; persona: string; text: string; permission?: Permission;
+  origin?: OriginDetails; signal?: AbortSignal; onChunk?: (text: string) => void;
+};
+export type SessionInfo = { id: string; name: string; updatedAt?: string };
+export interface ContextPolicy {
+  history_enabled: boolean;
+  short_term_days: number;
+  short_term_min_messages: number;
+  long_term_enabled: boolean;
+  budget_tokens: number;
+  include_facts: boolean;
+  include_summary: boolean;
+  history_scope: "persona" | "session";
+}
+export interface UsageTotals { input_tokens: number; output_tokens: number; requests: number; unknown_requests: number; }
+export interface RequestUsage {
+  model_id: string; model: string; provider_id: string;
+  input_tokens: number; output_tokens: number; used_tokens: number;
+  context_window: number | null; percent: number | null; measured_at: string;
+  settings_changed?: boolean;
+}
+export interface SessionContext {
+  id: string;
+  name: string | null;
+  persona: string;
+  policy: ContextPolicy;
+  model: { id: string; name: string; context_window: number | null; limit_source: string };
+  memory_window: { short_term_messages: number; long_term_messages: number; short_summary_chars: number; long_summary_chars: number };
+  available_messages: number;
+  stored_messages: number;
+  consumption?: { chat: UsageTotals; memory: UsageTotals };
+  usage: RequestUsage | null;
+}
+export interface SessionAPI {
+  list(): Promise<SessionInfo[]>;
+  create(name?: string): Promise<string>;
+  context(id: string, persona: string): Promise<SessionContext>;
+  run(input: SessionRun): Promise<string>;
+}
+
+/** Optional fields preserve legacy records; unknown data must be narrowed by its consumer. */
+export interface MemoryEvent {
+  id?: string; ts?: string; session?: string; type?: string;
+  role?: string; text?: string; name?: string; origin?: Origin;
+  persona_id?: string; persona_name?: string; persona_revision?: string;
+  [field: string]: unknown;
+}
+export interface FactsRevision { text: string; revision: string; updated_by: string; updated_at: string; }
+export interface LocalFacts extends FactsRevision { chars: number; max: number; history: FactsRevision[]; }
+export type ExperienceOutcome = "pending" | "succeeded" | "failed" | "denied";
+export interface ExperienceInput { event_id: string; outcome: ExperienceOutcome; text: string; origin?: OriginDetails; }
+export interface MemoryRecord {
+  id: string; kind: string; text: string; source: string; ts: string;
+  status?: "active" | "archived" | "superseded" | "review";
+  origin?: Origin; origins?: Origin[]; origins_incomplete?: boolean;
+  outcome?: ExperienceOutcome | null; evidence?: string[];
+  pinned?: boolean; uncertain?: boolean; persona_revision?: string | null;
+  [field: string]: unknown;
+}
+export interface MemorySearch {
+  items: (MemoryRecord & { score?: number; reason?: string; freshness?: number })[];
+  trace: { query: string; selected: { id: string; reason: string; score: number }[]; estimated_tokens: number; candidates: number; omitted: number };
+}
+export interface ExtensionInput<Data = unknown> {
+  kind: string; key: string; text: string; data?: Data; active?: boolean; origin?: OriginDetails;
+}
+export interface ExtensionRecord<Data = unknown> { owner: string; kind: string; key: string; version: number; data: Data; }
+export interface MemoryAPI {
+  readFacts(): Promise<string[]>;
+  localFacts(sessionId: string): Promise<LocalFacts>;
+  readSession(sessionId: string, limit?: number): Promise<MemoryEvent[]>;
+  search(sessionId: string, query: string): Promise<MemorySearch>;
+  recordExperience(sessionId: string, input: ExperienceInput): Promise<MemoryRecord>;
+  registerType(name: string, version?: number): { kind: string; dispose(): void };
+  saveExtension<Data = unknown>(sessionId: string, input: ExtensionInput<Data>): Promise<{ id: string }>;
+  readExtension<Data = unknown>(sessionId: string, kind: string, key: string): Promise<ExtensionRecord<Data> | null>;
+}
+
+export type IncomingMessageData = { peer: string; sender: string; messageId: string; text: string };
+export type OutgoingMessage = { channel: string; account: string; peer: string; sessionId: string; text: string; deliveryId: string; replyTo?: string };
+export type ChannelAdapter = {
+  id: string; name?: string; account: string; persona?: string; permission?: Permission;
+  send(message: OutgoingMessage, options: { signal: AbortSignal }): Promise<void>;
+};
+export type ChannelResult = {
+  sessionId: string; messageId: string; deliveryId: string;
+  status: "sent" | "generated" | "generation_failed" | "delivery_failed" | "uncertain";
+  text?: string; error?: string; duplicate?: boolean;
+};
+export type ReceiveOptions = { signal?: AbortSignal };
+export type SendMessage = { peer: string; messageId: string; text: string };
+export type RebindOptions = { expectedSessionId: string | null; sessionId?: string };
+export interface ChannelHandle {
+  receive(message: IncomingMessageData, options?: ReceiveOptions): Promise<ChannelResult>;
+  bind(peer: string, sessionId: string): Promise<string>;
+  rebind(peer: string, options: RebindOptions): Promise<string>;
+  retry(peer: string, messageId: string, options?: ReceiveOptions & { direction?: "in" | "out" }): Promise<ChannelResult>;
+  send(message: SendMessage, options?: ReceiveOptions): Promise<ChannelResult>;
+  context(peer: string): Promise<SessionContext>;
+  dispose(): void;
+}
+export interface ChannelAPI {
+  register(adapter: ChannelAdapter): ChannelHandle;
+  send(target: SendMessage & { channel: string; account: string }, options?: ReceiveOptions): Promise<ChannelResult>;
+}
+export type PluginHandler = (req: IncomingMessage, res: ServerResponse, context: { signal: AbortSignal }) => unknown | Promise<unknown>;
+export type PageOptions = { title: string; settings?: boolean; navigation?: boolean };
+export type PluginPage = PageOptions & { owner: string; path: string };
+export interface PluginWeb {
+  page(path: string, handler: PluginHandler, entry?: PageOptions): () => void;
+  api(path: string, handler: PluginHandler): () => void;
+}
+export interface PluginEvents {
+  "whalelife/ready": { at: string };
+  "whalelife/shutdown": { at: string };
+  "channel/message": MemoryEvent;
+  "channel/reply": MemoryEvent;
+  "memory/recorded": MemoryEvent;
+  "memory/updated": { session: string };
+  "tool/called": { id: string; name: string; source: string; origin: Origin; session?: string; ok: boolean; result: unknown };
+}
+/** Can be augmented by typed plugins to declare their own service contracts. */
+export interface PluginServices {
+  logger: PluginLogger;
+  tools: ToolsAPI;
+  llm: LLMAPI;
+  memory: MemoryAPI;
+  approval: ApprovalAPI;
+  channels: ChannelAPI;
+  web: PluginWeb;
+  models: ModelsAPI;
+  personas: PersonasAPI;
+  sessions: SessionAPI;
+}
+export interface PluginStatus {
+  id: string;
+  status: "loading" | "active" | "failed" | "stopped" | "blocked";
+  error?: string;
+}

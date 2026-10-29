@@ -1,0 +1,78 @@
+import { workerData } from "node:worker_threads";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { PluginRPC } from "./plugin-rpc.ts";
+import { createPluginHttpServer } from "./plugin-http-bridge.ts";
+
+const { port, wake } = workerData;
+const send = (packet: any) => port.postMessage(packet);
+const fault = (error: any) => send({ type: "fatal", error: error?.message ?? String(error) });
+const peer = new PluginRPC({ side: "plugin", transport: { send }, port, wake, timeout: Number(process.env.WHALE_PLUGIN_CALL_TIMEOUT_MS) || 600000, onFault: fault });
+port.on("message", (message: any) => peer.receive(message));
+const heartbeat = setInterval(() => send({ type: "pulse" }), 100); heartbeat.unref();
+process.on("uncaughtException", fault); process.on("unhandledRejection", fault);
+const cleanups = new Set<() => any>();
+let http: Awaited<ReturnType<typeof createPluginHttpServer>> | undefined;
+let stopping = false;
+peer.bind("entry", {
+  async start(kernel: any, directory: string) {
+    const remote = kernel.ctx;
+    const ctx = Object.create(null);
+    for (const key of ["apiVersion", "logger", "signal", "config", "llm", "memory", "approval", "channels", "models", "personas", "sessions"])
+      Object.defineProperty(ctx, key, { enumerable: true, get: () => remote[key] });
+    ctx.tools = Object.freeze({
+      register: (tool: any) => remote.tools.register({ ...tool, run: async (...args: any[]) => {
+        try { return await tool.run(...args); }
+        catch (error) { if (!remote.signal.aborted) setImmediate(() => fault(error)); throw error; }
+      } }),
+      list: () => remote.tools.list(),
+      call: (...args: any[]) => remote.tools.call(...args),
+    });
+    ctx.get = (name: string, strict?: boolean) => ["web", "tools"].includes(name) ? ctx[name] : kernel.get(name, strict);
+    ctx.provide = (name: string, value: any) => { if (value && typeof value === "object") peer.publish(value); remote.provide(name, value); };
+    ctx.on = (name: string, handler: any) => remote.on(name, handler);
+    ctx.emit = (name: string, payload: any) => remote.emit(name, payload);
+    ctx.effect = (fn: () => any) => {
+      remote.signal.throwIfAborted();
+      const result = fn(); let disposed = false;
+      const original = typeof result === "function" ? result : result.dispose.bind(result);
+      const cleanup = () => { if (disposed) return; disposed = true; cleanups.delete(cleanup); return original(); };
+      cleanups.add(cleanup);
+      if (typeof result === "function") return cleanup;
+      result.dispose = cleanup;
+      return result;
+    };
+    ctx.plugin = async (module: any) => {
+      module = await module;
+      let target = module.id;
+      if (!target) for (const child of await readdir(join(directory, "sub"), { withFileTypes: true })) {
+        if (!child.isDirectory()) continue;
+        const candidate = await import(pathToFileURL(join(directory, "sub", child.name, "index.ts")).href);
+        if (candidate.apply === module.apply) { target = child.name; break; }
+      }
+      if (!target) throw Error("无法确定子插件目录，请导出 id");
+      return remote.plugin({ id: target });
+    };
+    http = await createPluginHttpServer(remote.signal, fault, peer.timeout);
+    kernel.openWeb(http.endpoint);
+    ctx.web = Object.freeze(Object.fromEntries(["page", "api"].map((kind) => [kind, (path: string, handler: any, entry?: any) => {
+      remote.signal.throwIfAborted(); const id = crypto.randomUUID(), local = http!.register(id, handler);
+      try {
+        const host = kernel.registerWeb(kind, path, id, entry);
+        return () => { local(); host(); };
+      } catch (error) { local(); throw error; }
+    }])));
+    peer.alias(ctx, remote);
+    const module = await import(pathToFileURL(join(directory, "index.ts")).href);
+    if (typeof module.apply !== "function") throw Error("插件缺少 apply");
+    await module.apply(Object.freeze(ctx));
+    peer.flush();
+  },
+  async stop() {
+    if (stopping) return; stopping = true;
+    await Promise.allSettled([...cleanups].map((fn) => Promise.resolve().then(fn)));
+    await http?.close(); peer.flush();
+  },
+});
+send({ type: "ready" });

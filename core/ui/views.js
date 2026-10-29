@@ -4,6 +4,7 @@ import {
   escapeHTML as e,
   typeNames,
   availableModels,
+  coreChatModel,
   extensionPlugins,
 } from "./api.js";
 import { icon, whale } from "./icons.js";
@@ -38,7 +39,7 @@ export function renderOverview(app) {
    [
      "可用模型",
      availableModels(c).length + "",
-     "已启用且配置有效的对话与向量模型",
+     "已启用且配置有效的模型",
      "cube",
    ],
    [
@@ -123,6 +124,7 @@ export function renderBindings(app) {
       .filter(
         (m) =>
           m.type === type &&
+          (type !== "chat" || coreChatModel(c, m)) &&
           m.enabled &&
           !m.configuration_error &&
           c.providers.find((p) => p.id === m.provider)?.enabled,
@@ -134,7 +136,7 @@ export function renderBindings(app) {
       .join("");
   const field = (type, description) =>
     `<div class="binding-row"><div class="row">${icon(typeIcon(type))}<h3>${typeNames[type]}模型</h3></div><select name="binding_${type}" aria-label="${typeNames[type]}模型">${options(type, c.bindings[type])}</select><p>${description}</p></div>`;
-  return `<form id="bindings-form"><div class="page-heading"><div><div class="eyebrow">MODEL ROUTING</div><h1>使用配置</h1><p>明确选择每种能力使用的模型。未配置的用途保持关闭。</p></div><div class="heading-actions"><button type="submit" class="btn primary">${icon("check")}保存配置</button></div></div><div class="info-banner">${icon("info")}选择已启用的模型，保存后从下一次请求开始生效。</div><div class="bindings-grid"><section class="panel"><div class="panel-header"><h2>工作空间模型</h2><a href="#models" class="btn small link">管理模型 ${icon("arrow")}</a></div><div class="panel-body">${field("chat", "用于鲸鲸的日常对话和会话摘要。")}${field("embedding", "为后续记忆检索选择向量模型。当前支持配置与向量接口测试，检索接入将在后续开发。")}${field("rerank", "为后续检索结果排序预留，可暂时不配置。")}<details style="margin-top:20px"><summary class="muted">更多模型用途</summary><div style="margin-top:20px">${field("image", "图像生成服务的模型选择。")}${field("stt", "语音识别服务的模型选择。")}${field("tts", "语音合成服务的模型选择。")}<p class="hint" style="margin-top:16px">图像、语音与重排序目前仅保存选择，相应能力尚未接入。</p></div></details></div></section><section class="panel"><div class="panel-header"><h2>人格配置</h2></div><div class="panel-body">${personaSettings}</div></section></div><p id="bindings-error" class="form-error" role="alert"></p></form>`;
+  return `<form id="bindings-form"><div class="page-heading"><div><div class="eyebrow">MODEL ROUTING</div><h1>使用配置</h1><p>明确选择每种能力使用的模型。未配置的用途保持关闭。</p></div><div class="heading-actions"><button type="submit" class="btn primary">${icon("check")}保存配置</button></div></div><div class="info-banner">${icon("info")}选择已启用的模型，保存后从下一次请求开始生效。</div><div class="bindings-grid"><section class="panel"><div class="panel-header"><h2>工作空间模型</h2><a href="#models" class="btn small link">管理模型 ${icon("arrow")}</a></div><div class="panel-body">${field("chat", "用于鲸鲸的日常对话和会话摘要。")}${field("embedding", "供插件使用的向量模型。当前支持配置与接口测试；检索由插件实现。")}${field("rerank", "供重排序插件使用的模型选择，可留空。")}<details style="margin-top:20px"><summary class="muted">更多模型用途</summary><div style="margin-top:20px">${field("image", "图像生成服务的模型选择。")}${field("stt", "语音识别服务的模型选择。")}${field("tts", "语音合成服务的模型选择。")}<p class="hint" style="margin-top:16px">这里保存模型选择，图像、语音与重排序的具体调用由对应插件实现。</p></div></details></div></section><section class="panel"><div class="panel-header"><h2>人格配置</h2></div><div class="panel-body">${personaSettings}</div></section></div><p id="bindings-error" class="form-error" role="alert"></p></form>`;
 }
 export function bindBindings(app) {
   const form = document.querySelector("#bindings-form");

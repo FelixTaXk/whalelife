@@ -3,23 +3,19 @@ import type { Sessions } from "./session.ts";
 import { safeId } from "./memory.ts";
 import { pluginOrigin, type OriginDetails } from "./provenance.ts";
 import type { Permission } from "./permission.ts";
+import type { ModelChoice, ModelsAPI } from "./model-connection.ts";
+export type { ModelChoice, ModelConnection, ModelsAPI } from "./model-connection.ts";
+import type { PersonaChoice, SessionAPI } from "./plugin-api.ts";
+export type { PersonaChoice, SessionAPI, SessionRun } from "./plugin-api.ts";
 
-export type ModelChoice = { id: string; name: string; model: string; type: ModelType; provider: string; context_window: number | null; callable: boolean };
-export type PersonaChoice = { id: string; name: string; model: string | null };
-export type SessionRun = { sessionId: string; persona: string; text: string; permission?: Permission; origin?: OriginDetails; signal?: AbortSignal; onChunk?: (text: string) => void };
-export interface SessionAPI {
-  list(): Promise<any[]>;
-  create(name?: string): Promise<string>;
-  context(id: string, persona: string): Promise<any>;
-  run(input: SessionRun): Promise<any>;
-}
 export function pluginServices(config: any, modelConfig: ModelConfig, sessions: Sessions, memory: any) {
   return {
     models: { list(type?: ModelType): ModelChoice[] {
       const snapshot = modelConfig.snapshot();
       return snapshot.models.filter((m: any) => (!type || m.type === type) && m.enabled && !m.configuration_error && snapshot.providers.find((p: any) => p.id === m.provider)?.enabled !== false)
-        .map((m: any) => ({ id: m.id, name: m.name, model: m.model, type: m.type, provider: m.provider, context_window: m.context_window, callable: m.type === "chat" }));
-    } },
+        .map((m: any) => ({ id: m.id, name: m.name, model: m.model, type: m.type, provider: m.provider, context_window: m.context_window,
+          callable: m.type === "chat" && snapshot.providers.find((p: { id: string; protocol: string }) => p.id === m.provider)?.protocol === "openai-compatible" }));
+    }, connection(id: string) { return modelConfig.connection(id); } } satisfies ModelsAPI,
     personas: { list(): PersonaChoice[] { return modelConfig.snapshot().personas; } },
     sessions: { plugin(owner: string, signal: AbortSignal): SessionAPI {
       const check = () => signal.throwIfAborted();

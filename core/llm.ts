@@ -43,6 +43,8 @@ export class LLM {
       },
     );
     if (configurationError) throw Error(configurationError);
+    if ((opts.provider.protocol ?? "openai-compatible") !== "openai-compatible")
+      throw Error("此模型协议由插件调用，不能用于主干对话");
     const parameters = validateModelParameters(opts.provider.parameters);
     const start = Date.now();
     this.logger.info("LLM 请求", { model: opts.provider.model });

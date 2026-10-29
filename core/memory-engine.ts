@@ -815,7 +815,7 @@ export class MemoryEngine {
           await this.memory.writeSummary(key, checkpoint.text, id);
     }
   }
-  plugin(owner: string, cleanup: (dispose: () => void) => void) {
+  plugin(owner: string, cleanup: (dispose: () => void) => unknown) {
     const namespace = "plugin:" + owner + ":";
     let alive = true;
     cleanup(() => {
@@ -856,12 +856,13 @@ export class MemoryEngine {
           throw Error("扩展类型无效");
         const kind = namespace + name;
         if (this.types.has(kind)) throw Error("扩展类型已注册");
-        this.types.set(kind, { owner, version });
+        const registration = { owner, version };
+        this.types.set(kind, registration);
         const dispose = () => {
-          this.types.delete(kind);
+          if (this.types.get(kind) === registration) this.types.delete(kind);
         };
-        cleanup(dispose);
-        return { kind, dispose };
+        const tracked = cleanup(dispose);
+        return { kind, dispose: typeof tracked === "function" ? tracked as () => void : dispose };
       },
       saveExtension: async (id: string, input: any) => {
         check();

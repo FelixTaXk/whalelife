@@ -58,7 +58,7 @@ export async function boot(
       resolveModel(config, id),
     ),
     tools = new Tools(logger, config.permissions?.tools);
-  const runtime = new Runtime(root, logger);
+  const runtime = new Runtime(root, logger, config.plugin_runtime);
   const services: any = {
     logger,
     memory,

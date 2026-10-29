@@ -16,6 +16,7 @@ export function renderPersonas(app) {
   const models = c.models.filter(
     (m) =>
       m.type === "chat" &&
+      (c.providers.find((p) => p.id === m.provider)?.protocol ?? "openai-compatible") === "openai-compatible" &&
       m.enabled &&
       !m.configuration_error &&
       c.providers.find((p) => p.id === m.provider)?.enabled,

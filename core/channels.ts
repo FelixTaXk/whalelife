@@ -528,6 +528,8 @@ export class Channels {
       register: (adapter) => {
         guard();
         const handle = this.register(adapter, owner);
+        const dispose = handle.dispose;
+        handle.dispose = () => { handles.delete(handle); dispose(); };
         handles.add(handle);
         return handle;
       },

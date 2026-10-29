@@ -5,6 +5,7 @@ import { join, resolve, dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { Logger } from "./logger.ts";
 import { proxyURL, timeoutSeconds, withModelResponse } from "./model-http.ts";
+import type { ModelConnection } from "./model-connection.ts";
 
 export const MODEL_TYPES = [
   "chat",
@@ -28,7 +29,7 @@ type ModelRole = (typeof MODEL_ROLES)[number];
 export interface ProviderConfig {
   id: string;
   name: string;
-  protocol: "openai-compatible" | "dashscope";
+  protocol: string;
   base_url: string;
   api_key: string;
   enabled: boolean;
@@ -66,6 +67,8 @@ const object = (value: unknown): value is Record<string, any> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const validId = (value: unknown) =>
   typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/.test(value);
+const validProtocol = (value: unknown): value is string =>
+  typeof value === "string" && /^[a-z][a-z0-9._-]{0,63}$/.test(value);
 function text(value: unknown, field: string, max = 200): string {
   if (
     typeof value !== "string" ||
@@ -193,8 +196,8 @@ function readProvider(
 ): ProviderConfig {
   if (!object(p)) throw new ModelConfigError("提供商配置格式无效");
   const providerId = draft && !p.id ? "draft-provider" : id(p.id, "提供商 ID");
-  if (!["openai-compatible", "dashscope"].includes(p.protocol))
-    throw new ModelConfigError("请选择 OpenAI 兼容或 DashScope 原生协议");
+  if (!validProtocol(p.protocol))
+    throw new ModelConfigError("协议标识需为1–64个小写字母、数字、点、短横线或下划线，并以字母开头");
   if (typeof p.enabled !== "boolean")
     throw new ModelConfigError("提供商 enabled 必须是布尔值");
   const url = baseURL(p.base_url);
@@ -261,8 +264,7 @@ export function modelConfigurationError(
   provider?: Pick<ProviderConfig, "protocol" | "base_url">,
 ): string | null {
   if (!provider) return "模型引用的提供商不存在";
-  if (!["openai-compatible", "dashscope"].includes(provider.protocol))
-    return "提供商协议不受支持";
+  if (!validProtocol(provider.protocol)) return "提供商协议标识无效";
   let host: string;
   try {
     host = new URL(provider.base_url).hostname.toLowerCase();
@@ -385,6 +387,8 @@ export function resolveChatModel(
       { ...provider, protocol: provider.protocol ?? "openai-compatible" },
     );
     if (error) throw new ModelConfigError(error);
+    if ((provider.protocol ?? "openai-compatible") !== "openai-compatible")
+      throw new ModelConfigError("此模型协议由插件调用，不能用于主干对话");
     return {
       ...provider,
       parameters: validateModelParameters(provider.parameters),
@@ -406,6 +410,8 @@ export function resolveModel(config: any, selected: string) {
     throw new ModelConfigError("对话模型的提供商不存在或已停用");
   const error = modelConfigurationError(model, provider);
   if (error) throw new ModelConfigError(error);
+  if (provider.protocol !== "openai-compatible")
+    throw new ModelConfigError("此模型协议由插件调用，不能用于主干对话");
   return {
     ...provider,
     model: model.model,
@@ -490,6 +496,29 @@ export class ModelConfig {
         model: p.model ?? null,
       })),
     };
+  }
+  /** Backend-only credential access. Browser snapshots deliberately omit this. */
+  connection(selected: string): ModelConnection {
+    id(selected, "模型配置 ID");
+    this.snapshot();
+    const rawModel = this.source.models.find((m: ModelDefinition) => m.id === selected);
+    if (!rawModel) throw new ModelConfigError("模型配置不存在");
+    const model = readModel(rawModel);
+    if (!model.enabled) throw new ModelConfigError("模型配置已停用");
+    const rawProvider = this.source.providers.find((p: ProviderConfig) => p.id === model.provider);
+    if (!rawProvider) throw new ModelConfigError("模型引用的提供商不存在");
+    const provider = readProvider(rawProvider);
+    if (!provider.enabled) throw new ModelConfigError("模型提供商已停用");
+    const error = modelConfigurationError(model, provider);
+    if (error) throw new ModelConfigError(error);
+    return structuredClone({
+      id: model.id, name: model.name, model: model.model, type: model.type,
+      provider_id: provider.id, provider_name: provider.name, protocol: provider.protocol,
+      base_url: provider.base_url, api_key: provider.api_key,
+      timeout_seconds: provider.timeout_seconds, proxy_url: provider.proxy_url,
+      parameters: model.parameters, dimensions: model.dimensions,
+      context_window: model.context_window ?? null,
+    });
   }
   save(input: any) {
     if (Array.isArray(input?.providers)) this.protectKeys(input.providers);
@@ -689,6 +718,7 @@ export class ModelConfig {
         model.type !== type ||
         !model.enabled ||
         !provider?.enabled ||
+        (type === "chat" && provider.protocol !== "openai-compatible") ||
         modelConfigurationError(model, provider)
       )
         throw new ModelConfigError(
@@ -766,8 +796,8 @@ export class ModelConfig {
     );
     if (!provider || !provider.enabled)
       throw new ModelConfigError("提供商不存在或已停用");
-    if (!["openai-compatible", "dashscope"].includes(provider.protocol))
-      throw new ModelConfigError("提供商协议不受支持");
+    if (!validProtocol(provider.protocol))
+      throw new ModelConfigError("提供商协议标识无效");
     return provider;
   }
   private async request(
@@ -817,7 +847,7 @@ export class ModelConfig {
   private async fetchModels(provider: ProviderConfig, signal?: AbortSignal) {
     if (provider.protocol !== "openai-compatible")
       throw new ModelConfigError(
-        "DashScope 原生协议请手动填写模型标识，或使用 OpenAI 兼容地址获取模型列表",
+        "此协议不提供核心兼容模型列表，请手动填写模型标识，或使用 OpenAI 兼容地址",
       );
     const data = await this.request(provider, "/models", undefined, signal);
     if (!Array.isArray(data.data))
@@ -887,6 +917,8 @@ export class ModelConfig {
   ) {
     if (!provider.enabled || !model.enabled)
       throw new ModelConfigError("提供商和模型必须启用后才能测试");
+    if (!["openai-compatible", "dashscope"].includes(provider.protocol))
+      throw new ModelConfigError("此协议由相应插件调用和测试，主干仅保存连接配置");
     const error = modelConfigurationError(model, provider);
     if (error) throw new ModelConfigError(error);
     const expected = detectDimensions

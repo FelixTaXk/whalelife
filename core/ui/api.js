@@ -37,10 +37,16 @@ export const typeNames = {
 export const uid = (prefix) =>
   prefix + "_" + crypto.randomUUID().replaceAll("-", "").slice(0, 12);
 
+export const coreChatModel = (config, model) =>
+  model.type === "chat" &&
+  (config.providers.find((p) => p.id === model.provider)?.protocol ?? "openai-compatible") === "openai-compatible";
+
 export const availableModels = (config) =>
   config.models.filter(
     (m) =>
       ["chat", "embedding"].includes(m.type) &&
+      (m.type === "chat" ? coreChatModel(config, m) :
+        ["openai-compatible", "dashscope"].includes(config.providers.find((p) => p.id === m.provider)?.protocol ?? "openai-compatible")) &&
       m.enabled &&
       !m.configuration_error &&
       config.providers.find((p) => p.id === m.provider)?.enabled,

@@ -8,6 +8,8 @@ import { atomic } from "./memory.ts";
 import type { Logger } from "./logger.ts";
 import { PluginState, validPluginId } from "./plugin-state.ts";
 import { PluginEvents } from "./plugin-events.ts";
+import { PluginProcess, pluginRuntimeOptions, type PluginRuntimeOptions } from "./plugin-process.ts";
+import { assertPluginCompatibility, PLUGIN_API_VERSION } from "./plugin-compatibility.ts";
 export class Runtime {
   bus = new Cordis();
   records = new Map<string, any>();
@@ -18,23 +20,31 @@ export class Runtime {
   events: PluginEvents;
   private actions: Promise<unknown> = Promise.resolve();
   private closing = false;
+  private processOptions: ReturnType<typeof pluginRuntimeOptions>;
   beginClose() {
     this.closing = true;
     for (const record of this.records.values()) record.controller?.abort(Error("核心正在关闭"));
   }
-  constructor(root: string, logger: Logger) {
+  constructor(root: string, logger: Logger, options: PluginRuntimeOptions = {}) {
     this.root = root;
     this.logger = logger;
+    this.processOptions = pluginRuntimeOptions(options);
     this.pluginState = new PluginState(root);
     this.events = new PluginEvents(logger);
     this.bus.on("internal/error", (...args: any[]) =>
       logger.error("cordis 错误", args.map(String)),
     );
+    const stop = this.bus.stop.bind(this.bus);
+    this.bus.stop = async () => {
+      this.beginClose();
+      await stop();
+      await Promise.allSettled([...this.records.values()].map((record) => record.execution?.close()));
+    };
   }
   list() {
     return [...this.records.values()].map(
       ({ id, manifest, status, error }) => ({ ...manifest, id, status, error,
-        enabled: manifest.builtin || this.pluginState.enabled(id) }),
+        enabled: manifest.builtin || this.pluginState.enabled(id), apiVersion: manifest.apiVersion ?? "1.x" }),
     );
   }
   async builtin(id: string, value: any, setup?: (ctx: any) => any) {
@@ -112,15 +122,17 @@ export class Runtime {
         ? this.records.get(parts.slice(0, -1).join("/"))
         : undefined;
     const dir = join(this.root, "plugins", parts.join("/sub/"));
+    let manifest: any;
     try {
       await this.pluginState.load();
-      const manifest = parse(await readFile(join(dir, "plugin.yaml"), "utf8"));
+      manifest = parse(await readFile(join(dir, "plugin.yaml"), "utf8"));
       for (const key of ["id", "name", "description", "version"])
         if (typeof manifest[key] !== "string")
           throw Error("manifest 缺少 " + key);
       if (manifest.id !== basename(dir))
         throw Error("manifest ID 必须匹配目录");
       manifest.builtin = false;
+      assertPluginCompatibility(manifest);
       if (manifest.depends !== undefined && (!Array.isArray(manifest.depends) || manifest.depends.some((name: any) => typeof name !== "string")))
         throw Error("插件依赖必须是服务名称数组");
       const enabled = this.pluginState.enabled(id);
@@ -135,17 +147,14 @@ export class Runtime {
         await this.children(record);
         return record;
       }
-      const module = await import(
-        pathToFileURL(join(dir, "index.ts")).href + "?v=" + crypto.randomUUID()
-      );
-      return await this.load(id, manifest, module.apply, parent, dir);
+      return await this.load(id, manifest, undefined, parent, dir, true);
     } catch (error: any) {
       this.logger.error("插件加载失败", { id, error });
       this.records.set(id, {
         id,
-        manifest: { name: id },
+        manifest: manifest && typeof manifest === "object" ? { ...manifest, builtin: false } : { name: id },
         status: "failed",
-        error: error.message,
+        error: error?.message ?? String(error),
         dir,
         parent,
       });
@@ -158,6 +167,7 @@ export class Runtime {
     apply: any,
     parent?: any,
     dir?: string,
+    isolated = false,
   ) {
     if (this.closing) throw Error("核心正在关闭");
     if (this.records.get(id)?.status === "active") return this.records.get(id);
@@ -184,7 +194,7 @@ export class Runtime {
     };
     const fail = (error: any) => {
       record.status = record.missingDependencies.size ? "blocked" : "failed";
-      record.error = error.message;
+      record.error = error?.message ?? String(error);
       this.logger.error("插件失败", { id, error });
     };
     let finish!: () => void;
@@ -194,6 +204,7 @@ export class Runtime {
       const controller = new AbortController();
       record.controller = controller;
       const alive = () => controller.signal.throwIfAborted();
+      const log = Object.freeze(Object.fromEntries(["log", "debug", "info", "warn", "error"].map((name) => [name, (...args: any[]) => (this.logger as any)[name](...args)])));
       native.effect(() => () => controller.abort(Error("插件已停用")));
       let pluginMemory: any;
       let pluginChannels: any;
@@ -206,6 +217,11 @@ export class Runtime {
           throw Error("依赖缺失：" + name);
         }
         if (value !== undefined) record.dependencies.add(name);
+        if (name === "logger" && !manifest.builtin) return log;
+        if (name === "approval" && !manifest.builtin) {
+          if (!facades.has(name) && value) facades.set(name, Object.freeze({ request: (...args: any[]) => { alive(); return value.request(...args); } }));
+          return facades.get(name);
+        }
         if (name === "channels" && value?.plugin) {
           pluginChannels ??= value.plugin(id, (dispose: any) =>
             native.effect(() => dispose),
@@ -226,18 +242,19 @@ export class Runtime {
           if (facades.has(name)) return facades.get(name);
           let facade: any;
           if (name === "web") facade = {
-            page: (path: string, handler: any, entry?: any) => { alive(); const dispose = value.registerPlugin(id, controller.signal, "GET", path, handler, entry); native.effect(() => dispose); return dispose; },
-            api: (path: string, handler: any) => { alive(); const dispose = value.registerPlugin(id, controller.signal, "POST", path, handler); native.effect(() => dispose); return dispose; },
+            page: (path: string, handler: any, entry?: any) => { alive(); const dispose = value.registerPlugin(id, controller.signal, "GET", path, handler, entry); return native.effect(() => dispose); },
+            api: (path: string, handler: any) => { alive(); const dispose = value.registerPlugin(id, controller.signal, "POST", path, handler); return native.effect(() => dispose); },
           };
           if (name === "tools") facade = {
-            register: (tool: any) => { alive(); const dispose = value.register({ ...tool, owner: id }, controller.signal); native.effect(() => dispose); return dispose; },
-            list: () => { alive(); return value.list(); },
+            register: (tool: any) => { alive(); const dispose = value.register({ ...tool, owner: id }, controller.signal); return native.effect(() => dispose); },
+            list: () => { alive(); return structuredClone(value.list()); },
             call: (name: string, args: any, session: any, ...rest: any[]) => { alive(); return value.call(name, args, { ...session, signal: AbortSignal.any([controller.signal, ...(session?.signal ? [session.signal] : [])]) }, ...rest); },
           };
           if (name === "llm") facade = { chat: (options: any) => { alive(); return value.chat({ ...options, signal: AbortSignal.any([controller.signal, ...(options.signal ? [options.signal] : [])]) }); } };
-          if (name === "models" || name === "personas") facade = { list: (...args: any[]) => { alive(); return value.list(...args); } };
+          if (name === "models" || name === "personas") facade = { list: (...args: any[]) => { alive(); return value.list(...args); },
+            ...(name === "models" ? { connection: (selected: string) => { alive(); return value.connection(selected); } } : {}) };
           if (name === "sessions") facade = value.plugin(id, controller.signal);
-          facades.set(name, facade); return facade;
+          Object.freeze(facade); facades.set(name, facade); return facade;
         }
         return value;
       };
@@ -286,7 +303,8 @@ export class Runtime {
       };
       const ctx: any = {
         get,
-        logger: this.logger,
+        logger: manifest.builtin ? this.logger : log,
+        apiVersion: PLUGIN_API_VERSION,
         signal: controller.signal,
         config,
         provide: (name: string, value: any) => {
@@ -315,7 +333,7 @@ export class Runtime {
               await this.stop(id, true);
             }
           });
-          native.effect(() => dispose); return dispose;
+          return native.effect(() => dispose);
         },
         emit: (event: string, payload: any) => { alive();
           if (!event.startsWith(`plugin:${id}:`) || event.length > 200) throw Error("插件只能发布 plugin:<自身ID>:<事件>，不能伪造核心事件");
@@ -340,7 +358,8 @@ export class Runtime {
               }
             }
             if (!target) throw Error("无法确定子插件目录，请导出 id");
-            return this.loadPath(id + "/" + target);
+            const child = await this.loadPath(id + "/" + target);
+            return { id: child.id, status: child.status, error: child.error };
           });
           record.pending.push(task);
           return task;
@@ -366,21 +385,18 @@ export class Runtime {
                 ...service,
                 page: (...args: any[]) => {
                   const dispose = service.page(...args);
-                  native.effect(() => dispose);
-                  return dispose;
+                  return native.effect(() => dispose);
                 },
                 api: (...args: any[]) => {
                   const dispose = service.api(...args);
-                  native.effect(() => dispose);
-                  return dispose;
+                  return native.effect(() => dispose);
                 },
               };
             if (name !== "tools") return service;
             return {
               register: (tool: any) => {
                 const dispose = service.register({ ...tool, owner: id });
-                native.effect(() => dispose);
-                return dispose;
+                return native.effect(() => dispose);
               },
               list: () => service.list(),
               call: (...args: any[]) => service.call(...args),
@@ -389,8 +405,20 @@ export class Runtime {
         });
       try {
         for (const name of manifest.depends ?? []) get(name);
-        if (typeof apply !== "function") throw Error("插件缺少 apply");
-        await apply(ctx);
+        if (isolated) {
+          const execution = new PluginProcess(id, ctx, this.processOptions, (error) => {
+            if (this.records.get(id) !== record || controller.signal.aborted) return;
+            fail(error);
+            void this.stop(id, true).catch((cleanup) => this.logger.error("故障插件清理失败", { id, error: cleanup }));
+          });
+          record.execution = execution;
+          native.effect(() => () => { void execution.close(); });
+          await execution.start(dir!);
+        } else {
+          if (typeof apply !== "function") throw Error("插件缺少 apply");
+          await apply(ctx);
+        }
+        alive();
         record.status = "active";
         await Promise.all(record.pending);
         if (dir) await this.children(record);
@@ -407,6 +435,7 @@ export class Runtime {
         if (child.parent === record && child.status === "active")
           await this.stop(child.id, true);
       await record.fork.dispose();
+      await record.execution?.close();
     }
     return record;
   }
@@ -414,11 +443,14 @@ export class Runtime {
     const record = this.records.get(id);
     if (!record) throw Error("插件不存在");
     if (record.manifest.builtin && !internal) throw Error("内置插件不可卸载");
+    if (record.stopping) return record.stopping;
+    record.stopping = (async () => {
     record.controller?.abort(Error("插件已停用"));
     for (const child of this.records.values())
       if (child.parent === record && child.status === "active")
         await this.stop(child.id, true, "父插件未启用：" + id);
     await record.fork?.dispose();
+    await record.execution?.close();
     if (record.status !== "failed") { record.status = "stopped"; record.error = undefined; }
     if (reason && this.pluginState.enabled(id)) { record.status = "blocked"; record.error = reason; }
     this.logger.info("插件卸载", { id });
@@ -435,6 +467,8 @@ export class Runtime {
         })
       )
         await this.stop(other.id, true, "等待依赖恢复");
+    })();
+    return record.stopping;
   }
   async action(id: string, action: string) {
     return this.serial(async () => {

@@ -83,7 +83,7 @@ export async function apply(ctx: Context) {
 
 人格与权限来源于可信注册参数，未传时读取主配置 `channels[id].accounts[account]`（存在时）或 `channels[id]`，权限再回退到人格配置，最后为 off。人格必须存在，权限只能是 off/ask/full。注册值固定在实例中；未覆盖的主配置在调用时读取。收件消息不得指定 persona、permission、session、sessionId、channel、account 或 owner。适配器负责验证外部事件，核心不会把事件中自称的账号、发送者或管理员身份当作授权。
 
-插件是同进程受信任代码；这些门面提供归属和生命周期约束，不是恶意代码隔离沙箱。插件停止、加载失败或父插件卸载时，注册自动清理，旧门面及旧 handle 拒绝新调用。相同账号只能有一个活动注册，持久绑定也保存原插件归属。
+安装插件在独立进程执行，但仍属于受信任代码；这些门面提供归属和生命周期约束，不是恶意代码安全沙箱。插件停止、加载失败或父插件卸载时，注册自动清理，旧门面及旧 handle 拒绝新调用。相同账号只能有一个活动注册，持久绑定也保存原插件归属。
 
 Web 的 `/ws/chat` 通过同一可信生成入口进入 Sessions，保留显式 session、chunk/context/done 流式协议与 expectedPersona 冲突检查。切换或编辑人格不会改变 Web session。Web 没有平台稳定消息 ID，因此不采用外部消息回执去重；默认历史范围仍是 session，显式 persona 隔离仍然可用。
 
