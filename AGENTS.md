@@ -1,6 +1,6 @@
 # WhaleLife 开发硬约束
 
-适用于本仓库全部主干、插件、示例、测试和文档。先读 `architecture/PLUGINS.md` 的职责边界与兼容规则；实现状态只维护在 `architecture/STATUS.md`。本文件与这两份公开文档优先于本机旧设计稿。
+适用于本仓库全部主干、插件、示例、测试和文档。先读 `architecture/STATUS.md` 的整体能力、调用链、源码分工和统一问题表，再读本文件及 `architecture/PLUGINS.md` 的契约。不要另建重复的主干状态或待办清单。当前公开说明优先于本机旧设计稿；阶段报告仅作为历史验证证据。
 
 ## 固定职责
 
