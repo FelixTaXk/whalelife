@@ -1,4 +1,4 @@
-import type { Context } from "../../../core/context.ts";
+import type { Context } from "whalelife";
 
 export async function apply(ctx: Context) {
   const base = "/plugins/contract-check/";
@@ -8,7 +8,7 @@ export async function apply(ctx: Context) {
   const json = (res: any, value: any) => { res.setHeader("Content-Type", "application/json; charset=utf-8"); res.end(JSON.stringify(value)); };
   ctx.web.page(base + "settings", (_req, res) => {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>插件设置示例</title><link rel="stylesheet" href="/ui/styles.css"><style>body{padding:28px;background:white}.form-field{margin-bottom:20px}form{max-width:620px}</style><h2>插件设置示例</h2><p>此页面由插件提供，入口由主干自动展示。</p><form id="settings"><label class="form-field"><span>名称</span><input id="label" maxlength="80" placeholder="给插件起个名字"></label><label class="form-field"><span>对话模型</span><select id="model"><option value="">请选择模型</option></select></label><button class="btn primary" type="submit">保存设置</button><p id="result" role="status"></p></form><script src="${base}settings.js"></script></html>`);
+    res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>插件设置示例</title><style>body{margin:0;padding:28px;background:white;color:#202332;font:15px system-ui,sans-serif}form{max-width:620px}.form-field{display:grid;gap:8px;margin-bottom:20px}input,select,button{font:inherit;padding:10px;border:1px solid #d8dbe5;border-radius:8px}button{background:#6356df;color:white;cursor:pointer}</style><h2>插件设置示例</h2><p>此页面由插件提供，入口由主干自动展示。</p><form id="settings"><label class="form-field"><span>名称</span><input id="label" maxlength="80" placeholder="给插件起个名字"></label><label class="form-field"><span>对话模型</span><select id="model"><option value="">请选择模型</option></select></label><button class="btn primary" type="submit">保存设置</button><p id="result" role="status"></p></form><script src="${base}settings.js"></script></html>`);
   }, { title: "插件契约验收", settings: true, navigation: true });
   ctx.web.page(base + "settings.js", (_req, res) => {
     res.setHeader("Content-Type", "text/javascript; charset=utf-8");

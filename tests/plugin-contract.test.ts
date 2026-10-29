@@ -1,14 +1,25 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, writeFile, readFile, cp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { boot } from "../core/index.ts";
 
-async function fixture(t: TestContext) {
+const baseline = resolve("tests/fixtures/plugin-contract/2026-10-29");
+
+async function fixture(t: TestContext, source = baseline) {
+  if (source === baseline) {
+    const hashes = JSON.parse(await readFile(join(baseline, "sha256.json"), "utf8"));
+    assert.deepEqual(Object.keys(hashes).sort(), ["index.ts", "plugin.yaml"]);
+    for (const [file, expected] of Object.entries(hashes)) {
+      const content = (await readFile(join(baseline, file), "utf8")).replaceAll("\r\n", "\n");
+      assert.equal(createHash("sha256").update(content).digest("hex"), expected, "冻结插件已被修改：" + file);
+    }
+  }
   const root = await mkdtemp(join(tmpdir(), "whale-plugin-contract-"));
   await mkdir(join(root, "config")); await mkdir(join(root, "plugins"));
-  await cp(resolve("examples/plugins/contract-check"), join(root, "plugins/contract-check"), { recursive: true });
+  await cp(source, join(root, "plugins/contract-check"), { recursive: true });
   await writeFile(join(root, "config/config.json"), JSON.stringify({
     log: { level: "error" }, web: { port: 0 }, providers: [{ id: "test", name: "Test", base_url: "https://unused.example/v1", api_key: "synthetic-secret" }],
     models: [{ id: "chat", name: "测试模型", provider: "test", model: "test", type: "chat", enabled: true, context_window: 200000 }],
@@ -27,7 +38,7 @@ async function fixture(t: TestContext) {
   return { root, app, url, request, plugin, requests };
 }
 
-test("plugin-only installation provides settings, navigation, authenticated routes and persistent configuration", async (t) => {
+test("frozen plugin installation provides settings, navigation, authenticated routes and persistent configuration", async (t) => {
   const { root, app, url, request, plugin } = await fixture(t);
   const status = await (await request("/api/status")).json();
   assert.deepEqual(status.pluginPages, [{ owner: "contract-check", path: "/plugins/contract-check/settings", title: "插件契约验收", settings: true, navigation: true }]);
@@ -52,6 +63,15 @@ test("plugin-only installation provides settings, navigation, authenticated rout
   await app.runtime.action("contract-check", "start");
   assert.equal((await plugin().ctx.config.read()).label, "自定义");
   assert.equal((await (await request("/api/status")).json()).pluginPages.length, 1);
+});
+
+test("maintained example still installs independently of the frozen compatibility fixture", async (t) => {
+  const { app, plugin, request } = await fixture(t, resolve("examples/plugins/contract-check"));
+  assert.equal(plugin().ctx.models.list("chat")[0].id, "chat");
+  assert.equal((await request("/plugins/contract-check/settings")).status, 200);
+  await app.runtime.action("contract-check", "stop");
+  assert.equal((await request("/plugins/contract-check/settings")).status, 404);
+  assert.equal(app.runtime.records.get("sessions").status, "active");
 });
 
 test("plugin sessions preserve persona, context, sources, token accounting and memory notifications", async (t) => {

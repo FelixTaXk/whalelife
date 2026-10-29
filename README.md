@@ -4,6 +4,8 @@
 
 架构与开发说明：[插件扩展契约](architecture/PLUGINS.md) · [记忆系统](architecture/MEMORY.md) · [通用渠道](architecture/CHANNELS.md)。这些公开文档说明实际实现、调用成本、扩展契约与边界，不包含本机私有资料。
 
+主干限定为模型 API 配置、LLM 人格与记忆、插件运行与调用、日志与权限、统一配置及管理入口；其他能力由插件实现。双方开发必须遵守 [开发硬约束](AGENTS.md)：主干升级不能要求旧插件同步修改，插件升级不能要求改主干或无关插件。公开契约变更必须保持兼容；当前隔离限制如实记录在 [实现状态](architecture/STATUS.md)。
+
 ## 启动
 
 1. 安装 Node.js 24，或将官方 Windows x64 ZIP 解压到 `runtime/node-v24.22.1-win-x64/`（本机已配置）。
@@ -87,7 +89,7 @@
 
 ## 验证
 
-使用 Node 24 执行 `npm test` 和 `npm run check`。`node tests/acceptance.ts` 在核心已监听 9270 时进行真实供应商验收（会消耗少量 token，并写入带“验收测试”标记的记忆）。报告和证据在本机 `docs/M0-REPORT.md`、`docs/acceptance/`。
+使用 Node 24 执行 `npm test` 和 `npm run check`。契约/生命周期改动必须运行 `npm run test:compat`，使用未修改的冻结插件验证兼容性、受管理异常和清理；远端 CI 尚未启用，限制见实现状态。`tests/acceptance.ts` 是会调用真实供应商并写正式记忆的历史验收脚本，禁止用于日常回归。报告和证据在本机 `docs/M0-REPORT.md`、`docs/acceptance/`。
 
 本机需求文档：`docs/HANDOFF-CODEX.md`、`docs/CORE-DESIGN.md`、`docs/PLUGIN-SPEC.md`。通用文本渠道与本地长期检索记忆已实现；QQ等具体平台插件、审批流 UI、插件上报用量的汇总展示仍留待后续。控制台改造记录和截图见 `docs/CONSOLE-REPORT.md`、`docs/console-redesign/`。
 
