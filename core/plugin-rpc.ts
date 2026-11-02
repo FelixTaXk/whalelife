@@ -25,6 +25,9 @@ export class PluginRPC {
   private signalCleanup = new Map<string, () => void>();
   private generations = new Map<string, number>();
   private promises = new Set<string>();
+  // A callee may compose an incoming signal with AbortSignal.any and no longer
+  // retain the proxy itself. Keep call inputs live until its async work settles.
+  private callInputs = new Map<string, unknown>();
   private finalizer = new FinalizationRegistry<Remote>((remote) => this.releaseRemote(remote));
   private methods = new WeakMap<object, Map<PropertyKey, { original: Function; bound: Function }>>();
   private boundOriginal = new WeakMap<Function, Function>();
@@ -316,7 +319,7 @@ export class PluginRPC {
         this.forward(message, source.peer, message.operation, source.id, fields);
         return;
       }
-      let result: any;
+      let result: any, inputs: unknown;
       if (message.operation === "get") {
         result = Reflect.get(properties, key!);
         if (typeof result === "function") {
@@ -328,14 +331,23 @@ export class PluginRPC {
       else if (message.operation === "keys") result = this.side === "plugin" ? this.publicKeys(properties) : Object.keys(properties);
       else if (message.operation === "apply") {
         const args = this.decode(message.args), remote = forwarded.get(object);
+        inputs = args;
         if (remote) {
           this.forward(message, remote.peer, "apply", remote.id, { args: remote.peer.encode(args) });
           return;
         }
         result = object(...args);
       }
-      else if (message.operation === "method") result = object[key!](...this.decode(message.args));
+      else if (message.operation === "method") {
+        const args = this.decode(message.args); inputs = args;
+        result = object[key!](...args);
+      }
       else throw Error("未知插件接口操作");
+      if (result instanceof Promise && inputs !== undefined) {
+        this.callInputs.set(message.id, inputs);
+        const release = () => { this.callInputs.delete(message.id); };
+        void result.then(release, release);
+      }
       this.flush(); this.send({ type: "reply", id: message.id, sync: message.sync, ok: true, value: this.encode(result) });
     } catch (error) {
       this.send({ type: "reply", id: message.id, sync: message.sync, ok: false, value: this.encode(Error(messageOf(error))) });
@@ -360,6 +372,6 @@ export class PluginRPC {
     for (const cleanup of this.signalCleanup.values()) cleanup();
     for (const remote of this.remotes.values()) this.finalizer.unregister(remote);
     this.objects.clear(); this.remotes.clear(); this.signals.clear(); this.published.clear();
-    this.signalCleanup.clear(); this.generations.clear(); this.promises.clear(); this.syncResults.clear();
+    this.signalCleanup.clear(); this.generations.clear(); this.promises.clear(); this.syncResults.clear(); this.callInputs.clear();
   }
 }

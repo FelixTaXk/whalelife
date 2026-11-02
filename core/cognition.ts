@@ -59,7 +59,7 @@ export function applyCognitions(
         (replaces.length && !hasText(input.reason, 100)))
       throw Error("认知修订需要候选ID和简短依据");
     const rid = createHash("sha256")
-      .update(key + ":" + checkpoint.last_id + ":" + checkpoint.last_offset + ":" + n)
+      .update(key + ":" + checkpoint.last_id + ":" + checkpoint.last_offset + ":" + n + (checkpoint.input_revision ? ":" + checkpoint.input_revision : ""))
       .digest("hex").slice(0, 32);
     return { input, rid, previous: replaces.map(target) };
   });
@@ -72,7 +72,7 @@ export function applyCognitions(
   for (const { input, rid, previous } of plans) {
     if (records.some((x) => x.id === rid)) continue;
     // Exact duplicate extraction consumes no extra record and no extra prompt space.
-    const duplicate = !previous.length && records.find((x) => x.kind === "cognition" &&
+    const duplicate = !previous.length && records.find((x) => x.kind === "cognition" && !x.context_excluded &&
         x.status === "active" && x.text.trim() === input.text.trim() &&
         x.persona_revision === (input.persona_revision || null));
     if (duplicate) {

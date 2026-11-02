@@ -53,6 +53,10 @@ export class PluginProcess {
     const kernel = Object.freeze({
       ctx,
       get: (name: string, strict?: boolean) => this.peer.expose(ctx.get(name, strict)),
+      optional: (name: string, listener: any) => ctx.optional(name, (binding: any) => listener(binding ? {
+        service: this.peer.expose(binding.service), signal: binding.signal,
+        registerCleanup: (cleanup: any) => binding.effect(() => cleanup),
+      } : undefined)),
       openWeb: (endpoint: PluginHttpEndpoint) => { this.endpoint = endpoint; },
       registerWeb: (kind: string, path: string, route: string, entry: any) => {
         if (!this.endpoint || !["page", "api"].includes(kind)) throw Error("插件页面服务未就绪");

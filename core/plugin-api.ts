@@ -9,6 +9,14 @@ export type OriginDetails = Pick<Origin, "platform" | "action">;
 export type Dispose = () => void | Promise<void>;
 export type Disposable = Dispose | { dispose: Dispose };
 
+/** One optional provider instance. Invalidated on provider loss, unsubscribe or consumer stop. */
+export interface OptionalService<T> {
+  readonly service: T;
+  readonly signal: AbortSignal;
+  /** Register synchronous setup and bounded cleanup for this connection; rejects late setup. */
+  effect<D extends Disposable>(setup: () => D): D;
+}
+
 export interface PluginLogger {
   log(level: "debug" | "info" | "warn" | "error", message: string, extra?: unknown): void;
   debug(message: string, extra?: unknown): void;
@@ -35,6 +43,8 @@ export interface ToolSession {
   account?: string;
   peer?: string;
   sender?: string;
+  /** This turn has used temporary external material; never persist raw parameters/results. */
+  readonly transientContext?: boolean;
   [field: string]: unknown;
 }
 export type ToolSchema = Record<string, unknown>;
@@ -51,14 +61,24 @@ export interface ModelTool {
   function: { name: string; description: string; parameters: ToolSchema };
 }
 export type ToolResult<Result = unknown> = { ok: true; result: Result } | { ok: false; result: string };
+export interface TransientToolOutput<Content = unknown, Receipt = unknown> {
+  /** Available only to the current caller/model turn. */
+  content: Content;
+  /** Trusted, JSON-only durable projection of the action/result; null saves no experience. */
+  receipt: Receipt | null;
+}
 export interface ToolsAPI {
   register<Arguments = Record<string, unknown>, Result = unknown>(tool: ToolDefinition<Arguments, Result>): () => void;
+  /** Opt in explicitly; old hosts must not fall back to ordinary register. */
+  registerTransient<Arguments = Record<string, unknown>, Content = unknown, Receipt = unknown>(tool: ToolDefinition<Arguments, TransientToolOutput<Content, Receipt>>): () => void;
   list(): ModelTool[];
   call<Result = unknown>(name: string, args: unknown, session: ToolSession, callId?: string): Promise<ToolResult<Result>>;
 }
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
+  /** Provider protocol data, not user-visible content or a memory record. */
+  reasoning_content?: string;
   tool_call_id?: string;
   tool_calls?: { id: string; type: "function"; function: { name: string; arguments: string } }[];
 }
@@ -78,6 +98,7 @@ export interface ChatOptions {
 }
 export interface ChatReply {
   text: string;
+  reasoning_content?: string;
   toolCalls: { id: string; name: string; arguments: string }[];
   usage?: ModelUsage;
 }
@@ -86,8 +107,16 @@ export interface LLMAPI { chat(options: ChatOptions): Promise<ChatReply>; }
 export type PersonaChoice = { id: string; name: string; model: string | null };
 export interface PersonasAPI { list(): PersonaChoice[]; }
 export type SessionRun = {
-  sessionId: string; persona: string; text: string; permission?: Permission;
+  sessionId?: string; persona?: string; text: string; permission?: Permission;
   origin?: OriginDetails; signal?: AbortSignal; onChunk?: (text: string) => void;
+};
+export type SessionQueuedRun = SessionRun & {
+  /** Higher first, -100..100; equal priorities are FIFO. Never interrupts running work. */
+  priority?: number;
+  /** Coalesce pending requests in this plugin instance and session; the first input wins. */
+  key?: string;
+  /** Recheck validity when execution starts. false cancels before any model/memory work. */
+  beforeRun?: () => boolean | Promise<boolean>;
 };
 export type SessionInfo = { id: string; name: string; updatedAt?: string };
 export interface ContextPolicy {
@@ -122,8 +151,14 @@ export interface SessionContext {
 export interface SessionAPI {
   list(): Promise<SessionInfo[]>;
   create(name?: string): Promise<string>;
+  current(): Promise<string>;
   context(id: string, persona: string): Promise<SessionContext>;
   run(input: SessionRun): Promise<string>;
+  /** The input is plugin context for this run only; it is never saved as a user message. */
+  runTransient(input: SessionRun): Promise<string>;
+  /** Wait for the session's execution slot. Existing run retains its busy error. */
+  enqueue(input: SessionQueuedRun): Promise<string>;
+  enqueueTransient(input: SessionQueuedRun): Promise<string>;
 }
 
 /** Optional fields preserve legacy records; unknown data must be narrowed by its consumer. */
@@ -136,9 +171,11 @@ export interface MemoryEvent {
 export interface FactsRevision { text: string; revision: string; updated_by: string; updated_at: string; }
 export interface LocalFacts extends FactsRevision { chars: number; max: number; history: FactsRevision[]; }
 export type ExperienceOutcome = "pending" | "succeeded" | "failed" | "denied";
-export interface ExperienceInput { event_id: string; outcome: ExperienceOutcome; text: string; origin?: OriginDetails; }
+export interface ExperienceInput { event_id: string; outcome: ExperienceOutcome; text: string; origin?: OriginDetails; occurred_at?: string; }
 export interface MemoryRecord {
   id: string; kind: string; text: string; source: string; ts: string;
+  occurred_at?: string;
+  time_range?: { start?: string; end?: string; incomplete?: boolean };
   status?: "active" | "archived" | "superseded" | "review";
   origin?: Origin; origins?: Origin[]; origins_incomplete?: boolean;
   outcome?: ExperienceOutcome | null; evidence?: string[];
@@ -153,19 +190,26 @@ export interface ExtensionInput<Data = unknown> {
   kind: string; key: string; text: string; data?: Data; active?: boolean; origin?: OriginDetails;
 }
 export interface ExtensionRecord<Data = unknown> { owner: string; kind: string; key: string; version: number; data: Data; }
+/** Opaque plugin-owned session data. An absent document has null revision/data. */
+export interface SessionDocument<Data = unknown> { revision: string | null; data: Data | null; }
+export interface DocumentWrite<Data = unknown> { key: string; revision: string | null; data: Data; }
 export interface MemoryAPI {
   readFacts(): Promise<string[]>;
   localFacts(sessionId: string): Promise<LocalFacts>;
-  readSession(sessionId: string, limit?: number): Promise<MemoryEvent[]>;
+  readSession(sessionId: string, limit?: number, beforeId?: string): Promise<MemoryEvent[]>;
+  /** Exclude exact historical inputs created by this plugin's sessions.run; retain original events. */
+  excludeInputs(sessionId: string, messageIds: string[]): Promise<{ excluded: number }>;
   search(sessionId: string, query: string): Promise<MemorySearch>;
   recordExperience(sessionId: string, input: ExperienceInput): Promise<MemoryRecord>;
   registerType(name: string, version?: number): { kind: string; dispose(): void };
   saveExtension<Data = unknown>(sessionId: string, input: ExtensionInput<Data>): Promise<{ id: string }>;
   readExtension<Data = unknown>(sessionId: string, kind: string, key: string): Promise<ExtensionRecord<Data> | null>;
+  readDocument<Data = unknown>(sessionId: string, key: string): Promise<SessionDocument<Data>>;
+  saveDocument<Data = unknown>(sessionId: string, input: DocumentWrite<Data>): Promise<SessionDocument<Data>>;
 }
 
 export type IncomingMessageData = { peer: string; sender: string; messageId: string; text: string };
-export type OutgoingMessage = { channel: string; account: string; peer: string; sessionId: string; text: string; deliveryId: string; replyTo?: string };
+export type OutgoingMessage = { channel: string; account: string; peer: string; sessionId: string; text: string; deliveryId: string; replyTo?: string; transient?: true };
 export type ChannelAdapter = {
   id: string; name?: string; account: string; persona?: string; permission?: Permission;
   send(message: OutgoingMessage, options: { signal: AbortSignal }): Promise<void>;
@@ -173,7 +217,7 @@ export type ChannelAdapter = {
 export type ChannelResult = {
   sessionId: string; messageId: string; deliveryId: string;
   status: "sent" | "generated" | "generation_failed" | "delivery_failed" | "uncertain";
-  text?: string; error?: string; duplicate?: boolean;
+  text?: string; error?: string; duplicate?: boolean; transient?: true;
 };
 export type ReceiveOptions = { signal?: AbortSignal };
 export type SendMessage = { peer: string; messageId: string; text: string };
@@ -205,7 +249,7 @@ export interface PluginEvents {
   "channel/reply": MemoryEvent;
   "memory/recorded": MemoryEvent;
   "memory/updated": { session: string };
-  "tool/called": { id: string; name: string; source: string; origin: Origin; session?: string; ok: boolean; result: unknown };
+  "tool/called": { id: string; name: string; source: string; origin: Origin; session?: string; ok: boolean; result: unknown; transient?: true };
 }
 /** Can be augmented by typed plugins to declare their own service contracts. */
 export interface PluginServices {

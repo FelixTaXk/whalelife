@@ -16,6 +16,31 @@ WhaleLife 是独立于交流平台的机器人。主干的职责固定为五项�
 
 插件自行决定模型调用时机、频率、预算、是否限额、超额处理及重试策略。核心不统一扣减或限制插件额度。核心聊天和记忆整理有各自的统计；插件直接调用 `ctx.llm` 不会自动纳入会话账本，用量由返回值交给插件处理。
 
+## 临时工具内容与持久回执
+
+普通 `ctx.tools.register` 的返回、事件和默认记忆行为不变。需要让外部资料仅供当轮理解的工具，使用新增的 `ctx.tools.registerTransient`；先检查 `typeof ctx.tools.registerTransient === "function"`。旧宿主缺少时仅停用相关能力，不能回退到普通register。
+
+```ts
+ctx.tools.registerTransient<{ ref: string }, { text: string }, { action: string; target: string }>({
+  name: "read_external", description: "读取资料供本轮理解",
+  schema: { ref: { type: "string" } }, danger: "safe",
+  async run(args, session) {
+    const text = await readExternal(args.ref, session.signal); // 插件自己的实现
+    return { content: { text }, receipt: { action: "read", target: args.ref } };
+  },
+});
+```
+
+- `run`必须返回`{content,receipt}`。content沿既有工具JSON链传给当轮模型；`tools.call`仍返回`{ok,result}`，result为content。这个接口不自动增加主干多模态能力，图片理解和媒体临时文件清理由插件负责。普通工具碰巧返回同名字段不会触发此契约。
+- receipt由插件筛选，只放自己的动作、必要目标标识、自己的正文和真实结果，不能放第三方正文、图片或描述。必须为JSON，最多64KiB、20层；null表示不生成经历。函数返回成功不代表平台动作成功，sent/uncertain及真实平台ID仍由插件核实。原始工具档案保留最小调用状态。
+- 从本轮请求调用临时工具开始（同批工具也保守处理），后续参数不写历史或日志。原始工具历史、`tool/called`、自动经历只接收receipt；该轮普通工具没有receipt时仅保留状态。事件增加`transient:true`，result为receipt或null，调用ID保存为散列标识；模型协议仍使用原ID。
+- 后续工具的可信`ToolSession.transientContext`为true。主干独立事实写入工具在该轮拒绝写入，检索不保存临时query，避免模型复制资料绕过隔离。插件显式调用recordExperience/saveDocument、私有存储、日志或其他服务仍由插件负责筛选；主干不是不可信代码沙箱，也不能判断任意文字是否引用原文。
+- 最终回复可能引用临时资料，故该轮完整回复不进入自动持久化。返回字符串和流式回调仍给当前调用者完整内容；历史保存临时资料说明及原有用量，token占比/累计统计照常。用户消息、之前记忆和无关会话不删除；下一轮恢复正常规则。摘要、认知和未来召回只读持久投影及说明。
+- 渠道仍可交付当次完整回复，OutgoingMessage/ChannelResult带`transient:true`，适配器不能另行长期保存原文。主干渠道回执保留状态和投递ID用于去重，省略text及原始错误；重复查询无临时正文，失败后不能retry原文或重跑模型/工具。普通渠道不变。
+- 停用、取消和重启不恢复临时正文；已完成动作的有效receipt仍保存，不伪装撤销或自动补做。临时工具异常及无效投影只返回/记录不含原文的错误。调用方不得把完整返回值重新写成普通历史，不能靠提示词“不记住”替代隔离。
+
+接入验收见`tests/transient-tools.test.ts`：跨进程当轮可见、磁盘/日志/事件无临时标记、后续参数/回复/事实复制保护、用量、摘要、下一轮、停用/取消/重启和渠道不重放。此能力与runTransient互补，后者仅改变输入持久化。
+
 ## 双向兼容与故障边界（硬性规定）
 
 1. **独立升级。** 主干更新后，已有合规插件无需改动；插件更新后，主干和无关插件无需改动。兼容范围是公开契约，不是内部实现。不能用“升级全部项目”或“暂时禁用旧插件”替代向后兼容；禁用只用于确实不支持的新能力或出错插件。
@@ -37,13 +62,53 @@ WhaleLife 是独立于交流平台的机器人。主干的职责固定为五项�
 
 `plugins/<id>/plugin.yaml` + `index.ts`，导出 `apply(ctx)`。配置位于本插件 `data/`，读取与保存使用 `ctx.config.read(file?)`、`ctx.config.save(file,value)`；缺省文件为manifest配置或`config.json`。JSON损坏会记录日志并读为空对象，插件要校验字段、呈现初始化状态，不能静默填入真实账号或替用户选择模型。
 
-manifest 必填 id/name/version/description，可选 depends/config/apiVersion。当前 API 为 1.0.0；apiVersion 可填 `1`、`1.x`、最低同主版本 `1.0.0`、`^1.0.0` 或同次版本的 `~1.0.0`。省略按 1.x，已有插件无需补字段。未知主版本、宿主尚未支持的最低版本及无效表达式在 import 前拒绝；包的 version 是插件自身版本。ctx.apiVersion 返回实际宿主 API 版本。未来升级须保留旧版本适配能力，版本检查不能替代行为兼容测试。
+manifest 必填 id/name/version/description，可选 depends/optionalDepends/config/apiVersion。当前 API 为 1.0.0；apiVersion 可填 `1`、`1.x`、最低同主版本 `1.0.0`、`^1.0.0` 或同次版本的 `~1.0.0`。省略按 1.x，已有插件无需补字段。未知主版本、宿主尚未支持的最低版本及无效表达式在 import 前拒绝；包的 version 是插件自身版本。ctx.apiVersion 返回实际宿主 API 版本。未来升级须保留旧版本适配能力，版本检查不能替代行为兼容测试。
 
 YAML 中写 `apiVersion: "1"`，必须是字符串。用较新接口时声明对应最低版本；版本号并不会赋予权限或自动安装依赖。
 
 每次启用/重载会创建新进程，静态 import 的子模块也会重新加载，data 保留。配置读取、服务方法、事件、工具、渠道和页面均经过生命周期管理；不要依赖对象地址、原型链或跨插件共享模块全局变量。
 
 用 `ctx.provide/get` 暴露和使用插件服务，manifest的 `depends` 声明必需依赖。停用选择会持久化；父子与依赖级联的规则见README。插件能力接口绑定完整插件ID；`ctx.get('web'|'tools'|'llm'|'memory'|'channels'|'models'|'personas'|'sessions')` 与对应属性使用同一封装。
+
+### 可选服务接入（2026-11-02兼容新增）
+
+扩展插件可用 `optionalDepends: [media-library]` 声明可选的**服务名称**，通过 `ctx.optional<T>(name, onChange)` 接入。服务可以缺失或稍后启动；提供者停止、失败或重载只撤销该连接，不将消费者整体停用。恢复后绑定新实例，无额外插件条目，不自动调用业务方法或重放外部操作。服务提供者无需修改原有provide或服务方法。
+
+```yaml
+optionalDepends: [media-library]
+```
+
+```ts
+import type { Context } from 'whalelife';
+type MediaLibrary = { describe(id: string, signal: AbortSignal): Promise<string> };
+export function apply(ctx: Context) {
+  // 旧宿主缺少入口时保留基本功能；不要用get(false)冒充可选连接。
+  if (typeof ctx.optional !== 'function') return;
+  ctx.optional<MediaLibrary>('media-library', binding => {
+    if (!binding) return; // 未安装或已下线
+    binding.effect(() => ctx.tools.register({
+      name: 'describe_optional_media', description: '描述指定素材',
+      schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      async run(args: { id: string }, session) {
+        try {
+          const signal = session.signal ? AbortSignal.any([binding.signal, session.signal]) : binding.signal;
+          return { text: await binding.service.describe(args.id, signal) };
+        } catch { return { error: '素材服务不可用，请稍后重新选择操作' }; }
+      },
+    }));
+  });
+}
+```
+
+- 订阅返回幂等取消函数，也随消费者退出自动释放。首次及状态变化后异步回调，服务不可用时为undefined，可用时为`OptionalService<T>`；快速启停可以合并过期通知，回调按订阅串行。不要等待状态回调完成才让apply结束。
+- `binding.service`提供当前实例的字段和方法；连接失效时，已保存的方法、嵌套服务引用也拒绝新调用，不能悄悄转到新实例。只读连接不允许给服务对象赋值。服务范围沿用get的父级局部/全局规则，仅用于扩展服务；主干能力继续使用ctx.models、ctx.memory等公开封装，不经此入口暴露内部实现。
+- `binding.signal`在提供者失效、取消订阅或消费者退出时取消。宿主立即拒绝该连接的在途等待；服务支持signal参数时，调用方须按它自己的公开签名传入此signal，才能协同停止内部工作。宿主不猜测任意服务的参数，也不能撤回已经发生的远端动作。
+- `binding.effect(() => disposer)`接受同步资源创建，返回清理函数或带dispose的对象，行为与ctx.effect相近，但生命周期限定于**本次连接**；保留对象身份，清理幂等。相关工具、页面、事件、定时器都应登记在这里。不要用ctx.effect登记仅属于可选能力的资源，也不要在异步回调恢复后绕过binding.effect注册入口；旧连接的effect会拒绝迟到创建。
+- 先撤销旧连接并清理其资源，再通知新连接。宿主资源的原始清理函数可直接撤销工具/页面；插件自有清理及回调在独立进程执行，按stopTimeoutMs限时。回调正常时限为callTimeoutMs，连接失效后只给stopTimeoutMs退出；不配合或未处理异常归属消费者并切割它，不拖住提供者或无关插件。消费者仍应处理可恢复的业务错误。
+- optionalDepends不阻止插件启动；非法声明、与depends重叠在导入前拒绝。使用ctx.optional时必须声明对应服务。**已有depends/get完全不变**，get(false)成功取得服务仍产生强依赖，即使同名服务写在optionalDepends里也不例外。
+- 使用前检测`typeof ctx.optional === 'function'`，不要凭仍为1.0.0的apiVersion猜测新增方法。迁移旧桥接时保留原公开接口、用户启停选择及旧宿主路径，避免同时注册两套处理器；主干不会自动改动或删除已安装桥接插件。
+
+### 通用资源与执行边界
 
 `ctx.signal` 在停用、加载失败、重载旧实例和核心关闭时取消。定时器、连接、文件句柄和异步工作要通过 `ctx.effect(() => cleanup)` 管理，并将signal传到自己的请求。模型请求、工具执行和插件Web处理器已传递signal。旧实例不能继续注册入口、保存配置或发起模型调用；旧回调的迟到失败不会误停新实例。
 
@@ -74,6 +139,26 @@ handler使用Node的`(req,res,{signal})`，不是框架请求上下文。插件�
 
 完整可运行示例：`examples/plugins/contract-check/`，不会自动装进正式plugins目录。
 
+### 父插件收纳子插件（2026-11-02兼容新增）
+
+父插件在自己的plugin.yaml声明：
+
+```yaml
+console:
+  groupChildren: true
+```
+
+这是控制台展示元数据，不改变运行记录、依赖、权限、进程、启停选择或配置存储。省略或false沿用旧的平铺展示；旧宿主忽略此字段，继续显示独立入口。新宿主对明确设置的非布尔值报错，避免误把字符串"false"当作启用。
+
+- 插件管理外层只列父插件卡片，通过“打开 / 管理”进入父级工作区。工作区顶部横向切换“父插件设置”和“子插件”，内容使用完整宽度，不再叠加第二层侧栏。插件总数仍统计所有扩展，另外显示入口数，不把收纳后的数量当运行数量。
+- 按完整插件ID的路径层级归属，收纳所有后代，多级子插件的切换标签显示祖先名称路径；最外层已声明父级优先。主干没有QQ或其他平台分支。父级缺失时回退到最近有效收纳父级，找不到则恢复独立卡片与原页面入口，避免隐藏孤立插件。
+- 侧栏依旧只使用navigation:true页面；属于同一收纳父级的入口合为一个父级名称。父级无导航页但子级有时，也提供父级工作区入口；全组都没有可用导航页时，仍从插件管理进入。settings/navigation原有含义和页面注册返回值不变。
+- 工作区以父/子插件的真实ID执行启用、停用、重载。当前插件状态与启停按钮常驻右上方；ID、版本、说明和重载位于更多菜单。stopped/blocked/failed仍有切换入口、状态、原因及管理按钮；故障原因直接显示，没有可用页面时不保留失效iframe。只有明确选择子插件才进入其页面，不把父级自带业务伪装成另一个子插件。
+- 每个插件默认打开自己的设置页，否则使用自己的第一个导航页；有多个公开页面时显示页签。页面仍使用原owner、路径和鉴权。旧的`#extension:<编码路径>`链接继续工作，并显示所属父级；页面已撤销时按已安装插件最长路径匹配管理入口，不加载未经注册的URL。
+- `#plugin:<编码完整ID>`进入插件管理工作区。浏览器刷新、返回保留所选插件；子页侧栏高亮父级。状态刷新更新管理区域时保留仍有效的iframe及未保存表单；显式切换插件、重载插件则重新加载页面。
+
+QQ接入只需由QQ插件会话在**父插件**plugin.yaml加入上述声明，QQ空间继续保持原来的settings:true/navigation:true，不要提前关掉空间导航标志。无需修改空间业务页面、不新增私聊子插件、不调用私有控制台API，也无需迁移任何配置或记忆。插件会话自行将声明纳入发行包并按既有流程加载；主干不修改已安装插件manifest。
+
 ## 模型、人格与会话
 
 | 接口 | 行为 |
@@ -84,14 +169,86 @@ handler使用Node的`(req,res,{signal})`，不是框架请求上下文。插件�
 | `ctx.llm.chat({model,messages,signal?,...})` | 使用明确选择的对话模型配置ID，返回text/toolCalls/usage；不隐式添加人格、记忆或执行工具 |
 | `ctx.sessions.list()` | 已存在的未删除会话ID、名称、更新时间 |
 | `ctx.sessions.create(name?)` | 显式创建空会话，返回ID |
+| `ctx.sessions.current()` | 获取主干与Web共用的当前会话ID；没有选择时按下述规则初始化 |
 | `ctx.sessions.context(id,persona)` | 当前指定人格下该会话的上下文与用量状态 |
-| `ctx.sessions.run({sessionId,persona,text,permission?,origin?,signal?,onChunk?})` | 在已有会话走完整人格、记忆、模型、权限、工具及用量统计流程 |
+| `ctx.sessions.run({sessionId?,persona?,text,permission?,origin?,signal?,onChunk?})` | 省略sessionId使用当前会话，省略persona使用当前Web人格；走完整人格、记忆、模型、权限、工具及用量统计流程 |
+| `ctx.sessions.runTransient(input)` | 参数与返回类型同run；text仅作为本轮插件输入，不保存为user消息，不持久化检索query；本轮工具续轮仍保留它 |
+| `ctx.sessions.enqueue(input)` | 与run相同的完整会话，忙时进入主干统一会话队列；返回最终文本Promise<string> |
+| `ctx.sessions.enqueueTransient(input)` | 与runTransient相同的临时输入，忙时排队；可在执行前重新判断有效性 |
 
-`model` 是配置ID，不是提供商的裸模型名称。模型和人格必须明确指定；人格的模型选择遵循已有配置。`callable` 表示可通过核心 chat 调用，仅 OpenAI 兼容协议的对话配置为 true；不能把 Embedding 或插件自定义协议交给 chat。
+`model` 是配置ID，不是提供商的裸模型名称。直接模型调用必须明确指定模型；会话调用遵循所选人格及已有模型配置。`callable` 表示可通过核心 chat 调用，仅 OpenAI 兼容协议的对话配置为 true；不能把 Embedding 或插件自定义协议交给 chat。
 
 connection(id) 每次重新读取有效配置，拒绝不存在、停用或类型/服务不匹配的条目，不默认挑选第一项；结果修改不影响主干，后续读取可见用户保存的变化。返回字段为 id/name/model/type/provider_id/provider_name/protocol/base_url/api_key/proxy_url/timeout_seconds/parameters/dimensions/context_window。仅在插件后端使用 api_key，不写日志、不回传设置页。其他模型业务由插件根据 protocol 实现请求，并使用 signal、代理和超时；主干不代管业务预算/重试。自定义协议标识允许小写字母开头的1–64个字母、数字、点、短横线、下划线。未知协议可配置，核心不会伪装成能测试或执行它；不支持模型列表的服务手工填模型。
 
-`sessions.run` 不自动创建未知会话，也不改变Web当前人格。一次run产生一次交流；自主插件如何形成意图、何时run、调用哪些工具都属于插件策略。`origin`可提供platform/action，核心注入真实插件归属。需要外部收发、稳定消息ID及重投去重时使用 `ctx.channels`，详见 [CHANNELS.md](CHANNELS.md)。直接run不替插件提供外部事件幂等。
+`sessions.run` 显式传入的会话必须存在且未删除，不自动创建未知ID，也不改变Web当前人格。一次run产生一次交流；自主插件如何形成意图、何时run、调用哪些工具都属于插件策略。`origin`可提供platform/action，核心注入真实插件归属。需要外部收发、稳定消息ID及重投去重时使用 `ctx.channels`，详见 [CHANNELS.md](CHANNELS.md)。直接run不替插件提供外部事件幂等。
+
+`runTransient` 是兼容新增入口，使用前检查 `typeof ctx.sessions.runTransient === "function"`，旧宿主缺少时明确提示，不能回退到会污染历史的run。临时输入带真实插件来源及“不是真人发言”的明确标记，协议层使用user消息开启新一轮，但不保存为user历史。协议角色不代表实际来源。人格、既有记忆、权限、工具、取消、上下文预算、流式回调及用量沿用同一链路。结束/失败/取消后不进入原始聊天、未来历史、记忆候选或摘要材料。普通run和Web聊天默认持久化行为不变。
+
+该入口仅改变输入持久化：助手最终文字及实际工具经历默认仍按原契约保存；若显式调用registerTransient工具，另遵循本文临时工具契约。返回值仍是Promise<string>；没有最终文字仍会报错，取消仍是取消，不因此被主干算作成功。角色实际决定由插件用recordExperience记录。插件的静默结束流程、是否执行及后续策略不由此入口代办。
+
+思考模式工具协议：ChatReply与ChatMessage兼容新增可选reasoning_content。原始llm.chat调用者自行按供应商协议回传；完整sessions链路会收集流式原值，并在本轮每次工具续轮中原样携带，不作为onChunk文字、不自动存入经历或认知。本轮结束后丢弃，避免临时输入经思考数据进入未来记忆。对于DeepSeek（官方地址或deepseek模型名）以及明确thinking.type=enabled的兼容接口，启用工具时将已完成历史包装为带原角色、正文和来源的历史引用，不将缺少思考数据的旧assistant记录冒充未完成的协议续轮，也不填造reasoning_content。历史仍受原上下文窗口与预算控制，引用转义开销和当轮思考字段均纳入请求预算。显式关闭thinking或无工具时保留普通历史消息表示。若此模式下工具响应未提供必须的字段，报出明确错误并停止该工具调用，不自动重试或关闭用户思考设置。规则依据[DeepSeek思考工具调用文档](https://api-docs.deepseek.com/guides/thinking_mode/#tool-calls)。
+
+模型HTTP错误只限量读取最多16 KiB、最多1秒的响应诊断，显示识别出的协议/认证/额度等类别、安全类型及格式合法的请求ID；未知正文不回显。不会把供应商任意错误正文、请求内容或密钥拼进日志。流式error帧使用同样规则。HTTP状态和外部取消语义保留，不自动重试失败调用。
+
+```ts
+const reply = await ctx.sessions.runTransient({
+  sessionId, text: temporaryInstructions,
+  origin: { action: "本轮检查" }, signal,
+});
+```
+
+### 统一会话队列
+
+Web、渠道receive以及新的enqueue/enqueueTransient共用按会话串行的调度。不同会话可并行，不把供应商或模型配置当作全局互斥资源。渠道的一次入站从生成到投递完成占用一个执行位；直接channels.send只走独立传输队列，当前工具可以等待真实发送回执，不会排到自身会话结束之后。
+
+这是兼容新增能力：旧run/runTransient在会话忙时仍拒绝，依赖旧行为的插件无需修改；需要等待的插件显式改用enqueue/enqueueTransient。旧宿主应先检测方法是否存在，不要偷偷退回会污染记忆的run。原生渠道适配器使用receive会自动获得统一排队；自行用sessions.run驱动聊天的适配器需要主动选择enqueue。
+
+SessionQueuedRun保留SessionRun全部字段，并增加三个可选字段：
+
+| 字段 | 行为 |
+| --- | --- |
+| priority | -100到100整数，默认0；数值大的等待项先执行，同优先级按进入统一队列的顺序执行。不会中断在途请求。Web和渠道真人消息固定为0，不合并正文 |
+| key | 1–128字符，只合并同一插件实例、同一会话内**尚在等待**的同键请求。首条输入/优先级/有效性检查保持不变，后来的调用等待同一结果；正在执行的同键任务可再保留一条待处理机会 |
+| beforeRun | 开始执行、读取模型上下文前调用的函数，可返回boolean或Promise<boolean>；仅true继续，false或抛错则拒绝Promise，不调用模型或写入消息 |
+
+signal在等待中取消会立即移除该项，不制造“已行动”或“未行动”经历；原始请求被取消时，同键跟随者也收到失败，跟随者取消只结束自己的等待。插件停用、卸载、切割或主干关闭会取消相应等待项，重新启用不继承旧实例队列。在途取消仍沿用模型/工具契约：执行位等真实操作结束后释放，已确认的外部结果照常记录，不能伪装撤销或自动重发。
+
+请求在入队前固定会话、人格ID、权限、来源、主干接收时间和时区。用户后续切换会话不移动已排队输入；模型、人格正文及有效历史在真正执行时读取，因此可以看到刚完成的交流。需要因切换/时段等业务变化撤销的，由插件取消signal或在beforeRun返回false；主干不理解插件意图、定时器或插件ID。beforeRun应快速检查条件，不产生外部动作；不要在回调或当前会话工具中等待同一会话的新enqueue，否则形成自等待。工具发送使用channels.send，不重新receive同一条入站。
+
+队列只在内存中保存：每会话最多128条等待项、全局最多1024条（不含执行中），超限明确拒绝，不静默丢弃真人消息。不持久化或在重启后自动重放。队列本身不产生模型用量；实际执行继续记录原有token统计。既有插件RPC调用期限（默认10分钟）、模型超时和故障切割仍有效，排队不提供无限时长或跨重启的任务保证；插件可用signal设置自己的等待期限。长期待办应由插件持久保存，再按用户授权提交新的判断机会，不能盲目重放结果不明的外部动作。
+
+```ts
+if (typeof ctx.sessions.enqueueTransient !== "function") throw Error("宿主缺少会话排队接口");
+const sessionId = await ctx.sessions.current();
+const text = await ctx.sessions.enqueueTransient({
+  sessionId, text: temporaryInstructions, signal,
+  key: "my-pending-opportunity", priority: -10,
+  beforeRun: () => isStillValid(), // 业务有效性由本插件决定
+  origin: { action: "本轮检查" },
+});
+```
+
+### 与Web共用当前会话
+
+完整会话请求默认携带主干当前日期、时间、星期、时区及允许读取的历史时间信息；Web、`sessions.run`及渠道生成共用这条链路，工具调用后再次请求模型会刷新时间。插件无需自行注入系统时间，直接`llm.chat`保持原始调用语义。时间规则见[MEMORY.md](MEMORY.md)。
+
+```ts
+const sessionId = await ctx.sessions.current();
+const text = await ctx.sessions.run({
+  sessionId, // 固定本次交流及后续经历记录的目标；单次调用也可省略
+  text: "接着聊刚才的事",
+  origin: { platform: "我的平台", action: "接收消息" },
+});
+```
+
+- 当前选择是整个工作空间共用的单一指针，保存在记忆索引 `current_session`，不是每个浏览器、账号或插件各一份。它只选择会话，不合并历史、不扩大跨会话记忆共享。
+- Web在“使用配置”明确点击“切换会话”或“新建并使用”后，插件下一次默认调用读取该选择；切人格不建会话。记忆管理下拉框仅浏览档案，查看、编辑其他档案不会改变当前选择。插件的 `create` 和显式 `run` 仍不会切换全局选择。
+- 首次迁移优先采用首个已登录浏览器提供的、确实存在且未删除的旧会话ID；否则采用最近更新的可用会话（更新时间相同按索引中后加入的优先）。只有没有任何可用会话才建一个空会话。未发送过消息、没有落盘的旧浏览器ID不视为已有会话。
+- 一旦主干已有选择，旧浏览器缓存不能覆盖它。多窗口显式切换按服务端串行提交顺序最后一次生效；新网页发送时带预期当前ID，旧窗口误发会被拒绝并刷新。旧版显式WebSocket调用继续兼容。
+- `current` 的选择与创建共用记忆写队列，并发首次调用只建一份。删除当前会话后，下次读取回退到最近可用会话；全部删除则新建，绝不复活删除记录。重启保留指针，恢复备份恢复备份中的选择，失效指针按同样规则处理。
+- 每次完整调用在接收时确定人格、在解析当前选择时确定会话，后续切换不搬动正在回复或等待的输入。旧run/runTransient保留忙碌错误；enqueue系列及Web/渠道入站等待同一会话的执行位。维护、恢复、停用与取消会阻止相应新调用及尚未提交的排队操作。
+- 需要将多步操作固定在同一会话时，先取 `const sessionId = await ctx.sessions.current()`，随后显式传给run、记忆等操作，不要在回复结束后重新读取并假定选择没变。
+- 新插件使用前可检测 `typeof ctx.sessions.current === "function"`，旧宿主缺少该入口时给出明确要求。既有1.x插件不需迁移；不要靠读主干文件猜当前会话。
 
 ## 事件通知
 
@@ -105,7 +262,7 @@ connection(id) 每次重新读取有效配置，拒绝不存在、停用或类�
 | `channel/reply` | 已保存的助手最终回复；表示生成完成，不等于外部投递成功 |
 | `memory/recorded` | 已追加的原始事件；包含技术回执，订阅者须按type筛选 |
 | `memory/updated` | `{session}`；事实、认知或摘要状态已经写入，按需通过记忆接口读取 |
-| `tool/called` | `{id,name,source,origin,session,ok,result}`；调用结果，业务完成状态仍由插件明确记录 |
+| `tool/called` | `{id,name,source,origin,session,ok,result,transient?}`；临时调用只返回持久receipt或null，其余保持原结果。业务完成状态仍由插件明确记录 |
 
 插件通过 `ctx.emit('plugin:<自身完整ID>:<事件>', payload)` 发布自定义通知，不能冒充核心事件。通知不持久化、不重放，也不保证外部任务恰好一次执行；需恢复的业务状态通过插件配置、扩展记忆或私有数据保存。避免收到自己的记忆写入通知后无条件再次写入而形成循环。
 
@@ -113,7 +270,25 @@ connection(id) 每次重新读取有效配置，拒绝不存在、停用或类�
 
 ## 记忆与能力经历
 
-通过 `ctx.memory` 的公开接口检索、记录实际经历、注册和保存插件专属类型，详见 [MEMORY.md](MEMORY.md)。不要直接写会话内部状态文件或共享事实，不通过修改人格塞入平台来源。通用经历说明实际做了什么，插件扩展状态保存业务结构；例如主动性插件可以注册自己的意图类型，其他插件也可以注册不同类型。
+历史技术输入可由其所属插件明确迁移：`ctx.memory.readSession(sessionId, limit?, beforeId?)`仍返回原始档案，limit最多100；新增beforeId表示读取该消息之前的一页，按原顺序返回，可用本页首条ID继续向前。默认两个参数行为不变，未知分页ID报错。
+
+`ctx.memory.excludeInputs(sessionId, messageIds)`每次接受1–100个明确ID，仅允许本插件通过sessions.run存成的user输入（来源、channel和account均校验），不允许处理其他插件、Web或渠道的真人消息、助手回答、经历记录。原文不删除、不修改；返回`{excluded: 新增排除数量}`，重复请求不重复处理。插件负责识别自己的技术输入，不能按正文关键词或来源批量猜测；主干不会主动处理正式记录。活动轮次或渠道操作期间拒绝迁移，插件应暂停新唤起并等本轮结束后再处理。
+
+排除对后续模型历史、上下文计数、普通/共享召回和摘要资料生效。为防止旧派生内容带回技术提示，会让该会话既有摘要失效、已有自动提炼认知退出模型上下文（原认知保留，后续按有效原文重新整理）；不删除真实决定、工具结果或手工事实，也不猜测哪些真人回答/事实被旧提示间接影响。旧摘要无法按字串可靠清洗，因此会保守重建，后续正常整理可能产生原有预算内的模型用量。原始档案/API仍能读取被排除消息用于核对；不是物理删除或保密擦除。排除状态随会话备份恢复，迁移前可使用控制台备份。
+
+`ctx.memory.recordExperience(sessionId, {event_id, outcome, text, origin?, occurred_at?})`允许注明事情发生时间。`occurred_at`必须为带时区的有效ISO日期时间，主干规范为UTC；省略时保留未知，不拿记录时间冒充事件时间。返回的`ts`仍为记录时间。同一事件/结果重投保持原记录，不能靠重投改时间；已有插件无需增加字段。
+
+通过 `ctx.memory` 的公开接口检索、记录实际经历、注册和保存插件专属类型，详见 [MEMORY.md](MEMORY.md)。不要直接写会话内部状态文件或共享事实，不通过修改人格塞入平台来源。通用经历说明实际做了什么，带检索描述的插件扩展保存需要参与召回的内容。
+
+不应自动进入记忆检索的意图文件等状态，使用 `readDocument(sessionId, key)` / `saveDocument(sessionId, {key, revision, data})`。接口按插件、会话隔离，提供原子保存和冲突检查；缺失返回 `{revision:null,data:null}`，首次保存才建文件。插件自定payload结构，例如 key为intents、data为`{schema:1,items:[]}`；主干没有意图工具、提示词、唤醒或执行逻辑。完整限制和备份语义见MEMORY.md的“会话文档”。新插件使用前检测接口是否存在；旧宿主不支持时明确提示，不能直接读写主干文件或偷偷改用自动召回的扩展记录。
+
+```ts
+const snapshot = await ctx.memory.readDocument(sessionId, "intents");
+// 插件自行校验/迁移snapshot.data，再生成nextData；冲突时重读并按业务合并。
+const saved = await ctx.memory.saveDocument(sessionId, {
+  key: "intents", revision: snapshot.revision, data: nextData,
+});
+```
 
 关闭插件会取消其注册能力并清理运行资源，已经产生的事实和经历仍然保留。重新启用同ID插件可读取自己的持久配置和扩展状态。
 
@@ -122,6 +297,8 @@ connection(id) 每次重新读取有效配置，拒绝不存在、停用或类�
 `tests/plugin-contract.test.ts` 将示例复制到临时plugins目录，通过真实boot验证入口、鉴权、配置保存、启停、模型/人格选择、同会话切人格、来源、token统计、记忆事件和重载代际隔离；使用模拟模型。`plugin-cancellation.test.ts` 用本机HTTP验证取消。`channel-rebinding.test.ts` 验证重绑、回执和恢复旧备份不重放。
 
 核心关闭先通知并取消会话、渠道和插件，再等待受管理任务、限时插件清理及记忆队列。插件应配合signal和effect；不配合的安装插件会被终止，不能无限阻塞关闭。测试要覆盖迟到结果、异常、重复回调、父子/依赖停止与重启后的状态。只在临时目录测试，不把演示插件或验收事实装入正式环境。
+
+RPC在异步调用的Promise结束前持有解码后的调用参数，保证传入的AbortSignal即使被接收方用AbortSignal.any合并，也不会因原始代理被垃圾回收而丢失取消。调用成功/失败后释放引用，连接关闭时也立即释放，不能将信号永久强引用到插件退出。此修复不改变公开签名、取消原因或已完成外部动作的回执，不需要插件修改调用方式。GC回归覆盖主干与插件两个方向、排队等待、执行、工具结束和直接模型调用，以及完成后的引用清理。
 
 新建会话同时受记忆恢复屏障和生命周期约束，排队提交前会再次检查。Web关闭会等待已接收的插件handler结束；核心还会等待已经开始的事件handler，而不是仅关闭HTTP响应就退出。
 

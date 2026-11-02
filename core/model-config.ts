@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { timezone } from "./time.ts";
 import { readFileSync } from "node:fs";
 import { readFile, writeFile, rename, unlink, mkdir } from "node:fs/promises";
 import { join, resolve, dirname } from "node:path";
@@ -363,6 +364,7 @@ function normalize(config: any) {
     bindings,
     personas,
     activePersona: config.channels?.web?.persona,
+    timezone: timezone(config.timezone),
   };
 }
 
@@ -447,6 +449,7 @@ export class ModelConfig {
         this.logger.secrets.push(provider.api_key);
   }
   private apply() {
+    this.config.timezone = this.source.timezone;
     this.protectKeys(this.source.providers);
     this.config.providers = this.source.providers;
     this.config.models = this.source.models;
@@ -465,6 +468,7 @@ export class ModelConfig {
     }
     return {
       revision: this.revision,
+      timezone: this.source.timezone,
       providers: this.source.providers.map(
         ({ api_key, ...p }: ProviderConfig) => ({
           ...p,
@@ -756,6 +760,7 @@ export class ModelConfig {
     this.protectKeys(providers);
     const next = {
       ...disk,
+      timezone: timezone(input.timezone === undefined ? disk.timezone : input.timezone),
       providers,
       models,
       model_bindings: bindings,
@@ -845,6 +850,7 @@ export class ModelConfig {
     return this.fetchModels(provider);
   }
   private async fetchModels(provider: ProviderConfig, signal?: AbortSignal) {
+    if (provider.protocol === "dashscope") return this.fetchDashScopeModels(provider, signal);
     if (provider.protocol !== "openai-compatible")
       throw new ModelConfigError(
         "此协议不提供核心兼容模型列表，请手动填写模型标识，或使用 OpenAI 兼容地址",
@@ -872,6 +878,40 @@ export class ModelConfig {
         ),
       ].sort(),
     };
+  }
+  private async fetchDashScopeModels(provider: ProviderConfig, signal?: AbortSignal) {
+    // Native DashScope is currently a text-embedding connection. Never import chat models here.
+    const lifetime = AbortSignal.timeout(timeoutSeconds(provider.timeout_seconds) * 1000);
+    const combined = signal ? AbortSignal.any([signal, lifetime]) : lifetime;
+    const details = new Map<string, { id: string; context_window: number | null }>();
+    const pages = new Set<string>();
+    let received = 0;
+    for (let page = 1; page <= 50; page++) {
+      combined.throwIfAborted();
+      const query = new URLSearchParams({ capabilities: "TR", page_no: String(page), page_size: "100" });
+      const data = await this.request(provider, "/models?" + query, undefined, combined);
+      const output = data?.output;
+      if (data?.success === false || !Array.isArray(output?.models) || !Number.isSafeInteger(output.total) || output.total < 0)
+        throw new ModelConfigError("百炼未返回有效的原生模型列表，请核对 API 地址及访问权限，也可自定义添加模型", 502);
+      if (output.total > 5000 || received + output.models.length > 5000)
+        throw new ModelConfigError("百炼模型列表超过读取上限，请自定义添加所需模型", 502);
+      if (output.page_no !== undefined && output.page_no !== page)
+        throw new ModelConfigError("百炼返回的模型列表页码不匹配，请稍后重试", 502);
+      const signature = JSON.stringify(output.models.map((model: any) => model?.model));
+      if (pages.has(signature) || (!output.models.length && received < output.total))
+        throw new ModelConfigError("百炼模型列表分页未完整返回，请稍后重试", 502);
+      pages.add(signature);
+      for (const model of output.models) {
+        if (typeof model?.model !== "string" || !model.model.trim() || model.model.length > 300) continue;
+        if (Array.isArray(model.capabilities) && !model.capabilities.includes("TR")) continue;
+        const limit = model.model_info?.context_window;
+        details.set(model.model, { id: model.model,
+          context_window: Number.isSafeInteger(limit) && limit > 0 && limit <= 10000000 ? limit : null });
+      }
+      received += output.models.length;
+      if (received >= output.total) return { details: [...details.values()], models: [...details.keys()].sort() };
+    }
+    throw new ModelConfigError("百炼模型列表分页超过读取上限，请自定义添加所需模型", 502);
   }
   async testModel(modelId: string, detectDimensions = false) {
     if (typeof detectDimensions !== "boolean")

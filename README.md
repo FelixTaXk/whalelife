@@ -6,7 +6,7 @@
 
 ## 启动
 
-1. 使用Node.js 24。本机提供 runtime/node-v24.22.1-win-x64/，系统Node 20不适用。
+1. 安装Node.js 24或更新版本，确认 `node --version`。仓库不包含运行时和个人配置。
 2. 用Node 24环境执行 npm ci 安装依赖；已安装时无需重复。
 3. 首次运行将 config.example.json 复制为 config/config.json；已有配置不可覆盖。
 4. 运行 start.bat，或在Node 24终端执行 npm start，打开本地控制台 http://127.0.0.1:9270 。
@@ -25,7 +25,14 @@
 | [现有渠道接口](architecture/CHANNELS.md) | 已实现的绑定、收发、回执和来源约定 |
 | [插件开发规则](plugins/AGENTS.md) | 插件会话的修改范围和约束 |
 
-本机开发者另读 docs/HANDOFF-CODEX.md 或 docs/HANDOFF-PLUGINS.md。早期设计稿、阶段报告保留为历史材料，不覆盖当前代码和公开契约。
+插件独立维护：
+
+- [QQ](https://github.com/iinukami/whalelife-plugin-qq)
+- [QQ 空间](https://github.com/iinukami/whalelife-plugin-qzone)
+- [图库](https://github.com/iinukami/whalelife-plugin-gallery)
+- [自主性](https://github.com/iinukami/whalelife-plugin-autonomy)
+
+主仓库不携带这些插件的源码或运行数据；`examples/` 和 `tests/fixtures/` 仅为开发示例及兼容测试样本。
 
 ## 开发与验证
 
@@ -33,8 +40,12 @@
 - 使用Node 24执行 npm run check。契约/生命周期改动执行 npm run test:compat，其他按影响范围选择测试；npm test运行自动化测试文件。
 - [冻结旧插件样本](tests/fixtures/plugin-contract/2026-10-29/README.md)不得为了迁就主干升级而修改；可维护演示位于 examples/plugins/，不会默认安装。
 - tests/acceptance.ts及真实模型验收脚本不是日常回归入口，不要用正式记忆或真实模型跑普通测试。
-- 当前远端CI未启用，原因与已有验证结果统一记录在主干说明。
+- 发布前在独立副本检查类型并运行自动化及兼容测试；不连接真实模型或个人账号。远端 CI 尚未启用。
 
 ## 私有数据
 
 docs/、config/、memory/、logs/、runtime/、备份和插件data不提交。实际密钥由用户配置；公开示例不得包含真实账号、记忆或凭据。不要覆盖已有配置或为了测试安装演示插件到正式plugins目录。
+
+## 许可证
+
+许可证待确定，当前仓库未添加项目许可证。第三方依赖沿用各自许可证。

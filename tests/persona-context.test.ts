@@ -82,7 +82,8 @@ test("default session history and summary survive persona switches and edits, wi
   assert.equal((await memory.readSession("same")).length, 6);
 });
 
-test("persona changes isolate history and summaries while retaining the saved transcript", async () => {
+test("persona changes isolate history and summaries while retaining the saved transcript", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-30T00:00:00Z") });
   const root = await temporaryDirectory("whale-persona-context-");
   const logger = new Logger(join(root, "logs"));
   const memory = new Memory(join(root, "memory"), logger);
@@ -143,7 +144,7 @@ test("persona changes isolate history and summaries while retaining the saved tr
   await talk("继续 A");
   assert.deepEqual(
     requests[1].slice(1).map((x: any) => x.content),
-    ['【历史来源 {"channel":"web"}】\n首次 A', "回复 1", "继续 A"],
+    ['【历史来源 {"channel":"web"}；消息时间 2026-10-30 08:00 UTC+8】\n首次 A', "回复 1", "继续 A"],
   );
   assert.equal(contexts[1].contextReset, false);
   const a = await persona(root, config, "a");

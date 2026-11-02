@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { clock } from "./time.ts";
 import { readFile } from "node:fs/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
@@ -119,6 +120,16 @@ export async function startWeb(config: any, services: any, runtime: any) {
       }
       if (!authorized(req)) return send(401, { error: "请先登录" });
       const memoryUrl = new URL(req.url!, origin);
+      if (memoryUrl.pathname === "/api/session/list" && req.method === "GET") {
+        const entries = await memory.listSessionMeta();
+        return send(200, { items: Object.entries<any>(entries).filter(([, meta]) => !meta.deleted)
+          .map(([id, meta]) => ({ id, name: meta.name || id, updatedAt: meta.updatedAt }))
+          .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || "") || a.id.localeCompare(b.id)) });
+      }
+      if (memoryUrl.pathname === "/api/session/current" && ["GET", "POST"].includes(req.method!)) {
+        const input = req.method === "POST" ? await body(req, 4096) : {};
+        return send(200, { id: await sessions.current({ id: input.id, create: input.create, legacyId: input.legacyId }, lifetime.signal) });
+      }
       if (memoryUrl.pathname === "/api/memory/local-facts") {
         if (req.method === "GET")
           return send(
@@ -316,6 +327,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
       if (req.method === "GET" && req.url === "/api/status")
         return send(200, {
           core: "running",
+          clock: clock(config.timezone),
           models: (config.models ?? config.providers).map((p: any) => ({
             id: p.id,
             model: p.model,
@@ -392,6 +404,9 @@ export async function startWeb(config: any, services: any, runtime: any) {
       busy = true;
       try {
         const data = JSON.parse(raw.toString());
+        if (data.expectedSession !== undefined &&
+          (data.session !== data.expectedSession || data.expectedSession !== await sessions.current({}, lifetime.signal)))
+          throw Error("当前会话已在其他窗口切换，请刷新后重试");
         await channels.web(
           data.session,
           String(data.text ?? ""),

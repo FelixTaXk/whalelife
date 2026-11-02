@@ -352,6 +352,42 @@ export class Memory {
       );
     });
   }
+  /** One authoritative selection, committed in the same queue as deletion and restore. */
+  currentSession(input: { id?: string; create?: boolean; legacyId?: string } = {}, guard: (id?: string) => void = () => {}) {
+    return this.serial(async () => {
+      guard();
+      const index = await this.sessionIndex();
+      const live = (id: string) => !!indexSessionMeta(index, safeId(id)) && !indexSessionMeta(index, id)?.deleted;
+      if (input.create !== undefined && typeof input.create !== "boolean") throw Error("新建会话参数无效");
+      if (input.id !== undefined && input.create) throw Error("不能同时选择和新建会话");
+      let id = input.id;
+      if (id !== undefined && !live(id)) throw Error("请选择存在且未删除的会话");
+      if (id === undefined && !input.create) {
+        if (index.current_session !== undefined && live(index.current_session)) id = index.current_session;
+        // A stale browser is never allowed to replace an established server selection.
+        else if (index.current_session === undefined && typeof input.legacyId === "string" &&
+          /^[a-zA-Z0-9_-]{1,100}$/.test(input.legacyId) && live(input.legacyId)) id = input.legacyId;
+        else id = Object.entries(index.sessions).filter(([key]) => live(key)).reverse()
+          .sort((a, b) => String(b[1].updatedAt ?? "").localeCompare(String(a[1].updatedAt ?? "")))[0]?.[0];
+      }
+      const created = id === undefined;
+      id ??= "web_" + randomUUID().replaceAll("-", "");
+      guard(id);
+      if (id === index.current_session) return id;
+      if (created) {
+        index.sessions[id] = { createdAt: new Date().toISOString() };
+        await directory(this.sessionDir(id));
+      }
+      guard(id);
+      index.current_session = id;
+      await atomic(join(this.root, "index.json"), JSON.stringify(index, null, 2));
+      if (created) {
+        try { await atomic(join(this.sessionDir(id), "session.json"), JSON.stringify(index.sessions[id], null, 2)); }
+        catch (error) { this.logger.warn("当前会话已保存，元数据副本更新失败", { id, error }); }
+      }
+      return id;
+    });
+  }
   /** Channel route/receipt commits share the authoritative index transaction. */
   channelRoute<T>(
     key: string,

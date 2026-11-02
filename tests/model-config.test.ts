@@ -437,9 +437,66 @@ test("draft embedding tests reuse only matching saved credentials, distinguish e
   }
 });
 
+test("DashScope model discovery collects pages, filters non-embedding capabilities and preserves draft credentials", async t => {
+  const f = await fixture(), before = await readFile(f.file, "utf8");
+  const provider = { id: "dash-draft", name: "DashScope", protocol: "dashscope", base_url: "https://dashscope.aliyuncs.com/api/v1", api_key: "draft-secret", timeout_seconds: 10, enabled: true };
+  const requests: any[] = [];
+  t.mock.method(f.manager as any, "request", async (p: any, endpoint: string, body: any, signal: AbortSignal) => {
+    assert.equal(p.api_key, "draft-secret");
+    assert.equal(p.base_url, provider.base_url);
+    assert.equal(body, undefined);
+    assert.equal(signal.aborted, false);
+    const query = new URL(endpoint, provider.base_url).searchParams;
+    assert.equal(query.get("capabilities"), "TR");
+    requests.push(endpoint);
+    return { success: true, output: { total: 4, page_no: Number(query.get("page_no")), models: requests.length === 1 ? [
+      { model: "text-embedding-v4", capabilities: ["TR"], model_info: { context_window: 8192 } },
+      { model: "qwen-vl", capabilities: ["VU", "TG"] },
+    ] : [
+      { model: "text-embedding-v3" },
+      { model: "text-embedding-v4", capabilities: ["TR"], model_info: { context_window: 8192 } },
+    ] } };
+  });
+  assert.deepEqual(await f.manager.listDraftModels({ provider }), {
+    models: ["text-embedding-v3", "text-embedding-v4"],
+    details: [{ id: "text-embedding-v4", context_window: 8192 }, { id: "text-embedding-v3", context_window: null }],
+  });
+  assert.equal(requests.length, 2);
+  assert.equal(await readFile(f.file, "utf8"), before, "discovery cannot save a draft or change model routing");
+  assert.ok(!JSON.stringify(f.manager.snapshot()).includes("draft-secret"));
+});
+
+test("DashScope model discovery rejects broken or runaway pagination and respects cancellation", async t => {
+  const f = await fixture();
+  const p = { protocol: "dashscope", base_url: "https://fixture.invalid/api/v1", timeout_seconds: 1 };
+  let response: any;
+  let requests = 0;
+  t.mock.method(f.manager as any, "request", async () => { requests++; return response; });
+  const fetch = (signal?: AbortSignal) => (f.manager as any).fetchModels(p, signal);
+  for (response of [null, { success: false }, { output: { total: -1, models: [] } }, { output: { total: 5001, models: [] } },
+    { output: { total: 1, models: [] } }, { output: { total: 1, page_no: 2, models: [{ model: "a" }] } }]) {
+    await assert.rejects(fetch(), /百炼/);
+  }
+  response = { output: { total: 3, models: [{ model: "a" }] } };
+  await assert.rejects(fetch(), /分页未完整返回/);
+  response = { output: { total: 0, page_no: 1, models: [] } };
+  assert.deepEqual(await fetch(), { models: [], details: [] });
+  const before = requests;
+  await assert.rejects(fetch(AbortSignal.abort(Error("cancelled-catalog"))), /cancelled-catalog/);
+  assert.equal(requests, before);
+});
+
 test("DashScope embeddings use native endpoint and envelope while dimensions are checked independently", async () => {
   const seen: any[] = [];
   const server = createServer(async (req, res) => {
+    if (req.method === "GET") {
+      const url = new URL(req.url!, "http://fixture");
+      assert.equal(url.pathname, "/api/v1/models");
+      assert.equal(url.searchParams.get("capabilities"), "TR");
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ output: { total: 1, page_no: 1, models: [{ model: "text-embedding-v3", capabilities: ["TR"] }] } }));
+      return;
+    }
     let raw = "";
     for await (const chunk of req) raw += chunk;
     seen.push({ path: req.url, body: JSON.parse(raw) });
@@ -496,10 +553,9 @@ test("DashScope embeddings use native endpoint and envelope while dimensions are
       (await f.manager.testModel("dash-vector", true)).dimensions,
       3,
     );
-    await assert.rejects(
-      () => f.manager.listModels("dash"),
-      /手动填写模型标识/,
-    );
+    assert.deepEqual(await f.manager.listModels("dash"), {
+      models: ["text-embedding-v3"], details: [{ id: "text-embedding-v3", context_window: null }],
+    });
     const illegal = f.input();
     illegal.models.push({
       id: "dash-chat",

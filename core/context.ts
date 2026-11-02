@@ -1,6 +1,6 @@
 import type { PluginLogger, ToolsAPI, LLMAPI, MemoryAPI, ApprovalAPI, ChannelAPI, PluginWeb,
   ModelsAPI, PersonasAPI, SessionAPI, PluginConfig, PluginServices, PluginEvents, Disposable,
-  PluginStatus } from "./plugin-api.ts";
+  PluginStatus, OptionalService } from "./plugin-api.ts";
 export type * from "./plugin-api.ts";
 export type { IncomingMessageData as IncomingMessage } from "./plugin-api.ts";
 export { PLUGIN_API_VERSION, SUPPORTED_PLUGIN_API_VERSIONS } from "./plugin-compatibility.ts";
@@ -25,6 +25,9 @@ export interface Context {
   get<Name extends keyof PluginServices>(name: Name, strict: boolean): PluginServices[Name] | undefined;
   /** Legacy dynamically named third-party services; supply T or augment PluginServices for typing. */
   get<T = any>(name: string, strict?: boolean): T;
+  /** Observe a service declared in optionalDepends, without creating a mandatory dependency. */
+  optional<Name extends keyof PluginServices>(name: Name, onChange: (binding: OptionalService<PluginServices[Name]> | undefined) => unknown | Promise<unknown>): () => void;
+  optional<T = unknown>(name: string, onChange: (binding: OptionalService<T> | undefined) => unknown | Promise<unknown>): () => void;
   effect<T extends Disposable>(fn: () => T): T;
   on<Name extends keyof PluginEvents>(name: Name, fn: (payload: PluginEvents[Name]) => unknown | Promise<unknown>): () => void;
   on<Payload = unknown>(name: string, fn: (payload: Payload) => unknown | Promise<unknown>): () => void;

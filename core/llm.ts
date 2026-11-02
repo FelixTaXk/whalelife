@@ -3,7 +3,15 @@ import {
   modelConfigurationError,
   validateModelParameters,
 } from "./model-config.ts";
-import { withModelResponse } from "./model-http.ts";
+import { withModelResponse, modelErrorMessage } from "./model-http.ts";
+/** Completed transcript rows have no protocol reasoning. Quote them as history for these APIs. */
+export function thinkingToolHistory(provider: any, tools: unknown[]) {
+  if (!tools.length || provider.parameters?.thinking?.type === "disabled") return false;
+  let host = "";
+  try { host = new URL(provider.base_url).hostname.toLowerCase(); } catch { /* validated before transport */ }
+  return provider.parameters?.thinking?.type === "enabled" ||
+    host === "api.deepseek.com" || /^deepseek[-/]/i.test(provider.model ?? "");
+}
 export class LLM {
   logger: Logger;
   providers: any[];
@@ -67,6 +75,7 @@ export class LLM {
           if (!response.body) throw Error("模型返回空响应");
           let buffer = "",
             text = "",
+            reasoning: string | undefined,
             usage: any;
           const calls: any[] = [];
           const decoder = new TextDecoder();
@@ -85,9 +94,11 @@ export class LLM {
             } catch {
               throw Error("模型服务返回了无效的流式数据");
             }
-            if (obj.error) throw Error("模型服务返回错误");
+            if (obj.error) throw Error(modelErrorMessage(undefined, obj, opts.provider.api_key));
             usage = obj.usage ?? usage;
             const delta = obj.choices?.[0]?.delta;
+            if (typeof delta?.reasoning_content === "string")
+              reasoning = (reasoning ?? "") + delta.reasoning_content;
             if (delta?.content) {
               text += delta.content;
               opts.onChunk?.(delta.content);
@@ -119,7 +130,8 @@ export class LLM {
             ms: Date.now() - start,
             usage,
           });
-          return { text, toolCalls: calls.filter(Boolean), usage };
+          return { text, toolCalls: calls.filter(Boolean), usage,
+            ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) };
         },
         opts.signal,
       );

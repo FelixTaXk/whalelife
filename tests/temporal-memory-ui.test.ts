@@ -10,8 +10,8 @@ const { renderMemory } = await import(
 function fixture(policy: Record<string, unknown> = {}) {
   return {
     state: {
-      session: "one",
-      sessionContext: {
+      session: "one", memoryLoadedSession: "one",
+      memoryContext: {
         name: "测试会话",
         model: { name: "测试模型", context_window: 32000 },
         usage: null,
@@ -75,7 +75,7 @@ test("independent switches render explicit settings and preserve legacy disabled
 test("memory-window counts are optional and do not expand the compact chat meter", () => {
   const app: any = fixture();
   assert.doesNotMatch(renderContextPanel(app), /undefined|NaN|短期 300 条/);
-  app.state.sessionContext.memory_window = {
+  app.state.memoryContext.memory_window = {
     short_term_messages: 300,
     long_term_messages: 0,
     short_summary_chars: 128,
@@ -84,10 +84,10 @@ test("memory-window counts are optional and do not expand the compact chat meter
   const html = renderContextPanel(app);
   assert.match(html, /短期 300 条 · 长期 0 条/);
   assert.match(html, /现存短期摘要 128 字符 · 长期概览 0 字符/);
-  app.state.sessionContext.memory_window.long_summary_chars = 400;
+  app.state.memoryContext.memory_window.long_summary_chars = 400;
   assert.match(renderContextPanel(app), /长期概览 400 字符/);
   assert.doesNotMatch(renderContextPanel(app), /400 \/ 200/);
-  const compact = renderContextMeter(app.state.sessionContext, true);
+  const compact = renderContextMeter(app.state.memoryContext, true);
   assert.match(compact, /chat-context-compact/);
   assert.doesNotMatch(compact, /short_term_days|长期范围|<details|<form/);
 });
@@ -144,6 +144,17 @@ test("saving context sends independent toggles and temporal values without the d
   }
   assert.equal(reloads, 3);
   assert.equal(error.textContent, "");
+  const activeMeter = app.state.sessionContext;
+  app.state.memorySession = app.state.memoryLoadedSession = "two";
+  bindContextSettings(app, async () => { reloads++; });
+  await form.onsubmit({ preventDefault() {} });
+  assert.equal(posts.at(-1).id, "two", "editing a viewed archive targets that archive");
+  assert.equal(app.state.session, "one");
+  assert.strictEqual(app.state.sessionContext, activeMeter, "archive edits do not overwrite the active chat's meter");
+  app.state.memorySession = "three";
+  await form.onsubmit({ preventDefault() {} });
+  assert.equal(posts.length, 4, "an obsolete editor cannot save after browsing another archive");
+  assert.match(error.textContent, /档案已改变/);
 });
 
 test("summary archive distinguishes short summaries and compatible long overviews", () => {

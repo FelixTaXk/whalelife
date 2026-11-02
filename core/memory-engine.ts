@@ -2,8 +2,10 @@ import { readFile, mkdir, lstat } from "node:fs/promises";
 import { join, relative, resolve, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { atomic, safeId, type Memory } from "./memory.ts";
+import { occurrence, collectTimes, timestamp } from "./time.ts";
 import { applyCognitions, cognitionRevision, undoCognition, type CognitionMaintenance } from "./cognition.ts";
 import { attribution, collectOrigins, originOf, pluginOrigin, validateAttribution, validateOrigin } from "./provenance.ts";
+import type { DocumentWrite, SessionDocument } from "./plugin-api.ts";
 
 export const charCount = (text: string) => Array.from(text).length;
 export function estimateTokens(text: string) {
@@ -13,6 +15,12 @@ export function estimateTokens(text: string) {
 const cut = (text: string, n: number) => Array.from(text).slice(0, n).join("");
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
+const excludedInputs = (state: { records: any[] }) => new Set<string>(
+  state.records.filter(x => x.kind === "event-state" && x.context_excluded === true).map(x => x.id));
+const inputRevision = (state: { records: any[] }) => {
+  const ids = [...excludedInputs(state)].sort();
+  return ids.length ? hash(JSON.stringify(ids)) : undefined;
+};
 const initial = () => ({
   version: 1,
   facts: { text: "", revision: hash(""), updated_by: "user", updated_at: "" },
@@ -100,6 +108,8 @@ export function validateMemoryState(s: any) {
   if (byId.size !== s.records.length) throw Error("记忆ID重复");
   for (const record of s.records) {
     validateAttribution(record);
+    if (record.context_excluded !== undefined && typeof record.context_excluded !== "boolean")
+      throw Error("上下文排除标记损坏");
     if (record.kind === "cognition" && record.format_version === 2 && charCount(record.text) > 80)
       throw Error("新版长期认知每条不能超过80字符");
     if (record.uncertain !== undefined && typeof record.uncertain !== "boolean")
@@ -118,6 +128,9 @@ export function validateMemoryState(s: any) {
       throw Error("认知复核依据损坏");
   }
   for (const [key, value] of Object.entries<any>(s.summaries)) {
+    if (value?.input_revision !== undefined &&
+        (typeof value.input_revision !== "string" || !/^[a-f0-9]{64}$/.test(value.input_revision)))
+      throw Error("摘要来源版本损坏");
     if (value && typeof value === "object") validateAttribution(value);
     safeId(key);
     if (
@@ -190,6 +203,7 @@ export class MemoryEngine {
   memory: Memory;
   types = new Map<string, { owner: string; version: number }>();
   maintenance: (id?: string) => boolean = () => false;
+  inputEditGuard: (id: string) => (() => void) = () => () => {};
   constructor(memory: Memory) {
     this.memory = memory;
   }
@@ -225,6 +239,59 @@ export class MemoryEngine {
     safeId(id);
     if (this.maintenance(id)) throw Error("记忆维护中，请稍后重试");
     if ((await this.memory.sessionMeta(id))?.deleted) throw Error("会话已删除");
+  }
+  private async documentFile(id: string, owner: string, key: string) {
+    await this.valid(id);
+    if (!(await this.memory.sessionMeta(id))) throw Error("会话不存在，请先创建会话");
+    if (typeof key !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(key))
+      throw Error("文档 key 需要1–64个小写字母、数字、下划线或连字符，以字母开头");
+    return this.path("sessions", id, "extensions", hash(owner).slice(0, 20), "documents", key + ".json");
+  }
+  private async document<Data>(file: string, owner: string, key: string): Promise<SessionDocument<Data>> {
+    let raw: string;
+    try { raw = await readFile(file, "utf8"); }
+    catch (error: any) {
+      if (error.code === "ENOENT") return { revision: null, data: null };
+      throw error;
+    }
+    if (Buffer.byteLength(raw) > 256 * 1024 + 2048) throw Error("会话文档损坏或过大，未覆盖原文件");
+    const value = JSON.parse(raw);
+    if (value?.version !== 1 || value.owner !== owner || value.key !== key ||
+        typeof value.revision !== "string" || !/^[a-f0-9-]{36}$/.test(value.revision) ||
+        !Object.hasOwn(value, "data")) throw Error("会话文档损坏或归属不符，未覆盖原文件");
+    return { revision: value.revision, data: value.data };
+  }
+  private readDocument<Data>(id: string, owner: string, key: string, check: () => void) {
+    return this.memory.serial(async () => {
+      check();
+      const file = await this.documentFile(id, owner, key);
+      check();
+      return this.document<Data>(file, owner, key);
+    });
+  }
+  private async saveDocument<Data>(id: string, owner: string, input: DocumentWrite<Data>, check: () => void): Promise<SessionDocument<Data>> {
+    check();
+    const { key, revision } = input;
+    if (revision !== null && (typeof revision !== "string" || !/^[a-f0-9-]{36}$/.test(revision)))
+      throw Error("保存文档必须携带读取时的 revision，新文档使用 null");
+    const encoded = JSON.stringify(input.data, (_key, value) => {
+      if (["undefined", "function", "symbol", "bigint"].includes(typeof value) ||
+          (typeof value === "number" && !Number.isFinite(value))) throw Error("文档内容必须是有效 JSON 数据");
+      return value;
+    });
+    if (Buffer.byteLength(encoded) > 256 * 1024) throw Error("单份文档最多256 KiB");
+    const data = JSON.parse(encoded);
+    return this.memory.serial(async () => {
+      check();
+      const file = await this.documentFile(id, owner, key);
+      const previous = await this.document(file, owner, key);
+      if (revision !== previous.revision) throw Error("文档已变更，请重新读取后保存");
+      const next = { revision: randomUUID(), data };
+      await mkdir(dirname(file), { recursive: true });
+      check();
+      await atomic(file, JSON.stringify({ version: 1, owner, key, ...next }));
+      return next;
+    });
   }
   async state(id: string) {
     await this.valid(id);
@@ -269,11 +336,53 @@ export class MemoryEngine {
         s.facts.revision,
         s.settings,
         s.memberships,
-        s.records.map((x) => [x.id, x.status, x.pinned, x.text, x.uncertain, attribution(x)]),
+        s.records.map((x) => [x.id, x.status, x.pinned, x.text, x.uncertain, attribution(x), x.context_excluded]),
         Object.entries(s.summaries).map(([key, x]) => [key, x.text, x.mode, attribution(x)]),
         await this.memory.readFacts(),
       ]),
     );
+  }
+  async contextRows(id: string, rows?: any[]) {
+    const excluded = excludedInputs(await this.state(id));
+    return (rows ?? await this.memory.readSession(id)).filter((row: any) => !excluded.has(row.id));
+  }
+  private async excludeInputs(id: string, owner: string, messageIds: string[], check: () => void) {
+    if (!Array.isArray(messageIds) || !messageIds.length || messageIds.length > 100 ||
+        messageIds.some(x => typeof x !== "string" || !x || x.length > 200)) throw Error("每次需要1–100个明确的消息ID");
+    const ids = [...new Set(messageIds)];
+    if (!(await this.memory.sessionMeta(safeId(id)))) throw Error("会话不存在");
+    check();
+    const release = this.inputEditGuard(id);
+    try { return await this.update(id, async s => {
+      check();
+      const rows = new Map((await this.memory.readSession(id)).map((x: any) => [x.id, x]));
+      for (const rid of ids) {
+        const row: any = rows.get(rid);
+        if (!row || row.type !== "message" || row.role !== "user" || row.channel !== "plugin" ||
+            row.account !== owner || row.origin?.plugin !== owner)
+          throw Error("只能排除本插件通过会话接口写入的明确输入消息，不能排除真人或其他来源记录");
+      }
+      check();
+      const at = new Date().toISOString();
+      let excluded = 0;
+      for (const rid of ids) {
+        let item = s.records.find(x => x.id === rid);
+        if (item?.context_excluded) continue;
+        if (!item) { item = { id: rid, kind: "event-state", status: "active", pinned: false }; s.records.push(item); }
+        if (item.kind !== "event-state") throw Error("消息ID与其他记忆记录冲突");
+        Object.assign(item, { context_excluded: true, excluded_by: owner, excluded_at: at });
+        excluded++;
+      }
+      if (excluded) {
+        // Derived prose cannot be reliably edited by removing substrings. Retain it for audit,
+        // suppress it from context, and regenerate from eligible source rows on later turns.
+        for (const item of s.records)
+          if (item.kind === "cognition" && (item.source === "consolidation" || item.evidence?.some((ref: string) => ids.includes(ref))))
+            Object.assign(item, { context_excluded: true, excluded_by: owner, excluded_at: at });
+        s.trace = { query: "", selected: [], estimated_tokens: 0 };
+      }
+      return { excluded };
+    }); } finally { release(); }
   }
   async saveLocalFacts(
     id: string,
@@ -371,6 +480,7 @@ export class MemoryEngine {
     return this.inspect(id);
   }
   async record(id: string, input: any) {
+    const occurredAt = occurrence(input.occurred_at);
     const origin = input.origin === undefined ? undefined : validateOrigin(input.origin);
     const kind = input.kind;
     if (!["episode", "cognition"].includes(kind) && !this.types.has(kind))
@@ -408,6 +518,7 @@ export class MemoryEngine {
         source: String(input.source || "core"),
         ...(origin ? { origin } : {}),
         ts: new Date().toISOString(),
+        ...(occurredAt ? { occurred_at: occurredAt } : {}),
         status: "active",
         pinned: false,
         evidence,
@@ -444,7 +555,7 @@ export class MemoryEngine {
       s.records.filter((x) => x.kind === "event-state").map((x) => [x.id, x]),
     );
     for (const row of rows) {
-      if (row.type !== "message" || !row.text) continue;
+      if (row.type !== "message" || !row.text || muted.get(row.id)?.context_excluded) continue;
       const rid = row.id || hash(JSON.stringify(row)).slice(0, 32);
       items.push({
         id: rid,
@@ -453,6 +564,7 @@ export class MemoryEngine {
         source: row.role === "user" ? "user" : "assistant",
         ...(originOf(row) ? { origin: originOf(row) } : {}),
         ts: row.ts,
+        ...(row.timezone ? { timezone: row.timezone } : {}),
         status: muted.get(rid)?.status || "active",
         pinned: muted.get(rid)?.pinned || false,
         evidence: [rid],
@@ -461,7 +573,7 @@ export class MemoryEngine {
       });
     }
     return items
-      .filter((x) => x.kind !== "event-state")
+      .filter((x) => x.kind !== "event-state" && !x.context_excluded)
       .map((x) => ({ ...x, session: id }));
   }
   private async visible(id: string) {
@@ -502,6 +614,7 @@ export class MemoryEngine {
       exclude?: string[];
       revision?: string;
       archived?: boolean;
+      persistTrace?: boolean;
     } = {},
   ) {
     if (typeof query !== "string" || query.length > 16000)
@@ -590,6 +703,8 @@ export class MemoryEngine {
         source: item.source,
         ...attribution(item),
         ts: item.ts,
+        ...(item.occurred_at ? { occurred_at: item.occurred_at } : {}),
+        ...(item.time_range ? { time_range: item.time_range } : {}),
         text: (offset ? "…" : "") + cut(item.text.slice(offset), 500),
         outcome: item.outcome || undefined,
         ...(item.kind === "cognition" ? { uncertain: item.uncertain ?? true } : {}),
@@ -610,7 +725,7 @@ export class MemoryEngine {
       candidates: candidates.length,
       omitted: scored.length - selected.length,
     };
-    if (!opts.manual)
+    if (!opts.manual && opts.persistTrace !== false)
       await this.update(id, (state) => {
         state.trace = trace;
       });
@@ -623,7 +738,10 @@ export class MemoryEngine {
           .items
       : (await this.visible(id))
           .filter((x) => archived || x.status === "active")
-          .reverse()
+          .sort((a, b) => {
+            const at = timestamp(a.ts) ?? -Infinity, bt = timestamp(b.ts) ?? -Infinity;
+            return at === bt ? (a.session.localeCompare(b.session) || a.id.localeCompare(b.id)) : at > bt ? -1 : 1;
+          })
           .slice(0, 100)
           .map((x) => ({
             ...x,
@@ -726,22 +844,25 @@ export class MemoryEngine {
     safeId(key);
     if (value !== undefined)
       await this.update(id, (s) => {
-        s.summaries = { ...s.summaries, [key]: value };
+        const revision = inputRevision(s);
+        if (revision && value.input_revision !== revision && !(value.text === "" && value.covered === 0)) return;
+        s.summaries = { ...s.summaries, [key]: { ...value, ...(revision ? { input_revision: revision } : {}) } };
       });
-    const summaries = (await this.state(id)).summaries;
-    return Object.hasOwn(summaries, key) ? summaries[key] : { covered: 0 };
+    const state = await this.state(id), revision = inputRevision(state);
+    const saved = Object.hasOwn(state.summaries, key) ? state.summaries[key] : { covered: 0 };
+    return revision && saved.input_revision !== revision ? { covered: 0, input_revision: revision } : saved;
   }
   async readSummary(id: string, key: string) {
     const checkpoint = await this.summaryState(id, key);
     return typeof checkpoint.text === "string"
       ? checkpoint.text
-      : this.memory.readSummary(key);
+      : checkpoint.input_revision ? "" : this.memory.readSummary(key);
   }
   async cognitionCandidates(id: string, text: string, revision?: string) {
     const terms = new Set(words(text));
     const state = await this.state(id);
     const ranked = state.records
-      .filter((x) => x.kind === "cognition" && ["active", "review"].includes(x.status) &&
+      .filter((x) => x.kind === "cognition" && !x.context_excluded && ["active", "review"].includes(x.status) &&
         !x.reverted_at && (!revision || !x.persona_revision || x.persona_revision === revision))
       .map((x) => ({ record: x, score: words(x.text).filter((t) => terms.has(t)).length }))
       .filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
@@ -749,6 +870,7 @@ export class MemoryEngine {
     let used = 0;
     for (const { record } of ranked) {
       const candidate = { id: record.id, text: record.text, status: record.status,
+        ts: record.ts, ...(record.time_range ? { time_range: record.time_range } : {}),
         uncertain: record.uncertain ?? true, revision: cognitionRevision(record), ...attribution(record) };
       const size = estimateTokens(JSON.stringify(candidate));
       if (used + size > 800) continue;
@@ -787,6 +909,7 @@ export class MemoryEngine {
     )
       throw Error("认知缺少有效来源或超出长度");
     await this.update(id, (s) => {
+      if (inputRevision(s) !== value.input_revision) throw Error("摘要来源范围已变更，请重新整理");
       const existing = s.summaries[key];
       if (value.last_id && existing?.last_id === value.last_id &&
           existing.last_offset === value.last_offset && existing.text === value.text &&
@@ -796,6 +919,7 @@ export class MemoryEngine {
       for (const record of s.records) {
         if (record.kind !== "cognition" || !record.evidence?.some((id: string) => cognitions.some((x) => x.evidence.includes(id)))) continue;
         Object.assign(record, collectOrigins(undefined, record.evidence.map((id: string) => byEvidence.get(id))));
+        Object.assign(record, collectTimes(undefined, record.evidence.map((id: string) => byEvidence.get(id))));
       }
       s.summaries = { ...s.summaries, [key]: value };
     });
@@ -807,12 +931,14 @@ export class MemoryEngine {
     for (const [id, meta] of Object.entries<any>(index.sessions)) {
       if (meta.deleted) continue;
       const state = await this.state(id);
-      for (const [key, checkpoint] of Object.entries<any>(state.summaries))
+      for (const key of Object.keys(state.summaries)) {
+        const checkpoint = await this.summaryState(id, key);
         if (
-          typeof checkpoint.text === "string" &&
-          (await this.memory.readSummary(key)) !== checkpoint.text
+          (checkpoint.text !== undefined || checkpoint.input_revision) &&
+          (await this.memory.readSummary(key)) !== (checkpoint.text ?? "")
         )
-          await this.memory.writeSummary(key, checkpoint.text, id);
+          await this.memory.writeSummary(key, checkpoint.text ?? "", id);
+      }
     }
   }
   plugin(owner: string, cleanup: (dispose: () => void) => unknown) {
@@ -825,10 +951,26 @@ export class MemoryEngine {
       if (!alive) throw Error("插件已停用");
     };
     return Object.freeze({
-      readSession: async (id: string, limit = 100) => {
+      readDocument: <Data = unknown>(id: string, key: string) => {
+        check();
+        return this.readDocument<Data>(id, owner, key, check);
+      },
+      saveDocument: <Data = unknown>(id: string, input: DocumentWrite<Data>) => {
+        check();
+        return this.saveDocument(id, owner, input, check);
+      },
+      readSession: async (id: string, limit = 100, beforeId?: string) => {
         check();
         await this.valid(id);
-        return this.memory.readSession(id, Math.min(100, Math.max(0, limit)));
+        const count = Math.min(100, Math.max(0, limit));
+        if (beforeId === undefined) return this.memory.readSession(id, count);
+        const rows = await this.memory.readSession(id), before = rows.findIndex((row: any) => row.id === beforeId);
+        if (typeof beforeId !== "string" || before < 0) throw Error("历史分页消息ID不存在");
+        return count ? rows.slice(Math.max(0, before - count), before) : [];
+      },
+      excludeInputs: async (id: string, messageIds: string[]) => {
+        check();
+        return this.excludeInputs(id, owner, messageIds, check);
       },
       readFacts: async () => {
         check();

@@ -153,7 +153,7 @@ function formHarness(app: any) {
   app.content = {
     querySelectorAll: () => [],
     querySelector: (selector: string) =>
-      selector === "#connection-form" ? form : null,
+      selector === "#connection-form" ? form : selector === "[data-fetch-models]" ? node(selector) : null,
   };
   app.configDraft = () => structuredClone(app.state.config);
   app.render = () => {};
@@ -185,6 +185,45 @@ async function withFormData(action: () => Promise<void>) {
     Object.defineProperty(globalThis, "FormData", original);
   }
 }
+
+test("DashScope discovery button works and opens a selectable list without silently saving models", async t => {
+  const app = appFor();
+  app.state.modelSelection = "text-embedding-v4";
+  const html = renderModels(app);
+  assert.doesNotMatch(html, /data-fetch-models\s+disabled/);
+  assert.match(html, /获取文本嵌入模型/);
+  const { node } = formHarness(app);
+  let requests = 0, dialog: any;
+  app.dialog = (title: string, body: string, save: any) => { dialog = { title, body, save }; };
+  app.saveConfig = () => assert.fail("getting a model list must not change configuration");
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", { configurable: true, value: { querySelector: node, querySelectorAll: () => [] } });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "document", previous); else Reflect.deleteProperty(globalThis, "document"); });
+  t.mock.method(globalThis, "fetch", async (path: any, init: any) => {
+    requests++;
+    assert.equal(path, "/api/model-config/models/draft");
+    const data = JSON.parse(init.body);
+    assert.equal(data.provider.protocol, "dashscope");
+    assert.equal(data.provider.id, "bailian");
+    return new Response(JSON.stringify({ models: ["text-embedding-v3", "text-embedding-v4"] }));
+  });
+  await withFormData(() => node("[data-fetch-models]").onclick());
+  assert.equal(requests, 1);
+  assert.match(dialog.body, /value="text-embedding-v3"/);
+  assert.match(dialog.body, /value="text-embedding-v4" disabled checked/);
+  assert.equal(node("[data-fetch-models]").disabled, false);
+  assert.equal(app.state.config.models.length, 4);
+  let saved: any;
+  app.saveConfig = async (config: any) => { saved = config; };
+  await dialog.save({ getAll: () => ["text-embedding-v3"] });
+  assert.equal(saved.models.length, 5);
+  const added = saved.models.at(-1);
+  assert.equal(added.model, "text-embedding-v3");
+  assert.equal(added.provider, "bailian");
+  assert.equal(added.type, "embedding");
+  assert.equal(saved.providers.length, 3);
+  assert.equal(app.state.modelSelection, added.id);
+});
 
 test("model lists separate capabilities even when the same provider serves both", () => {
   const config = fixture();

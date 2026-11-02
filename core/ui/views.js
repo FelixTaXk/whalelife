@@ -1,4 +1,4 @@
-import { extensionSettings } from "./extensions.js";
+import { pluginCard, visiblePluginCards, bindPluginActions } from "./extensions.js";
 import {
   api,
   escapeHTML as e,
@@ -6,18 +6,11 @@ import {
   availableModels,
   coreChatModel,
   extensionPlugins,
+  sessionName,
 } from "./api.js";
 import { icon, whale } from "./icons.js";
 import { renderContextMeter } from "./context.js";
 
-const statusName = (status) =>
-  ({
-    active: "运行中",
-    stopped: "已停用",
-    blocked: "等待依赖",
-    failed: "加载失败",
-    loading: "加载中",
-  })[status] || status;
 const typeIcon = (type) =>
   type === "embedding" ? "vector" : type === "chat" ? "chat" : "sliders";
 const activeChat = (app) => {
@@ -79,6 +72,7 @@ export function renderOverview(app) {
    ["grid", "核心服务", "WhaleLife · M0", "运行中"],
    ["database", "记忆存储", s.memory.files + " 个会话已归档", "已连接"],
    ["chat", "当前人格", s.personaName || s.persona, "已启用"],
+   ["database", "当前会话", sessionName(app.state) + " · " + (app.state.session || ""), "正在使用"],
    [
      "lock",
      "会话权限",
@@ -115,7 +109,11 @@ function personaRoutingText(config, personaId) {
 }
 
 export function renderBindings(app) {
+  const time = app.state.status?.clock;
+  const timeSettings = `<div class="binding-field"><div class="binding-label"><h3>时间与日期</h3></div><p class="hint">主干当前时间（读取时）：${time ? e(`${time.local} ${time.weekday}`) : "刷新后查看"}</p></div>`;
   const c = app.state.config;
+  const sessions = app.state.sessions?.length ? app.state.sessions : app.state.session ? [{ id: app.state.session, name: sessionName(app.state) }] : [];
+  const sessionSettings = `<section class="panel panel-body" style="margin-bottom:22px"><h2>当前会话</h2><p>正在使用：<strong>${e(sessionName(app.state))}</strong> <small>${e(app.state.session)}</small></p><div class="row context-session-select"><label for="active-session">切换到</label><select id="active-session" ${app.state.chatBusy ? "disabled" : ""}>${sessions.map(item => `<option value="${e(item.id)}" ${item.id === app.state.session ? "selected" : ""}>${e(item.name || item.id)}${item.id === app.state.session ? "（正在使用）" : ""}</option>`).join("")}</select><button id="apply-session" class="btn primary small" type="button" disabled>切换会话</button><button id="new-session" class="btn small" type="button" ${app.state.chatBusy ? "disabled" : ""}>${icon("plus")}新建并使用</button></div><p class="hint">选好后点击“切换会话”才生效。网页和跟随当前会话的插件共用此选择，正在处理的请求仍留在原会话。浏览记忆档案不会切换这里。</p><p id="session-switch-error" class="form-error" role="alert"></p></section>`;
   const activePersona = c.activePersona || app.state.status?.persona || "";
   const personaSettings = `<label class="form-field"><span>当前聊天人格</span><select id="active-persona" name="activePersona" required ${app.state.chatBusy || !c.personas.length ? "disabled" : ""}>${!activePersona ? '<option value="">请选择人格</option>' : ""}${c.personas.map((p) => `<option value="${e(p.id)}" ${p.id === activePersona ? "selected" : ""}>${e(p.name)}</option>`).join("")}</select></label><p id="active-persona-routing" class="hint" style="margin-top:16px">${e(personaRoutingText(c, activePersona))}</p><p class="hint" style="margin-top:12px">与模型选择一起保存后生效。切换人格保持当前会话和聊天记录；请等待当前回复结束后切换。</p><a href="#personas" class="btn tonal" style="margin-top:18px">编辑人格 ${icon("arrow")}</a>`;
   const options = (type, selected, inherit = false) =>
@@ -136,10 +134,29 @@ export function renderBindings(app) {
       .join("");
   const field = (type, description) =>
     `<div class="binding-row"><div class="row">${icon(typeIcon(type))}<h3>${typeNames[type]}模型</h3></div><select name="binding_${type}" aria-label="${typeNames[type]}模型">${options(type, c.bindings[type])}</select><p>${description}</p></div>`;
-  return `<form id="bindings-form"><div class="page-heading"><div><div class="eyebrow">MODEL ROUTING</div><h1>使用配置</h1><p>明确选择每种能力使用的模型。未配置的用途保持关闭。</p></div><div class="heading-actions"><button type="submit" class="btn primary">${icon("check")}保存配置</button></div></div><div class="info-banner">${icon("info")}选择已启用的模型，保存后从下一次请求开始生效。</div><div class="bindings-grid"><section class="panel"><div class="panel-header"><h2>工作空间模型</h2><a href="#models" class="btn small link">管理模型 ${icon("arrow")}</a></div><div class="panel-body">${field("chat", "用于鲸鲸的日常对话和会话摘要。")}${field("embedding", "供插件使用的向量模型。当前支持配置与接口测试；检索由插件实现。")}${field("rerank", "供重排序插件使用的模型选择，可留空。")}<details style="margin-top:20px"><summary class="muted">更多模型用途</summary><div style="margin-top:20px">${field("image", "图像生成服务的模型选择。")}${field("stt", "语音识别服务的模型选择。")}${field("tts", "语音合成服务的模型选择。")}<p class="hint" style="margin-top:16px">这里保存模型选择，图像、语音与重排序的具体调用由对应插件实现。</p></div></details></div></section><section class="panel"><div class="panel-header"><h2>人格配置</h2></div><div class="panel-body">${personaSettings}</div></section></div><p id="bindings-error" class="form-error" role="alert"></p></form>`;
+  return `<div class="page-heading"><div><div class="eyebrow">MODEL ROUTING</div><h1>使用配置</h1><p>明确选择每种能力使用的模型。未配置的用途保持关闭。</p></div><div class="heading-actions"><button type="submit" form="bindings-form" class="btn primary" id="save-bindings">${icon("check")}保存配置</button></div></div><div class="info-banner">${icon("info")}选择已启用的模型，保存后从下一次请求开始生效。</div>${sessionSettings}<form id="bindings-form"><div class="bindings-grid"><section class="panel"><div class="panel-header"><h2>工作空间模型</h2><a href="#models" class="btn small link">管理模型 ${icon("arrow")}</a></div><div class="panel-body">${field("chat", "用于鲸鲸的日常对话和会话摘要。")}${field("embedding", "供插件使用的向量模型。当前支持配置与接口测试；检索由插件实现。")}${field("rerank", "供重排序插件使用的模型选择，可留空。")}<details style="margin-top:20px"><summary class="muted">更多模型用途</summary><div style="margin-top:20px">${field("image", "图像生成服务的模型选择。")}${field("stt", "语音识别服务的模型选择。")}${field("tts", "语音合成服务的模型选择。")}<p class="hint" style="margin-top:16px">这里保存模型选择，图像、语音与重排序的具体调用由对应插件实现。</p></div></details></div></section><section class="panel"><div class="panel-header"><h2>人格配置</h2></div><div class="panel-body">${personaSettings}${timeSettings}</div></section></div><p id="bindings-error" class="form-error" role="alert"></p></form>`;
 }
 export function bindBindings(app) {
+  app.bindingsDirty = false;
+  const sessionSelect = document.querySelector("#active-session");
+  const applySession = document.querySelector("#apply-session");
+  if (sessionSelect && applySession) {
+    sessionSelect.onchange = () => {
+      app.bindingsDirty = true;
+      applySession.disabled = app.state.chatBusy || !sessionSelect.value || sessionSelect.value === app.state.session;
+    };
+    applySession.onclick = async () => {
+      if (applySession.disabled) return;
+      const errorBox = document.querySelector("#session-switch-error");
+      errorBox.textContent = "";
+      applySession.disabled = true;
+      try { await app.useSession(sessionSelect.value); app.toast("当前会话已切换"); }
+      catch (error) { errorBox.textContent = error.message; sessionSelect.onchange(); }
+    };
+    document.querySelector("#new-session").onclick = () => app.newSession();
+  }
   const form = document.querySelector("#bindings-form");
+  form.oninput = () => { app.bindingsDirty = true; };
   const select = form.querySelector("#active-persona");
   select.onchange = () => {
     form.querySelector("#active-persona-routing").textContent =
@@ -147,7 +164,7 @@ export function bindBindings(app) {
   };
   form.onsubmit = async (event) => {
     event.preventDefault();
-    const button = form.querySelector("[type=submit]");
+    const button = document.querySelector("#save-bindings") || form.querySelector("[type=submit]");
     if (button.disabled) return;
     const errorBox = form.querySelector("#bindings-error");
     errorBox.textContent = "";
@@ -177,34 +194,17 @@ export function bindBindings(app) {
 
 export function renderPlugins(app) {
   const plugins = extensionPlugins(app.state.status);
-  return `<div class="page-heading"><div><h1>插件管理</h1><p>插件开关会保存，重启后保持选择；依赖恢复后会自动恢复原本启用的插件。</p></div><span class="badge">${plugins.length} 个扩展插件</span></div><div class="plugin-grid">${plugins.map((p) => `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon("puzzle")}<h3>${e(p.name || p.id)}</h3><div class="spacer"></div><span class="badge ${p.status === "active" ? "green" : p.status === "failed" ? "red" : ""}">${statusName(p.status)}</span></div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "扩展插件")}</p><footer>${extensionSettings(app.state.status, p.id)}<button class="btn small" data-plugin-id="${e(p.id)}" data-plugin-action="${(p.enabled ?? p.status === "active") ? "stop" : "start"}">${(p.enabled ?? p.status === "active") ? "停用" : "启用"}</button><button class="btn small tonal" data-plugin-id="${e(p.id)}" data-plugin-action="reload">${icon("refresh")}重载</button>${p.id.includes("/") ? '<small style="margin-left:auto">子插件</small>' : ""}</footer></article>`).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
+  const cards = visiblePluginCards(app.state.status);
+  return `<div class="page-heading"><div><h1>插件管理</h1><p>插件开关会保存，重启后保持选择；依赖恢复后会自动恢复原本启用的插件。</p></div><span class="badge">${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</span></div><div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
 }
 export function bindPlugins(app) {
-  document.querySelectorAll("[data-plugin-action]").forEach(
-    (b) =>
-      (b.onclick = async () => {
-        b.disabled = true;
-        try {
-          await api("/api/plugin", {
-            id: b.dataset.pluginId,
-            action: b.dataset.pluginAction,
-          });
-          await app.refreshStatus();
-          app.render();
-          app.toast("插件状态已更新");
-        } catch (error) {
-          app.toast(error.message, true);
-        } finally {
-          b.disabled = false;
-        }
-      }),
-  );
+  bindPluginActions(app);
 }
 
 export function renderChat(app) {
   const model = activeChat(app);
   const personaName = app.state.status.personaName || "助手";
-  return `<div class="page-heading"><div><div class="eyebrow">PLAYGROUND</div><h1>和${e(personaName)}聊聊</h1><p>测试当前人格的回复，也可以要求记下一条事实。</p></div><div class="heading-actions"><button class="btn" id="new-session" ${app.state.chatBusy ? "disabled" : ""}>${icon("plus")}新会话</button></div></div><section class="panel chat-panel"><div class="chat-header"><span class="avatar">${e(personaName.slice(0, 1))}</span><div><h3>${e(app.state.status.personaName || "鲸鲸")}</h3><small>${e(model?.name || "请先选择对话模型")} <span>·</span> ${e(app.state.status.persona)}</small></div><div class="spacer"></div><a href="#bindings" class="btn small link">更换模型 ${icon("sliders")}</a></div><div id="chat-context">${renderContextMeter(app.state.sessionContext, true)}</div><div id="messages" class="messages" aria-live="polite"></div><form id="chat-form" class="composer"><textarea id="chat-input" aria-label="聊天消息" placeholder="和${e(personaName)}说点什么…" rows="2"></textarea><div class="composer-footer"><small>Enter 发送 · Shift + Enter 换行</small><button id="send" class="btn primary small" type="submit" ${app.state.chatBusy || !app.chatConnected || !model ? "disabled" : ""}>${app.state.chatBusy ? "正在回复…" : "发送"} ${icon("send")}</button></div></form></section>`;
+  return `<div class="page-heading"><div><div class="eyebrow">PLAYGROUND</div><h1>和${e(personaName)}聊聊</h1><p>测试当前人格的回复，也可以要求记下一条事实。</p></div><div class="heading-actions"><a class="btn" href="#bindings">当前会话：${e(sessionName(app.state))} ${icon("sliders")}</a></div></div><section class="panel chat-panel"><div class="chat-header"><span class="avatar">${e(personaName.slice(0, 1))}</span><div><h3>${e(app.state.status.personaName || "鲸鲸")}</h3><small>${e(model?.name || "请先选择对话模型")} <span>·</span> ${e(app.state.status.persona)}</small></div><div class="spacer"></div><a href="#bindings" class="btn small link">更换模型 ${icon("sliders")}</a></div><div id="chat-context">${renderContextMeter(app.state.sessionContext, true)}</div><div id="messages" class="messages" aria-live="polite"></div><form id="chat-form" class="composer"><textarea id="chat-input" aria-label="聊天消息" placeholder="和${e(personaName)}说点什么…" rows="2"></textarea><div class="composer-footer"><small>Enter 发送 · Shift + Enter 换行</small><button id="send" class="btn primary small" type="submit" ${app.state.chatBusy || !app.chatConnected || !model ? "disabled" : ""}>${app.state.chatBusy ? "正在回复…" : "发送"} ${icon("send")}</button></div></form></section>`;
 }
 export function bindChat(app) {
   app.refreshSessionContext();
@@ -222,7 +222,6 @@ export function bindChat(app) {
     event.preventDefault();
     app.sendMessage();
   };
-  document.querySelector("#new-session").onclick = () => app.newSession();
 }
 
 export function renderLogs(app) {

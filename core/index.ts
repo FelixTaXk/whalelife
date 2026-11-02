@@ -83,11 +83,19 @@ export async function boot(
   );
   memoryEngine.maintenance = (id) =>
     sessions.memoryMaintenance || !!(id && sessions.blockedSessions.has(id));
+  memoryEngine.inputEditGuard = (id) => {
+    if (sessions.memoryMaintenance || sessions.blockedSessions.has(id) ||
+        sessions.locks.has(id) || sessions.channelOperations.has(id)) throw Error("会话正在处理，请结束后排除历史输入");
+    sessions.locks.add(id);
+    return () => { sessions.locks.delete(id); };
+  };
   tools.observe = async (event) => {
     runtime.events.emit("tool/called", { id: event.id, name: event.name, source: event.source,
-      origin: event.origin, session: event.session?.id, ok: event.ok, result: event.result });
+      origin: event.origin, session: event.session?.id, ok: event.ok, result: event.result,
+      ...(event.transient ? { transient: true } : {}) });
     if (
       !event.session?.id ||
+      (event.transient && event.result === null) ||
       ["recall_memory", "remember_fact", "edit_facts"].includes(event.name)
     )
       return;

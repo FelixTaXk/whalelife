@@ -1,10 +1,10 @@
-import { api, escapeHTML as e, uid, availableModels } from "./api.js";
+import { api, escapeHTML as e, availableModels } from "./api.js";
 import { icon, whale } from "./icons.js";
 import { renderModels, bindModels } from "./models.js";
 import { renderPersonas, bindPersonas } from "./personas.js";
 import { renderMemory, bindMemory, loadMemory } from "./memory.js";
 import { renderContextMeter } from "./context.js";
-import { extensionPage, extensionNavigation } from "./extensions.js";
+import { extensionPage, extensionNavigation, extensionActiveKey, extensionSignature, updateExtensionContent } from "./extensions.js";
 import {
   renderOverview,
   renderBindings,
@@ -43,6 +43,9 @@ class ConsoleApp {
   authenticated = false;
   generation = 0;
   toastTimer = null;
+  sessionSync = 0;
+  sessionReady = false;
+  sessionChanging = false;
   state = {
     page: "overview",
     config: null,
@@ -53,13 +56,15 @@ class ConsoleApp {
     logFollow: true,
     chatBusy: false,
     chatDraft: "",
-    session: localStorage.whaleSession || uid("web"),
+    session: null,
+    sessions: [],
+    memorySession: null,
   };
   constructor() {
-    localStorage.whaleSession = this.state.session;
     this.state.page = this.pageFromHash();
     window.addEventListener("hashchange", () => {
       this.state.page = this.pageFromHash();
+      this.bindingsDirty = false;
       if (this.state.page === "memory") this.state.memoryLoadedTab = null;
       document.body.classList.remove("sidebar-open");
       $("sidebar-scrim").hidden = true;
@@ -95,7 +100,7 @@ class ConsoleApp {
   }
   pageFromHash() {
     const key = location.hash.slice(1);
-    return pages[key] || key.startsWith("extension:") ? key : "overview";
+    return pages[key] || key.startsWith("extension:") || key.startsWith("plugin:") ? key : "overview";
   }
   get chatConnected() {
     return this.chatWS?.readyState === WebSocket.OPEN;
@@ -117,6 +122,7 @@ class ConsoleApp {
     const status = await api("/api/status");
     this.state.status = status;
     this.state.config = config;
+    await this.syncSession();
   }
   async login() {
     const button = $("login-form").querySelector("button");
@@ -137,20 +143,6 @@ class ConsoleApp {
     this.authenticated = true;
     $("login").hidden = true;
     $("shell").hidden = false;
-    try {
-      const rows = await api(
-        "/api/session?id=" + encodeURIComponent(this.state.session),
-      );
-      this.state.messages = rows
-        .filter((r) => r.type === "message")
-        .map((r) => ({
-          role: r.role,
-          text: r.text,
-          personaName: r.persona_name,
-        }));
-    } catch (error) {
-      this.toast("会话恢复失败：" + error.message, true);
-    }
     this.render();
     this.connect("chat");
     this.connect("logs");
@@ -159,15 +151,38 @@ class ConsoleApp {
     this.state.status = await api("/api/status");
   }
   async useSession(id) {
-    if (this.state.chatBusy) throw Error("请等待当前回复结束后切换会话");
-    const context = await api(
-      "/api/session/context?id=" + encodeURIComponent(id),
-    );
-    const rows = await api("/api/session?id=" + encodeURIComponent(id));
-    if (this.state.chatBusy) throw Error("请等待当前回复结束后切换会话");
+    if (this.state.chatBusy || this.sessionChanging) throw Error("请等待当前操作结束后切换会话");
+    this.sessionChanging = true;
+    this.updateChatControls();
+    try {
+      await this.syncSession({ id });
+      this.state.chatDraft = "";
+      this.render();
+    } finally {
+      this.sessionChanging = false;
+      this.updateChatControls();
+    }
+  }
+  async syncSession(input) {
+    if (this.state.chatBusy || (!input && this.sessionChanging)) return;
+    const sequence = ++this.sessionSync;
+    const { id } = await api("/api/session/current", input ??
+      (this.sessionReady ? undefined : { legacyId: localStorage.whaleSession }));
+    const [rows, choices] = await Promise.all([
+      api("/api/session?id=" + encodeURIComponent(id)), api("/api/session/list"),
+    ]);
+    if (sequence !== this.sessionSync || this.state.chatBusy) return;
+    this.sessionReady = true;
+    if (this.state.session !== id) this.state.sessionContext = null;
     this.state.session = id;
+    this.state.sessions = choices.items;
+    this.state.sessionName = choices.items.find(item => item.id === id)?.name || id;
+    if (this.state.memorySession && !choices.items.some(item => item.id === this.state.memorySession)) {
+      this.state.memorySession = null;
+      this.state.memoryContext = null;
+      this.state.memoryLoadedTab = null;
+    }
     localStorage.whaleSession = id;
-    this.state.sessionContext = context;
     this.state.messages = rows
       .filter((r) => r.type === "message")
       .map((r) => ({
@@ -175,8 +190,6 @@ class ConsoleApp {
         text: r.text,
         personaName: r.persona_name,
       }));
-    this.state.chatDraft = "";
-    this.render();
   }
   async refreshSessionContext() {
     const id = this.state.session;
@@ -195,13 +208,12 @@ class ConsoleApp {
   }
   async syncView() {
     const page = this.state.page;
-    if (this.authenticated && page.startsWith("extension:") && !this.syncing) {
+    if (this.authenticated && (page.startsWith("extension:") || page.startsWith("plugin:")) && !this.syncing) {
       this.syncing = true;
       try {
+        const before = extensionSignature(this.state.status);
         await this.refreshStatus();
-        $("extension-nav").innerHTML = extensionNavigation(this.state.status);
-        $("extension-nav-group").hidden = !$("extension-nav").innerHTML;
-        if (!this.state.status.pluginPages?.some((p) => "extension:" + encodeURIComponent(p.path) === page)) this.render();
+        if (this.state.page === page && before !== extensionSignature(this.state.status)) this.render(true);
       } catch (error) { this.toast(error.message, true); }
       finally { this.syncing = false; }
       return;
@@ -210,7 +222,8 @@ class ConsoleApp {
       !this.authenticated ||
       this.state.chatBusy ||
       this.syncing ||
-      !["overview", "plugins", "chat"].includes(page)
+      (page === "bindings" && this.bindingsDirty) ||
+      !["overview", "plugins", "chat", "memory", "bindings"].includes(page)
     )
       return;
     this.syncing = true;
@@ -230,7 +243,7 @@ class ConsoleApp {
     try {
       await this.load();
       if (this.state.page === "memory") await loadMemory(this);
-      this.render();
+      this.render(extensionActiveKey(this.state.status, this.state.page).startsWith("plugin:"));
       this.toast("状态已刷新");
     } catch (error) {
       this.toast(error.message, true);
@@ -238,7 +251,7 @@ class ConsoleApp {
       button.disabled = false;
     }
   }
-  render() {
+  render(preserveExtension = false) {
     if (!this.state.config || !this.state.status) return;
     const page = pages[this.state.page] || extensionPage(this);
     const navigation = extensionNavigation(this.state.status);
@@ -246,9 +259,10 @@ class ConsoleApp {
     $("extension-nav-group").hidden = !navigation;
     $("breadcrumb").textContent = page.name;
     document.title = page.name + " · WhaleLife";
+    const active = extensionActiveKey(this.state.status, this.state.page);
     document.querySelectorAll("[data-page]").forEach((a) => {
-      a.classList.toggle("active", a.dataset.page === this.state.page);
-      if (a.dataset.page === this.state.page)
+      a.classList.toggle("active", a.dataset.page === active);
+      if (a.dataset.page === active)
         a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
     });
@@ -256,7 +270,8 @@ class ConsoleApp {
     $("nav-model-count").textContent = count;
     $("nav-model-count").title = `${count} 个已启用且配置有效的模型`;
     $("nav-model-count").setAttribute("aria-label", `${count} 个可用模型`);
-    this.content.innerHTML = page.render(this);
+    const markup = page.render(this);
+    if (!preserveExtension || !updateExtensionContent(this.content, markup)) this.content.innerHTML = markup;
     page.bind?.(this);
     this.updateConnection();
   }
@@ -264,6 +279,7 @@ class ConsoleApp {
     const c = structuredClone(this.state.config);
     return {
       revision: c.revision,
+      timezone: c.timezone,
       providers: c.providers,
       models: c.models,
       bindings: c.bindings,
@@ -345,6 +361,10 @@ class ConsoleApp {
         return;
       }
       if (data.type === "context") {
+        if (data.queued) {
+          this.toast("当前会话正在处理其他请求，已排队等待");
+          return;
+        }
         this.replyPersonaName = data.personaName;
         this.state.status.persona = data.personaId;
         this.state.status.personaName = data.personaName;
@@ -433,11 +453,11 @@ class ConsoleApp {
           m.id === (persona?.model || this.state.config.bindings.chat) &&
           m.enabled,
       );
-      button.disabled = this.state.chatBusy || !this.chatConnected || !selected;
+      button.disabled = this.state.chatBusy || this.sessionChanging || !this.state.session || !this.chatConnected || !selected;
       button.innerHTML =
         (this.state.chatBusy ? "正在回复…" : "发送") + " " + icon("send");
     }
-    if ($("new-session")) $("new-session").disabled = this.state.chatBusy;
+    if ($("new-session")) $("new-session").disabled = this.state.chatBusy || this.sessionChanging;
   }
   sendMessage() {
     const text = ($("chat-input")?.value || "").trim();
@@ -457,6 +477,7 @@ class ConsoleApp {
     this.chatWS.send(
       JSON.stringify({
         session: this.state.session,
+        expectedSession: this.state.session,
         text,
         persona: this.state.status.persona,
       }),
@@ -464,14 +485,20 @@ class ConsoleApp {
     this.updateChatControls();
     this.renderMessages();
   }
-  newSession() {
-    if (this.state.chatBusy) return;
-    this.state.session = uid("web");
-    localStorage.whaleSession = this.state.session;
-    this.state.messages = [];
-    this.state.sessionContext = null;
-    this.state.chatDraft = "";
-    this.render();
+  async newSession() {
+    if (this.state.chatBusy || this.sessionChanging) return;
+    this.sessionChanging = true;
+    this.updateChatControls();
+    try {
+      await this.syncSession({ create: true });
+      this.state.chatDraft = "";
+      this.render();
+    } catch (error) {
+      this.toast(error.message, true);
+    } finally {
+      this.sessionChanging = false;
+      this.updateChatControls();
+    }
   }
   renderMessages() {
     const personaName = this.state.status.personaName || "助手";

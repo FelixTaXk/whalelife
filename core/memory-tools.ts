@@ -28,7 +28,10 @@ export function registerMemoryTools(tools: any, engine: MemoryEngine) {
         "在当前会话独立事实中追加简短事实；整份最多100字符。共享事实只读，满额时用edit_facts精简。",
       schema: { text: { type: "string", maxLength: 100 } },
       danger: "safe",
-      run: (args: any, session: any) => save(session.id, textArgs(args), true),
+      run: (args: any, session: any) => {
+        if (session.transientContext) throw Error("本轮含临时资料，不能写入独立事实");
+        return save(session.id, textArgs(args), true);
+      },
     }),
     tools.register({
       name: "edit_facts",
@@ -36,7 +39,10 @@ export function registerMemoryTools(tools: any, engine: MemoryEngine) {
         "替换当前会话整份独立事实以更正、精简或删除。最多100字符，空文字表示清空；不可改共享事实。",
       schema: { text: { type: "string", maxLength: 100 } },
       danger: "safe",
-      run: (args: any, session: any) => save(session.id, textArgs(args)),
+      run: (args: any, session: any) => {
+        if (session.transientContext) throw Error("本轮含临时资料，不能写入独立事实");
+        return save(session.id, textArgs(args));
+      },
     }),
     tools.register({
       name: "recall_memory",
@@ -54,6 +60,7 @@ export function registerMemoryTools(tools: any, engine: MemoryEngine) {
           throw Error("检索参数无效");
         const found = await engine.search(session.id, args.query, {
           manual: true,
+          ...(session.transientContext ? { persistTrace: false } : {}),
         });
         return found.items.map((x) => ({
           id: x.id,

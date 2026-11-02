@@ -112,10 +112,10 @@ test("local fact saving binds the loaded session and revision, rejects stale-ses
   await app.nodes["[data-local-facts-save]"].onclick();
   assert.deepEqual(posts, [{ id: "one", text: "测试事实", revision: "v1" }]);
   assert.equal(app.state.localFactsDrafts.one.revision, "v2");
-  app.state.session = "two";
+  app.state.memorySession = "two";
   await app.nodes["[data-local-facts-save]"].onclick();
   assert.equal(posts.length, 1);
-  assert.match(app.errors[0], /会话已切换/);
+  assert.match(app.errors[0], /档案已改变/);
   assert.match(renderMemory(app), /正在读取记忆/);
   assert.doesNotMatch(renderMemory(app), /id="memory-local-facts"/);
 });
@@ -131,7 +131,7 @@ test("late memory responses cannot replace a different session's facts", async (
     return new Response(JSON.stringify({ text: "old result", revision: "v2" }));
   });
   const request = loadMemory(app);
-  app.state.session = "two";
+  app.state.memorySession = "two";
   release();
   await request;
   assert.equal(app.state.memoryLoadedSession, "one");
@@ -242,5 +242,5 @@ test("shared spaces show explicit membership without implying local facts are sh
   assert.match(html, /data-space-toggle="a" data-space-joined="false"/);
   assert.match(html, /data-space-toggle="b" data-space-joined="true"/);
   assert.match(html, /独立事实不会自动共享/);
-  assert.match(html, /退出只改变当前会话的检索范围/);
+  assert.match(html, /退出只改变所选会话的检索范围/);
 });

@@ -1,4 +1,4 @@
-import { api, escapeHTML as e } from "./api.js";
+import { api, escapeHTML as e, viewedSession, sessionName } from "./api.js";
 import { icon } from "./icons.js";
 import { renderContextPanel, bindContextSettings } from "./context.js";
 const bytes = (n) =>
@@ -20,7 +20,7 @@ const tabs = [
 
 export async function loadMemory(app) {
   const tab = app.state.memoryTab || "facts";
-  const session = app.state.session;
+  const session = app.state.memorySession ||= app.state.session;
   const request = (app.state.memoryRequest =
     (app.state.memoryRequest || 0) + 1);
   app.state.memoryLoading = true;
@@ -51,13 +51,13 @@ export async function loadMemory(app) {
               )
             : api("/api/memory/" + tab),
       api(
-        "/api/session/context?id=" + encodeURIComponent(app.state.session),
+        "/api/session/context?id=" + encodeURIComponent(session),
       ).catch((error) => ({ error: error.message })),
     ]);
-    if (request !== app.state.memoryRequest || session !== app.state.session)
+    if (request !== app.state.memoryRequest || session !== viewedSession(app.state))
       return;
     app.state.memoryCatalog = catalog;
-    app.state.sessionContext = context;
+    app.state.memoryContext = context;
     app.state.memoryDetails = details;
     app.state.memoryLoadedTab = tab;
     app.state.memoryLoadedSession = session;
@@ -91,6 +91,7 @@ export function renderMemory(app) {
     c = s.memoryCatalog,
     tab = s.memoryTab || "facts";
   return `<div class="page-heading"><div><div class="eyebrow">MEMORY</div><h1>记忆管理</h1><p>管理会话事实、记忆检索和共享范围，查看档案与备份。</p></div><div class="heading-actions"><button class="btn" data-memory-refresh ${s.memoryLoading ? "disabled" : ""}>${icon("refresh")}刷新</button><button class="btn primary" data-memory-backup>${icon("database")}创建备份</button></div></div>
+    <div class="info-banner"><div>当前正在使用：<strong>${e(sessionName(s))}</strong><small> · ${e(s.session)}</small>。下方选择仅用于查看和管理档案。</div><a href="#bindings" class="btn small link">前往使用配置切换</a></div>
     ${
       c
         ? `<div class="stats-grid">${[
@@ -98,12 +99,12 @@ export function renderMemory(app) {
             ["会话档案", c.sessions.count, bytes(c.sessions.bytes)],
             ["摘要与概览", c.summaries.count, bytes(c.summaries.bytes)],
             [
-              "当前上下文占用",
-              s.sessionContext?.usage?.percent == null
+              "所选档案上下文占用",
+              s.memoryContext?.usage?.percent == null
                 ? "—"
-                : s.sessionContext.usage.percent.toFixed(2) + "%",
-              s.sessionContext?.model?.context_window
-                ? `模型上限 ${s.sessionContext.model.context_window.toLocaleString()} tokens`
+                : s.memoryContext.usage.percent.toFixed(2) + "%",
+              s.memoryContext?.model?.context_window
+                ? `模型上限 ${s.memoryContext.model.context_window.toLocaleString()} tokens`
                 : "模型上限尚未读取",
             ],
           ]
@@ -119,17 +120,17 @@ export function renderMemory(app) {
     ${renderContextPanel(app)}
     <div class="tabs" role="tablist" aria-label="记忆类型">${tabs.map(([id, label]) => `<button class="tab ${id === tab ? "active" : ""}" role="tab" aria-selected="${id === tab}" data-memory-tab="${id}" ${s.memoryLoading ? "disabled" : ""}>${label}</button>`).join("")}</div>
     ${s.memoryError ? `<p class="form-error" role="alert">${e(s.memoryError)}</p>` : ""}
-    <section class="panel panel-body memory-panel">${s.memoryLoadedTab !== tab || s.memoryLoadedSession !== s.session ? '<p class="empty">正在读取记忆…</p>' : renderTab(app, tab)}</section>`;
+    <section class="panel panel-body memory-panel">${s.memoryLoadedTab !== tab || s.memoryLoadedSession !== viewedSession(s) ? '<p class="empty">正在读取记忆…</p>' : renderTab(app, tab)}</section>`;
 }
 function renderTab(app, tab) {
   const s = app.state,
     data = s.memoryDetails;
   if (tab === "local-facts") {
-    const draft = Object.hasOwn(s.localFactsDrafts || {}, s.session)
-      ? s.localFactsDrafts[s.session]
+    const draft = Object.hasOwn(s.localFactsDrafts || {}, viewedSession(s))
+      ? s.localFactsDrafts[viewedSession(s)]
       : data;
     const count = Array.from(draft.text || "").length;
-    return `<h2>当前会话的独立事实</h2><p class="muted">初始为空，切换人格时保留。你和 AI 都可以编辑；整份内容最多 100 个字符，标点、空格和换行也计入。共享事实对 AI 只读。</p><textarea id="memory-local-facts" aria-label="当前会话独立事实" rows="4" spellcheck="false" aria-describedby="local-facts-count">${e(draft.text || "")}</textarea><div class="row memory-actions"><small id="local-facts-count" class="${count > 100 ? "form-error" : "muted"}" aria-live="polite">${count} / 100 字符${count > 100 ? "，超出上限，无法保存" : ""}</small><div class="spacer"></div><button class="btn" data-local-facts-reload>重新读取</button><button class="btn primary" data-local-facts-save ${count > 100 ? "disabled" : ""}>保存独立事实</button></div>${
+    return `<h2>所选档案的独立事实</h2><p class="muted">初始为空，切换人格时保留。你和 AI 都可以编辑；整份内容最多 100 个字符，标点、空格和换行也计入。共享事实对 AI 只读。</p><textarea id="memory-local-facts" aria-label="所选档案独立事实" rows="4" spellcheck="false" aria-describedby="local-facts-count">${e(draft.text || "")}</textarea><div class="row memory-actions"><small id="local-facts-count" class="${count > 100 ? "form-error" : "muted"}" aria-live="polite">${count} / 100 字符${count > 100 ? "，超出上限，无法保存" : ""}</small><div class="spacer"></div><button class="btn" data-local-facts-reload>重新读取</button><button class="btn primary" data-local-facts-save ${count > 100 ? "disabled" : ""}>保存独立事实</button></div>${
       data.history?.length
         ? `<details class="memory-local-history"><summary>恢复历史版本</summary><div class="row"><select id="local-facts-history" aria-label="选择独立事实历史版本">${data.history
             .map(
@@ -152,7 +153,7 @@ function renderTab(app, tab) {
     return `<div class="panel-header"><div><h2>共享事实</h2><p>每行一条事实，保存后用于下一轮对话。与所有人格共享；仅你可以编辑，AI 只读。</p></div><button class="btn small" data-facts-dedupe>去除重复行</button></div><textarea id="memory-facts" aria-label="共享事实内容" rows="14" spellcheck="false">${e(s.memoryFactsDraft)}</textarea><div class="row memory-actions"><small id="facts-state">编辑后点击保存；不会自动改写。</small><div class="spacer"></div><button class="btn" data-facts-reload>重新读取</button><button class="btn primary" data-facts-save>保存事实</button></div>`;
   if (tab === "sessions") {
     const list = s.memoryCatalog.sessions;
-    return `<form id="memory-search-form" class="row"><input name="search" type="search" aria-label="搜索会话" placeholder="搜索名称、会话 ID 或内容" value="${e(s.memorySearch || "")}"><button class="btn" type="submit">搜索</button></form><div class="memory-table">${list.items.map((item) => `<div class="memory-item"><div><strong>${e(item.name || item.id)} ${item.id === s.session ? '<span class="badge green">当前会话</span>' : ""}</strong><small>${item.name ? e(item.id) + " · " : ""}${time(item.updated_at)} · ${bytes(item.bytes)}</small><small title="${e(item.last_persona?.id || "")}">最后使用人格：${e(item.last_persona?.name || "未记录")}</small></div><div class="row session-actions"><button class="btn small" data-session="${e(item.id)}">查看</button><button class="btn small tonal" data-session-use="${e(item.id)}" ${s.chatBusy ? "disabled" : ""}>设为当前会话</button><button class="btn small" data-session-rename="${e(item.id)}">改名</button><button class="btn small danger" data-session-delete="${e(item.id)}">删除</button></div></div>`).join("") || '<p class="empty">暂无匹配的会话。</p>'}</div><div class="row memory-actions"><small>共 ${list.total} 个匹配会话</small><div class="spacer"></div><button class="btn small" data-memory-prev ${list.offset === 0 ? "disabled" : ""}>上一页</button><button class="btn small" data-memory-next ${list.offset + list.limit >= list.total ? "disabled" : ""}>下一页</button></div>`;
+    return `<form id="memory-search-form" class="row"><input name="search" type="search" aria-label="搜索会话" placeholder="搜索名称、会话 ID 或内容" value="${e(s.memorySearch || "")}"><button class="btn" type="submit">搜索</button></form><div class="memory-table">${list.items.map((item) => `<div class="memory-item"><div><strong>${e(item.name || item.id)} ${item.id === s.session ? '<span class="badge green">当前会话</span>' : ""}</strong><small>${item.name ? e(item.id) + " · " : ""}${time(item.updated_at)} · ${bytes(item.bytes)}</small><small title="${e(item.last_persona?.id || "")}">最后使用人格：${e(item.last_persona?.name || "未记录")}</small></div><div class="row session-actions"><button class="btn small" data-session="${e(item.id)}">查看</button><button class="btn small tonal" data-memory-session="${e(item.id)}">查看记忆</button><button class="btn small" data-session-rename="${e(item.id)}">改名</button><button class="btn small danger" data-session-delete="${e(item.id)}">删除</button></div></div>`).join("") || '<p class="empty">暂无匹配的会话。</p>'}</div><div class="row memory-actions"><small>共 ${list.total} 个匹配会话</small><div class="spacer"></div><button class="btn small" data-memory-prev ${list.offset === 0 ? "disabled" : ""}>上一页</button><button class="btn small" data-memory-next ${list.offset + list.limit >= list.total ? "disabled" : ""}>下一页</button></div>`;
   }
   if (tab === "summaries")
     return `<h2>短期摘要与长期概览</h2><p class="muted">短期摘要仅在历史预算不足时压缩上下文；长期概览随过期且超出保底范围的消息整理，认知单独保存在记忆检索中。新生成的摘要或概览各最多 200 字符，旧摘要保留至下次生成。默认同一会话跨人格共用，按人格隔离时另行保存。</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${item.id.startsWith("s_") ? "短期摘要" : "长期概览"} · ${time(item.updated_at)} · ${bytes(item.bytes)}</small></div><button class="btn small" data-summary="${e(item.id)}">查看内容</button></div>`).join("") || '<p class="empty">尚未生成摘要或概览；仅在满足压缩或长期整理条件时生成。</p>'}</div>`;
@@ -186,7 +187,7 @@ function renderKnowledge(s, data) {
     review: "待复核",
     invalid: "已失效",
   };
-  return `<h2>当前会话记忆</h2><p class="muted">检索本会话及已加入的共享空间。普通经历会随时间淡忘；归档后不再自动召回，原文仍保留。</p><form id="knowledge-search-form" class="row memory-knowledge-search"><input name="query" type="search" aria-label="搜索记忆" placeholder="输入关键词、名称或旧事" value="${e(s.knowledgeQuery || "")}"><label><input type="checkbox" name="archived" ${s.knowledgeArchived ? "checked" : ""}>包含已归档、已替代与待复核</label><button class="btn" type="submit">搜索</button></form><div class="memory-table">${
+  return `<h2>所选档案的记忆</h2><p class="muted">检索本会话及已加入的共享空间。普通经历会随时间淡忘；归档后不再自动召回，原文仍保留。</p><form id="knowledge-search-form" class="row memory-knowledge-search"><input name="query" type="search" aria-label="搜索记忆" placeholder="输入关键词、名称或旧事" value="${e(s.knowledgeQuery || "")}"><label><input type="checkbox" name="archived" ${s.knowledgeArchived ? "checked" : ""}>包含已归档、已替代与待复核</label><button class="btn" type="submit">搜索</button></form><div class="memory-table">${
     (data.items || [])
       .map((item) => {
         const archived = item.status === "archived";
@@ -215,7 +216,7 @@ function renderKnowledge(s, data) {
 }
 function renderSpaces(s, data) {
   const joined = new Set(joinedSpaces(data).map((space) => space.id));
-  return `<div class="panel-header"><div><h2>共享记忆空间</h2><p>当前会话加入后才能检索该空间。原有共享事实继续单独保留；独立事实不会自动共享。</p></div><button class="btn primary small" data-space-create>新建空间</button></div><div class="memory-table">${(data.spaces || []).map((space) => `<div class="memory-item"><div><strong>${e(space.name || space.id)}</strong><small>${e(space.id)} · ${joined.has(space.id) ? "当前会话已加入" : "尚未加入"}</small></div><button class="btn small ${joined.has(space.id) ? "" : "tonal"}" data-space-toggle="${e(space.id)}" data-space-joined="${joined.has(space.id)}">${joined.has(space.id) ? "退出空间" : "加入空间"}</button></div>`).join("") || '<p class="empty">暂无共享空间。需要跨会话回忆时再创建并加入。</p>'}</div><p class="muted">加入空间后，可在“记忆检索”中将指定记忆分享到空间。退出只改变当前会话的检索范围，不删除空间内的记录。</p>`;
+  return `<div class="panel-header"><div><h2>共享记忆空间</h2><p>所选会话加入后才能检索该空间。原有共享事实继续单独保留；独立事实不会自动共享。</p></div><button class="btn primary small" data-space-create>新建空间</button></div><div class="memory-table">${(data.spaces || []).map((space) => `<div class="memory-item"><div><strong>${e(space.name || space.id)}</strong><small>${e(space.id)} · ${joined.has(space.id) ? "所选会话已加入" : "尚未加入"}</small></div><button class="btn small ${joined.has(space.id) ? "" : "tonal"}" data-space-toggle="${e(space.id)}" data-space-joined="${joined.has(space.id)}">${joined.has(space.id) ? "退出空间" : "加入空间"}</button></div>`).join("") || '<p class="empty">暂无共享空间。需要跨会话回忆时再创建并加入。</p>'}</div><p class="muted">加入空间后，可在“记忆检索”中将指定记忆分享到空间。退出只改变所选会话的检索范围，不删除空间内的记录。</p>`;
 }
 export function bindMemory(app) {
   const root = app.content,
@@ -223,8 +224,8 @@ export function bindMemory(app) {
   bindContextSettings(app, () => loadMemory(app));
   const loadedSession = s.memoryLoadedSession;
   const assertSession = () => {
-    if (loadedSession !== s.session)
-      throw Error("当前会话已切换，请重新读取后操作");
+    if (loadedSession !== viewedSession(s))
+      throw Error("正在查看的档案已改变，请重新读取后操作");
   };
   const localFacts = root.querySelector("#memory-local-facts");
   if (localFacts) {
@@ -395,8 +396,8 @@ export function bindMemory(app) {
         await loadMemory(app);
         app.toast(
           button.dataset.spaceJoined === "true"
-            ? "当前会话已退出空间"
-            : "当前会话已加入空间",
+            ? "所选会话已退出空间"
+            : "所选会话已加入空间",
         );
       } catch (error) {
         app.toast(error.message, true);
@@ -404,13 +405,14 @@ export function bindMemory(app) {
       }
     };
   });
-  root.querySelectorAll("[data-session-use]").forEach(
+  root.querySelectorAll("[data-memory-session]").forEach(
     (b) =>
       (b.onclick = async () => {
         try {
-          await app.useSession(b.dataset.sessionUse);
+          s.memorySession = b.dataset.memorySession;
+          s.memoryContext = null;
+          s.memoryTab = "local-facts";
           await loadMemory(app);
-          app.toast("已选为当前会话，可调整上下文后继续聊天");
         } catch (error) {
           app.toast(error.message, true);
         }
@@ -430,6 +432,7 @@ export function bindMemory(app) {
               id: item.id,
               name: data.get("name"),
             });
+            await app.syncSession();
             await loadMemory(app);
             app.toast("会话名称已保存");
           },
@@ -445,10 +448,10 @@ export function bindMemory(app) {
         );
         app.dialog(
           "删除会话",
-          `<p>删除「${e(item.name || item.id)}」及对应摘要？</p><p>文件会移入本机记忆回收目录，共享事实保留。删除当前会话后会新建空会话。</p>`,
+          `<p>删除「${e(item.name || item.id)}」及对应摘要？</p><p>文件会移入本机记忆回收目录，共享事实保留。删除当前会话后会使用最近的可用会话；没有可用会话时新建。</p>`,
           async () => {
             await api("/api/memory/session/delete", { id: item.id });
-            if (s.session === item.id) app.newSession();
+            await app.syncSession();
             await loadMemory(app);
             app.toast("会话已删除");
           },
@@ -563,7 +566,7 @@ export function bindMemory(app) {
       (b.onclick = () =>
         app.dialog(
           "恢复记忆备份",
-          `<p>恢复「${e(b.dataset.restore)}」？当前记忆会先自动备份，之后可恢复该自动备份撤回本次操作。</p><p>记忆目录内的人格文件也会恢复。操作完成后从新会话开始；正在进行的对话会阻止恢复。</p>`,
+          `<p>恢复「${e(b.dataset.restore)}」？当前记忆会先自动备份，之后可恢复该自动备份撤回本次操作。</p><p>记忆目录内的人格文件也会恢复。操作完成后使用备份中保存的当前会话；正在进行的对话会阻止恢复。</p>`,
           async () => {
             const value = await api("/api/memory/restore", {
               id: b.dataset.restore,
@@ -573,7 +576,8 @@ export function bindMemory(app) {
             s.memoryCatalog = null;
             s.memoryLoadedTab = null;
             await app.load();
-            app.newSession();
+            s.memorySession = null;
+            s.memoryContext = null;
             await loadMemory(app);
             app.toast("已恢复；原数据备份为 " + value.safety_backup.id);
           },
@@ -585,7 +589,7 @@ export function bindMemory(app) {
     !s.memoryLoading &&
     !s.memoryError &&
     (s.memoryLoadedTab !== (s.memoryTab || "facts") ||
-      s.memoryLoadedSession !== s.session)
+      s.memoryLoadedSession !== viewedSession(s))
   )
     loadMemory(app);
 }

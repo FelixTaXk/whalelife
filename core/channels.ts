@@ -4,6 +4,7 @@ import type { Memory } from "./memory.ts";
 import type { Sessions } from "./session.ts";
 import type { Permission } from "./permission.ts";
 import { validateOrigin, type Origin } from "./provenance.ts";
+import type { ToolTurn } from "./tool-retention.ts";
 
 export type ChannelRoute = {
   channel: string;
@@ -15,6 +16,9 @@ export type ChannelRoute = {
   permission: Permission;
   signal?: AbortSignal;
   origin?: Origin;
+  /** Host arrival metadata, never supplied by an inbound payload. */
+  receivedAt?: string;
+  timezone?: string;
 };
 export type IncomingMessage = {
   peer: string;
@@ -30,6 +34,7 @@ export type OutgoingMessage = {
   text: string;
   deliveryId: string;
   replyTo?: string;
+  transient?: true;
 };
 export type ChannelAdapter = {
   id: string;
@@ -47,6 +52,7 @@ export type ChannelResult = {
   text?: string;
   error?: string;
   duplicate?: boolean;
+  transient?: true;
 };
 export type ReceiveOptions = { signal?: AbortSignal };
 export type SendMessage = { peer: string; messageId: string; text: string };
@@ -85,6 +91,7 @@ type Receipt = {
   delivery_id: string;
   text?: string;
   error?: string;
+  transient?: true;
 };
 type StoredReceipt = { sessionId: string; receipt: Receipt };
 type RouteState = {
@@ -115,7 +122,6 @@ export class Channels {
   config: any;
   private registrations = new Map<string, Registration>();
   private flights = new Map<string, { fingerprint?: string; promise: Promise<ChannelResult> }>();
-  private sessionQueues = new Map<string, Promise<unknown>>();
   private transportQueues = new Map<string, Promise<unknown>>();
   private bindingQueue: Promise<unknown> = Promise.resolve();
   private routeOperations = new Map<string, number>();
@@ -256,6 +262,7 @@ export class Channels {
       status: ["pending", "delivering"].includes(receipt.status) ? "uncertain" : receipt.status as ChannelResult["status"],
       ...(receipt.text === undefined ? {} : { text: receipt.text }),
       ...(receipt.error ? { error: receipt.error } : {}),
+      ...(receipt.transient ? { transient: true } : {}),
       ...(receipt.status === "pending" ? { error: "上次生成被中断，可能已执行工具；不会自动重放，请人工核对" } : {}),
       ...(receipt.status === "delivering" ? { error: "上次发送结果未确认；不会自动重发，请人工核对" } : {}),
       ...(duplicate ? { duplicate: true } : {}),
@@ -267,6 +274,9 @@ export class Channels {
     }));
   }
   private async save(id: string, route: ChannelRoute, receipt: Receipt, mode: "update" | "reserve" | "delivery" = "update"): Promise<StoredReceipt | undefined> {
+    // Keep the delivery id/status for deduplication, never the temporary reply or echoed error.
+    if (receipt.transient) receipt = { ...receipt, text: undefined,
+      ...(receipt.error ? { error: "临时回复处理失败，原文及原始错误未保存；请核对实际投递状态。" } : {}) };
     const previous = await this.memory.channelRoute(receipt.channel_key, async (state: RouteState | undefined) => {
       if (!state || state.sessionId !== id) throw Error("渠道绑定已改变，不能保存旧会话回执");
       const key = this.receiptKey(receipt.external_message_id, receipt.direction);
@@ -339,6 +349,7 @@ export class Channels {
       await reg.adapter.send({
         channel: route.channel, account: route.account, peer: route.peer, sessionId: id,
         text: receipt.text!, deliveryId: receipt.delivery_id,
+        ...(receipt.transient ? { transient: true } : {}),
         ...(receipt.direction === "in" ? { replyTo: receipt.external_message_id } : {}),
       }, { signal });
       // A confirmed transport completion is recorded even if disposal happened meanwhile.
@@ -347,8 +358,8 @@ export class Channels {
         await this.save(id, route, sent);
       } catch (error: any) {
         // The transport already confirmed success. Storage failure cannot undo it.
-        sent.error = "发送已确认，但回执保存失败：" + error.message;
-        this.sessions.services.logger.warn("渠道发送已确认，回执保存失败", { error });
+        sent.error = "发送已确认，但回执保存失败：" + (receipt.transient ? "临时回复记录异常" : error.message);
+        this.sessions.services.logger.warn("渠道发送已确认，回执保存失败", { error: receipt.transient ? sent.error : error });
       }
       if (receipt.direction === "out") {
         try {
@@ -366,13 +377,13 @@ export class Channels {
     } catch (error: any) {
       const failed: Receipt = {
         ...receipt, status: "delivery_failed",
-        error: (called ? "发送结果可能不确定；重试可能重复投递：" : "尚未调用发送：") + error.message,
+        error: (called ? "发送结果可能不确定；重试可能重复投递：" : "尚未调用发送：") + (receipt.transient ? "临时回复未保存，不能重试原文" : error.message),
       };
       try {
         await this.save(id, route, failed);
       } catch (storageError: any) {
         failed.status = "uncertain";
-        failed.error += "；投递回执保存失败：" + storageError.message;
+        failed.error += "；投递回执保存失败：" + (receipt.transient ? "临时回复记录异常" : storageError.message);
       }
       return this.result(id, failed);
     }
@@ -388,18 +399,19 @@ export class Channels {
     const message = { peer, sender: sender ?? reg.adapter.account, messageId, text };
     const fingerprint = hash([sender, text]);
     const signal = AbortSignal.any([reg.controller.signal, ...(options.signal ? [options.signal] : [])]);
+    const route = this.sessions.captureRoute(peer, this.route(reg, peer, message, signal));
     return this.single(reg, peer, messageId, direction, fingerprint, () => this.operation(reg, signal, () => this.lease(reg, peer, async () => {
       const id = await this.resolve(reg, peer);
       return this.tracked(id, () => {
-      const run = async () => {
-      const route = this.route(reg, peer, message, signal), key = this.key(reg, peer);
+      const run = async (generate?: (text: string) => Promise<string>, turn?: ToolTurn) => {
+      const key = this.key(reg, peer);
       const previous = await this.receipt(key, messageId, direction);
       if (previous) {
         if (previous.receipt.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
         return this.result(previous.sessionId, previous.receipt, true);
       }
       this.alive(reg, signal);
-      if ((direction === "in" && this.sessions.locks.has(id)) || this.sessions.blockedSessions.has(id))
+      if (this.sessions.blockedSessions.has(id))
         throw Error("会话正在处理，请稍后重试");
       let receipt: Receipt = {
         type: "channel_receipt", channel_key: key, external_message_id: messageId, direction,
@@ -413,24 +425,26 @@ export class Channels {
       let response = text;
       if (direction === "in") {
         try {
-          response = await this.generate(id, text, route);
+          response = await generate!(text);
         } catch (error: any) {
-          receipt = { ...receipt, status: "generation_failed", error: error.message };
+          receipt = { ...receipt, status: "generation_failed", error: turn?.transient ? "临时资料处理失败，原始错误未保存" : error.message,
+            ...(turn?.transient ? { transient: true } : {}) };
           await this.save(id, route, receipt);
           return this.result(id, receipt);
         }
       }
-      receipt = { ...receipt, status: "generated", text: response };
+      receipt = { ...receipt, status: "generated", text: response, ...(turn?.transient ? { transient: true } : {}) };
       await this.save(id, route, receipt);
       return this.deliver(reg, id, route, receipt, signal);
       };
-      return direction === "in" ? this.queue(this.sessionQueues, id, run) : run();
+      return direction === "in" ? this.sessions.dispatchIncoming(id, route, run) : run();
       });
     })));
   }
   private generate(id: string, text: string, route: ChannelRoute, onChunk: (text: string) => void = () => {}, onContext?: (value: any) => void, expectedPersona?: string) {
     route.signal?.throwIfAborted();
-    return this.sessions.chat(id, text, onChunk, onContext, expectedPersona, route);
+    return this.sessions.chat(id, text, onChunk, onContext, expectedPersona, route, false, { wait: true,
+      onWaiting: () => onContext?.({ queued: true }) });
   }
   /** Web keeps its explicit session and streaming protocol, sharing the trusted dispatch path. */
   web(id: string, text: string, onChunk: (text: string) => void, onContext?: (value: any) => void, expectedPersona?: string) {
@@ -507,10 +521,10 @@ export class Channels {
   }
   /** Wait for accepted operations, including transports which finish after abort. */
   async drain() {
-    while (this.operations.size || this.flights.size || this.sessionQueues.size || this.transportQueues.size) {
+    while (this.operations.size || this.flights.size || this.transportQueues.size) {
       await Promise.allSettled([
         ...this.operations, ...[...this.flights.values()].map((flight) => flight.promise),
-        ...this.sessionQueues.values(), ...this.transportQueues.values(), this.bindingQueue,
+        ...this.transportQueues.values(), this.bindingQueue,
       ]);
     }
     await this.bindingQueue;

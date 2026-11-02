@@ -21,15 +21,50 @@ peer.bind("entry", {
     const ctx = Object.create(null);
     for (const key of ["apiVersion", "logger", "signal", "config", "llm", "memory", "approval", "channels", "models", "personas", "sessions"])
       Object.defineProperty(ctx, key, { enumerable: true, get: () => remote[key] });
-    ctx.tools = Object.freeze({
-      register: (tool: any) => remote.tools.register({ ...tool, run: async (...args: any[]) => {
+    const registerTool = (tool: any, transient: boolean) => remote.tools[transient ? "registerTransient" : "register"]({ ...tool, run: async (...args: any[]) => {
         try { return await tool.run(...args); }
-        catch (error) { if (!remote.signal.aborted) setImmediate(() => fault(error)); throw error; }
-      } }),
+        catch (error) {
+          const safe = transient || args[1]?.transientContext ? Error("临时工具执行异常；原始错误未记录，请核对插件回执") : error;
+          if (!remote.signal.aborted) setImmediate(() => fault(safe));
+          throw safe;
+        }
+      } });
+    ctx.tools = Object.freeze({
+      register: (tool: any) => registerTool(tool, false),
+      registerTransient: (tool: any) => registerTool(tool, true),
       list: () => remote.tools.list(),
       call: (...args: any[]) => remote.tools.call(...args),
     });
     ctx.get = (name: string, strict?: boolean) => ["web", "tools"].includes(name) ? ctx[name] : kernel.get(name, strict);
+    ctx.optional = (name: string, listener: any) => {
+      remote.signal.throwIfAborted();
+      if (typeof listener !== "function") throw Error("可选服务需要状态回调");
+      const remove = kernel.optional(name, (binding: any) => {
+        if (stopping || remote.signal.aborted) return;
+        if (!binding) return listener(undefined);
+        if (binding.signal.aborted) return;
+        return listener(Object.freeze({ service: binding.service, signal: binding.signal,
+          effect(fn: any) {
+            binding.signal.throwIfAborted(); remote.signal.throwIfAborted();
+            const resource = fn();
+            const original = typeof resource === "function" ? resource : resource?.dispose?.bind(resource);
+            if (typeof original !== "function") throw Error("可选服务 effect 必须返回清理函数或可释放资源");
+            let dispose: any;
+            // Sending the original disposer preserves host back-references: core
+            // registrations can be revoked even if this worker is unresponsive.
+            try { dispose = binding.registerCleanup(original); }
+            catch (error) { void Promise.resolve().then(original).catch(fault); throw error; }
+            if (typeof resource === "function") return dispose;
+            resource.dispose = dispose;
+            return resource;
+          },
+        }));
+      });
+      let disposed = false;
+      const dispose = () => { if (disposed) return; disposed = true; cleanups.delete(dispose); remove(); };
+      cleanups.add(dispose);
+      return dispose;
+    };
     ctx.provide = (name: string, value: any) => { if (value && typeof value === "object") peer.publish(value); remote.provide(name, value); };
     ctx.on = (name: string, handler: any) => remote.on(name, handler);
     ctx.emit = (name: string, payload: any) => remote.emit(name, payload);

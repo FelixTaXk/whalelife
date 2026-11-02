@@ -136,6 +136,7 @@ function uiFixture() {
       chatBusy: false,
       config: {
         revision: "revision-one",
+        timezone: "Asia/Shanghai",
         activePersona: "whale",
         providers: [{ id: "test", name: "测试连接", enabled: true }],
         models: ["chat-one", "chat-two"].map((id) => ({
@@ -190,6 +191,10 @@ async function withBindingForm(
     "#active-persona-routing": { textContent: "" },
     "[type=submit]": { disabled: false },
     "#bindings-error": { textContent: "" },
+    "#active-session": { value: app.state.session },
+    "#apply-session": { disabled: true },
+    "#new-session": {},
+    "#session-switch-error": { textContent: "" },
   };
   const form: any = { querySelector: (selector: string) => nodes[selector] };
   const documentDescriptor = Object.getOwnPropertyDescriptor(
@@ -207,7 +212,7 @@ async function withBindingForm(
   }
   Object.defineProperty(globalThis, "document", {
     configurable: true,
-    value: { querySelector: () => form },
+    value: { querySelector: (selector: string) => selector === "#bindings-form" ? form : selector === "#save-bindings" ? nodes["[type=submit]"] : nodes[selector] || null },
   });
   Object.defineProperty(globalThis, "FormData", {
     ...formDataDescriptor,
@@ -217,6 +222,7 @@ async function withBindingForm(
     const c = structuredClone(app.state.config);
     return {
       revision: c.revision,
+      timezone: c.timezone,
       providers: c.providers,
       models: c.models,
       bindings: c.bindings,
@@ -248,6 +254,7 @@ test("one bindings submit saves model and persona together while keeping the cur
   await withBindingForm(app, async (form, values, nodes) => {
     values.set("activePersona", "helper");
     values.set("binding_chat", "chat-two");
+    values.set("timezone", "America/New_York");
     nodes["#active-persona"].value = "helper";
     nodes["#active-persona"].onchange();
     assert.match(
@@ -258,9 +265,43 @@ test("one bindings submit saves model and persona together while keeping the cur
     assert.equal(nodes["#bindings-error"].textContent, "");
   });
   assert.deepEqual(events, ["save"]);
+  assert.equal(saved.timezone, "Asia/Shanghai", "hidden timezone stays unchanged when saving model/persona choices");
   assert.equal(saved.activePersona, "helper");
   assert.equal(saved.bindings.chat, "chat-two");
   assert.equal(saved.personaModels.helper, "chat-one");
+});
+
+test("current session changes only after explicit apply; rejected switches keep the previous session", async () => {
+  const app = uiFixture();
+  app.state.session = "one";
+  app.state.sessions = [{ id: "one", name: "当前" }, { id: "two", name: "另一个" }];
+  const switches: string[] = [];
+  app.toast = () => {};
+  app.newSession = () => assert.fail("selecting a session must not create one");
+  app.useSession = async (id: string) => { switches.push(id); app.state.session = id; };
+  await withBindingForm(app, async (_form, _values, nodes) => {
+    const select = nodes["#active-session"], apply = nodes["#apply-session"];
+    select.value = "two";
+    select.onchange();
+    assert.equal(app.bindingsDirty, true);
+    assert.deepEqual(switches, []);
+    assert.equal(app.state.session, "one");
+    assert.equal(apply.disabled, false);
+    await apply.onclick();
+    assert.deepEqual(switches, ["two"]);
+    assert.equal(app.state.session, "two");
+    select.value = "one";
+    select.onchange();
+    app.useSession = async () => { throw Error("会话已删除"); };
+    await apply.onclick();
+    assert.equal(app.state.session, "two");
+    assert.match(nodes["#session-switch-error"].textContent, /会话已删除/);
+    assert.equal(apply.disabled, false);
+    select.value = "two";
+    select.onchange();
+    assert.equal(apply.disabled, true);
+  });
+  assert.doesNotMatch(renderBindings(app), /name="timezone"|id="timezone-options"/);
 });
 
 test("busy chat blocks persona changes even if a disabled selector is bypassed", async () => {

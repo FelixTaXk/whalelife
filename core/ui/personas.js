@@ -156,7 +156,7 @@ export function bindPersonas(app) {
       controls.forEach((el) => (el.disabled = false));
     }
   };
-  root.querySelector("[data-test-persona]")?.addEventListener("click", () => {
+  root.querySelector("[data-test-persona]")?.addEventListener("click", async () => {
     if (d.dirty) {
       app.toast("请先保存修改，再测试人格。", true);
       return;
@@ -165,7 +165,7 @@ export function bindPersonas(app) {
       app.toast("请等待当前回复结束。", true);
       return;
     }
-    app.newSession();
+    await app.newSession();
     location.hash = "chat";
   });
 }

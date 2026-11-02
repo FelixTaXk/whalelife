@@ -10,6 +10,7 @@ import { PluginState, validPluginId } from "./plugin-state.ts";
 import { PluginEvents } from "./plugin-events.ts";
 import { PluginProcess, pluginRuntimeOptions, type PluginRuntimeOptions } from "./plugin-process.ts";
 import { assertPluginCompatibility, PLUGIN_API_VERSION } from "./plugin-compatibility.ts";
+import { OptionalServices } from "./optional-services.ts";
 export class Runtime {
   bus = new Cordis();
   records = new Map<string, any>();
@@ -21,6 +22,7 @@ export class Runtime {
   private actions: Promise<unknown> = Promise.resolve();
   private closing = false;
   private processOptions: ReturnType<typeof pluginRuntimeOptions>;
+  private optionalServices: OptionalServices;
   beginClose() {
     this.closing = true;
     for (const record of this.records.values()) record.controller?.abort(Error("核心正在关闭"));
@@ -29,6 +31,14 @@ export class Runtime {
     this.root = root;
     this.logger = logger;
     this.processOptions = pluginRuntimeOptions(options);
+    this.optionalServices = new OptionalServices((record, name) => {
+      let at = record;
+      while (at && !at.local?.has(name)) at = at.parent;
+      at ??= this.records.get(this.services.get(name)?.owner);
+      if (!at || at.manifest.builtin || at.status !== "active" || at.controller?.signal.aborted) return;
+      const value = at.local.get(name);
+      return value === undefined ? undefined : { owner: at, value };
+    }, this.processOptions.callTimeoutMs, this.processOptions.stopTimeoutMs);
     this.pluginState = new PluginState(root);
     this.events = new PluginEvents(logger);
     this.bus.on("internal/error", (...args: any[]) =>
@@ -133,8 +143,13 @@ export class Runtime {
         throw Error("manifest ID 必须匹配目录");
       manifest.builtin = false;
       assertPluginCompatibility(manifest);
+      if (manifest.console?.groupChildren !== undefined && typeof manifest.console.groupChildren !== "boolean")
+        throw Error("console.groupChildren 必须是布尔值");
       if (manifest.depends !== undefined && (!Array.isArray(manifest.depends) || manifest.depends.some((name: any) => typeof name !== "string")))
         throw Error("插件依赖必须是服务名称数组");
+      if (manifest.optionalDepends !== undefined && (!Array.isArray(manifest.optionalDepends) || manifest.optionalDepends.some((name: any) =>
+        typeof name !== "string" || !name.trim() || name.length > 200 || manifest.depends?.includes(name))))
+        throw Error("optionalDepends 必须是非空服务名称数组，不能重复声明必需依赖");
       const enabled = this.pluginState.enabled(id);
       const missing = (manifest.depends ?? []).filter((name: string) => this.lookup({ parent }, name) === undefined);
       const blocked = parts.length > 1 && !["active", "loading"].includes(parent?.status)
@@ -203,6 +218,7 @@ export class Runtime {
       record.cordis = native;
       const controller = new AbortController();
       record.controller = controller;
+      controller.signal.addEventListener("abort", () => this.optionalServices.refresh(), { once: true });
       const alive = () => controller.signal.throwIfAborted();
       const log = Object.freeze(Object.fromEntries(["log", "debug", "info", "warn", "error"].map((name) => [name, (...args: any[]) => (this.logger as any)[name](...args)])));
       native.effect(() => () => controller.abort(Error("插件已停用")));
@@ -247,6 +263,7 @@ export class Runtime {
           };
           if (name === "tools") facade = {
             register: (tool: any) => { alive(); const dispose = value.register({ ...tool, owner: id }, controller.signal); return native.effect(() => dispose); },
+            registerTransient: (tool: any) => { alive(); const dispose = value.registerTransient({ ...tool, owner: id }, controller.signal); return native.effect(() => dispose); },
             list: () => { alive(); return structuredClone(value.list()); },
             call: (name: string, args: any, session: any, ...rest: any[]) => { alive(); return value.call(name, args, { ...session, signal: AbortSignal.any([controller.signal, ...(session?.signal ? [session.signal] : [])]) }, ...rest); },
           };
@@ -303,6 +320,14 @@ export class Runtime {
       };
       const ctx: any = {
         get,
+        optional: (name: string, listener: any) => {
+          alive();
+          return native.effect(() => this.optionalServices.watch(record, name, listener, (error) => {
+            if (controller.signal.aborted || this.records.get(id) !== record) return;
+            fail(error);
+            void this.stop(id, true).catch((cleanup) => this.logger.error("可选服务消费者清理失败", { id, error: cleanup }));
+          }));
+        },
         logger: manifest.builtin ? this.logger : log,
         apiVersion: PLUGIN_API_VERSION,
         signal: controller.signal,
@@ -318,7 +343,9 @@ export class Runtime {
             record.local.delete(name);
             if (!parent && this.services.get(name)?.owner === id)
               this.services.delete(name);
+            this.optionalServices.refresh();
           });
+          this.optionalServices.refresh();
         },
         effect: (fn: any) => { alive(); return native.effect(fn); },
         on: (event: string, fn: any) => {
@@ -398,6 +425,10 @@ export class Runtime {
                 const dispose = service.register({ ...tool, owner: id });
                 return native.effect(() => dispose);
               },
+              registerTransient: (tool: any) => {
+                const dispose = service.registerTransient({ ...tool, owner: id });
+                return native.effect(() => dispose);
+              },
               list: () => service.list(),
               call: (...args: any[]) => service.call(...args),
             };
@@ -420,11 +451,13 @@ export class Runtime {
         }
         alive();
         record.status = "active";
+        this.optionalServices.refresh();
         await Promise.all(record.pending);
         if (dir) await this.children(record);
         this.logger.info("插件加载", { id });
       } catch (error) {
         fail(error);
+        controller.abort(error);
       } finally {
         finish();
       }

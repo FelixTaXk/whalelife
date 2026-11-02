@@ -53,3 +53,9 @@ export const availableModels = (config) =>
   );
 export const extensionPlugins = (status) =>
   status.plugins.filter((p) => !p.builtin);
+
+export const viewedSession = (state) => state.memorySession || state.session;
+export const sessionName = (state, id = state.session) =>
+  state.sessions?.find(item => item.id === id)?.name ||
+  (id === state.session && state.sessionName) ||
+  state.memoryCatalog?.sessions?.items?.find(item => item.id === id)?.name || id || "尚未选择";

@@ -23,3 +23,13 @@ plugins/**/data/
 /backups/memory-migration/
 .whalelife-memory-restore-*/
 .whalelife-memory-rollback-*/
+
+# Installed plugins are independent repositories.
+/plugins/*
+!/plugins/AGENTS.md
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
