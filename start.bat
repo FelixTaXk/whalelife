@@ -1,3 +1,6 @@
+@rem Copyright (c) 2026 iinukami and contributors.
+@rem SPDX-License-Identifier: AGPL-3.0-only
+@rem Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
 @echo off
 title WhaleLife
 cd /d "%~dp0"

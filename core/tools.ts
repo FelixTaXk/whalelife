@@ -1,3 +1,7 @@
+/*! Copyright (c) 2026 iinukami and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
+ */
 import { decision } from "./permission.ts";
 import type { Logger } from "./logger.ts";
 import { randomUUID, createHash } from "node:crypto";

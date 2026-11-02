@@ -1,3 +1,7 @@
+/*! Copyright (c) 2026 iinukami and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
+ */
 /** API versions are independent of the application release and plugin package versions. */
 export const PLUGIN_API_VERSION = "1.0.0";
 export const SUPPORTED_PLUGIN_API_VERSIONS: readonly string[] = Object.freeze([PLUGIN_API_VERSION]);
