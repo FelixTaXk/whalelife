@@ -24,6 +24,8 @@
 
 ## 验证与修改范围
 
+- GitHub 发布统一交给专门发布会话，遵守 [开发与 GitHub 发布规范](architecture/RELEASING.md)。开发会话完成实现、测试和本地提交后交接明确范围，不自行推送、创建远端标签或 Release；用户针对具体动作的明确指令优先。发布会话不代改业务代码、不包含其他会话未交付的改动。
+
 - 原创代码采用 AGPL-3.0-only；生产源码和构建脚本保留版权、SPDX 与 LICENSE-ADDITIONAL 引用声明。新增原创源码沿用相同声明，第三方材料保留自身许可，冻结兼容样本仍禁止改写。发行包须携带 LICENSE、LICENSE-ADDITIONAL、NOTICE.md 与 THIRD_PARTY_NOTICES.md；不得将私人配置、记忆或密钥当作“对应源码”发布。分仓、进程隔离不自动构成许可豁免。
 
 - 核心契约/生命周期改动运行 `npm run test:compat` 与 `npm run check`，以及改动涉及的专项测试。测试失败不得交付或发布。
