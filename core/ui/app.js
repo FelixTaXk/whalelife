@@ -27,7 +27,7 @@ const pages = {
   overview: { name: "概览", render: renderOverview },
   models: { name: "模型服务", render: renderModels, bind: bindModels },
   bindings: { name: "使用配置", render: renderBindings, bind: bindBindings },
-  chat: { name: "聊天测试", render: renderChat, bind: bindChat },
+  chat: { name: "对话", render: renderChat, bind: bindChat },
   plugins: { name: "插件管理", render: renderPlugins, bind: bindPlugins },
   logs: { name: "运行日志", render: renderLogs, bind: bindLogs },
 };
