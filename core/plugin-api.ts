@@ -103,6 +103,8 @@ export interface ChatOptions {
 export interface ChatReply {
   text: string;
   reasoning_content?: string;
+  /** Provider completion status, when supplied. "length" means output was truncated. */
+  finish_reason?: string;
   toolCalls: { id: string; name: string; arguments: string }[];
   usage?: ModelUsage;
 }

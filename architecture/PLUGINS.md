@@ -16,6 +16,8 @@ WhaleLife 是独立于交流平台的机器人。主干的职责固定为五项�
 
 插件自行决定模型调用时机、频率、预算、是否限额、超额处理及重试策略。核心不统一扣减或限制插件额度。核心聊天和记忆整理有各自的统计；插件直接调用 `ctx.llm` 不会自动纳入会话账本，用量由返回值交给插件处理。
 
+`ctx.llm.chat()` 的返回值可选增加 `finish_reason`：服务商提供结束原因时返回，`length` 表示生成被截断；未知原因归一为 `unknown`，未提供时省略。已有 `text/toolCalls/usage/reasoning_content` 语义不变，插件自行决定如何处理截断。主干的记忆整理会拒绝提交截断结果；普通聊天和插件直接调用不自动重试或改变思考设置。
+
 ## 临时工具内容与持久回执
 
 普通 `ctx.tools.register` 的返回、事件和默认记忆行为不变。需要让外部资料仅供当轮理解的工具，使用新增的 `ctx.tools.registerTransient`；先检查 `typeof ctx.tools.registerTransient === "function"`。旧宿主缺少时仅停用相关能力，不能回退到普通register。

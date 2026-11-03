@@ -47,11 +47,11 @@ async function fixture(t: TestContext) {
   const services: any = { memory, memoryEngine: engine, tools: {}, logger, llm: {
     chat: async (request: any) => {
       requests.push(request);
-      if (request.max_tokens === 400) return {
+      if (request.max_tokens === 1024) return {
         text: JSON.stringify({ summary: "当前讨论旅行计划，用户希望简洁。" }), toolCalls: [],
         usage: { prompt_tokens: 50, completion_tokens: 20 },
       };
-      if (request.max_tokens === 1000) {
+      if (request.max_tokens === 4096) {
         const input = JSON.parse(request.messages[1].content);
         return { text: JSON.stringify({ summary: "过去讨论过旅行。", cognition: [{
           text: "用户对旅行感兴趣。", evidence: [input.episodes[0].id], uncertain: true,
@@ -104,7 +104,7 @@ test("pressure creates only a short summary, reuses it after restart, and never 
   await f.seed(12, 0, 100);
   const original = await f.memory.readSession("one");
   await f.sessions.chat("one", "继续计划", () => {});
-  assert.deepEqual(f.requests.map((x) => x.max_tokens ?? "chat"), [400, "chat"]);
+  assert.deepEqual(f.requests.map((x) => x.max_tokens ?? "chat"), [1024, "chat"]);
   assert.match(f.requests[1].messages[0].content, /当前讨论旅行计划/);
   const rows = await f.memory.readSession("one"), longKey = rows.at(-1).summary_id;
   const state = await f.engine.state("one");
@@ -119,7 +119,7 @@ test("pressure creates only a short summary, reuses it after restart, and never 
   assert.equal((await f.sessions.contextStatus("one")).usage.used_tokens, 230);
   const restarted = new Sessions(f.root, f.config, { ...f.services, memoryEngine: new MemoryEngine(f.memory) });
   await restarted.chat("one", "接着说", () => {});
-  assert.equal(f.requests.filter((x) => x.max_tokens === 400).length, 1);
+  assert.equal(f.requests.filter((x) => x.max_tokens === 1024).length, 1);
   assert.match(f.requests.at(-1).messages[0].content, /当前讨论旅行计划/);
 });
 
@@ -129,7 +129,7 @@ test("long-term extraction uses age plus count and runs independently of short-s
   f.config.memory.long_term_enabled = true;
   await f.seed(110, 30);
   await f.sessions.chat("one", "继续", () => {});
-  assert.deepEqual(f.requests.map((x) => x.max_tokens ?? "chat"), ["chat", 1000]);
+  assert.deepEqual(f.requests.map((x) => x.max_tokens ?? "chat"), ["chat", 4096]);
   const batch = JSON.parse(f.requests[1].messages[1].content).episodes;
   assert.equal(batch.length, 12, "110 old + 2 new, most recent 100 are protected");
   const state = await f.engine.state("one");
@@ -148,7 +148,7 @@ test("short compression takes this turn's single maintenance call even when long
   await f.seed(15, 30);
   await f.seed(15, 0, 100);
   await f.sessions.chat("one", "继续", () => {});
-  assert.deepEqual(f.requests.map((x) => x.max_tokens ?? "chat"), [400, "chat"]);
+  assert.deepEqual(f.requests.map((x) => x.max_tokens ?? "chat"), [1024, "chat"]);
   assert.equal((await f.engine.state("one")).records.length, 0);
   assert.equal((await f.sessions.contextStatus("one")).memory_window.long_term_messages, 15);
 });
@@ -170,7 +170,7 @@ test("overlong short summary is rejected without promoting cognition or consumin
   f.config.memory.budget_tokens = 1400;
   await f.seed(12, 0, 100);
   const normal = f.services.llm.chat;
-  f.services.llm.chat = async (request: any) => request.max_tokens === 400
+  f.services.llm.chat = async (request: any) => request.max_tokens === 1024
     ? (f.requests.push(request), { text: JSON.stringify({ summary: "字".repeat(201) }), toolCalls: [], usage: { prompt_tokens: 50, completion_tokens: 220 } })
     : normal(request);
   await f.sessions.chat("one", "继续", () => {});
@@ -220,7 +220,7 @@ test("long consolidation sees the complete legacy overview before producing a co
   const legacy = "旧资料".repeat(90) + "尾部重要约定";
   await f.memory.writeSummary(key, legacy, "one");
   await f.sessions.chat("one", "继续", () => {});
-  const extraction = f.requests.find((x) => x.max_tokens === 1000);
+  const extraction = f.requests.find((x) => x.max_tokens === 4096);
   assert.equal(JSON.parse(extraction.messages[1].content).previous, legacy);
   assert.ok(Array.from(await f.engine.readSummary("one", key)).length <= 200);
 });

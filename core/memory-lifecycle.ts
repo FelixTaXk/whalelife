@@ -10,6 +10,8 @@ import { timezone, messageTime, timestamp, collectTimes, TIME_GUIDANCE } from ".
 export const SHORT_SUMMARY_CHARS = 200;
 export const LONG_SUMMARY_CHARS = 200;
 export const COGNITION_CHARS = 80;
+export const SHORT_OUTPUT_TOKENS = 1024;
+export const LONG_OUTPUT_TOKENS = 4096;
 const trim = (text: string, size: number) => Array.from(text).slice(0, size).join("");
 export const shortSummaryKey = (summaryId: string) => "s_" + summaryId.slice(2);
 
@@ -62,16 +64,39 @@ type Options = {
   signal?: AbortSignal;
   timezone?: string;
 };
-async function request(options: Options, messages: any[], maxTokens: number) {
+function maintenanceProvider(provider: any, mode: "short" | "long") {
+  let host = "";
+  try { host = new URL(provider.base_url).hostname.toLowerCase(); } catch { /* transport validates the URL */ }
+  // OpenAI-compatible transport does not imply support for DeepSeek's thinking controls.
+  if (host !== "api.deepseek.com" && !/^deepseek[-/]/i.test(provider.model ?? "")) return provider;
+  const parameters = { ...provider.parameters, response_format: { type: "json_object" },
+    thinking: { type: mode === "short" ? "disabled" : "enabled" } };
+  if (mode === "long") parameters.reasoning_effort = "low";
+  else delete parameters.reasoning_effort;
+  return { ...provider, parameters };
+}
+
+function parseSummary(text: string) {
+  try { return JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/g, "")); }
+  // JSON.parse errors can quote private model output. Do not log that output.
+  catch { throw Error("记忆整理未返回完整有效的 JSON，未保存摘要"); }
+}
+
+async function request(options: Options, messages: any[], mode: "short" | "long") {
   const { services, id, provider, limit, signal } = options;
+  const maxTokens = mode === "short" ? SHORT_OUTPUT_TOKENS : LONG_OUTPUT_TOKENS;
   signal?.throwIfAborted();
   const budget = estimateTokens(JSON.stringify(messages)) + maxTokens;
   if ((limit && budget > limit) || !(await services.memoryEngine.reserveConsolidation(id, budget)))
     return { attempted: false, text: null };
   signal?.throwIfAborted();
-  const result = await services.llm.chat({ provider, messages, max_tokens: maxTokens, signal });
+  const result = await services.llm.chat({ provider: maintenanceProvider(provider, mode), messages, max_tokens: maxTokens, signal });
   await services.memoryEngine.usage(id, "memory", result.usage);
   signal?.throwIfAborted();
+  if (result.finish_reason === "length")
+    throw Error(`记忆整理输出达到 ${maxTokens} token 上限而被截断，未保存摘要`);
+  if (result.finish_reason && result.finish_reason !== "stop")
+    throw Error("记忆整理未正常完成，未保存摘要");
   return { attempted: true, text: result.text };
 }
 
@@ -93,10 +118,10 @@ export async function compressShort(options: Options & { rows: any[]; overflow: 
     ];
     messages[0].content += TIME_GUIDANCE;
     // Failure also consumes this turn's one-maintenance-call allowance.
-    const result = await request(options, messages, 400).catch((error) => { attempted = true; throw error; });
+    const result = await request(options, messages, "short").catch((error) => { attempted = true; throw error; });
     attempted = result.attempted;
     if (result.text === null) return attempted;
-    const parsed = JSON.parse(result.text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    const parsed = parseSummary(result.text);
     if (typeof parsed.summary !== "string" || !parsed.summary.trim() || Array.from(parsed.summary).length > 200 ||
         Object.keys(parsed).some((x) => x !== "summary")) throw Error("短期摘要必须为200字内的简短摘要");
     await services.memoryEngine.commitSummary(id, key, {
@@ -133,9 +158,9 @@ export async function consolidateLong(options: Options & { rows: any[]; policy: 
         candidates: candidates.map(({ revision: _revision, ...item }: any) => item) }) },
     ];
     messages[0].content += TIME_GUIDANCE;
-    const result = await request(options, messages, 1000);
+    const result = await request(options, messages, "long");
     if (result.text === null) return;
-    const parsed = JSON.parse(result.text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    const parsed = parseSummary(result.text);
     if (typeof parsed.summary !== "string" || Array.from(parsed.summary).length > 200 ||
         !Array.isArray(parsed.cognition) || parsed.cognition.length > 2 ||
         parsed.cognition.some((x: any) => typeof x?.text !== "string" || Array.from(x.text).length > COGNITION_CHARS))

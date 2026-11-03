@@ -35,7 +35,7 @@ const services={memory,memoryEngine:engine,logger,tools:{},llm:{async chat(reque
   assert.ok(requests.length<6,'Maximum six real model requests');
   estimated+=estimateTokens(JSON.stringify(request.messages))+(request.max_tokens||256);
   assert.ok(estimated<=16000,'Acceptance token budget');
-  const entry={kind:request.max_tokens===400?'short':request.max_tokens===1000?'long':'chat'};
+  const entry={kind:request.max_tokens===1024?'short':request.max_tokens===4096?'long':'chat'};
   requests.push(entry);
   const result=await actual.chat(request);entry.usage=result.usage;entry.text=result.text;
   console.log(JSON.stringify({completed_request:requests.length,kind:entry.kind,usage:result.usage}));

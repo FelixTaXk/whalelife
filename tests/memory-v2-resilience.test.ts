@@ -67,7 +67,7 @@ async function fixture(t: TestContext) {
     },
     llm: {
       chat: async (request: any) => {
-        if (request.max_tokens === 1000) {
+        if (request.max_tokens === 4096) {
           const input = JSON.parse(request.messages[1].content);
           extractions.push(input);
           return {

@@ -184,7 +184,7 @@ test("short/long summaries receive dated evidence and persist source ranges inde
   app.llm.chat = async (r: any) => {
     requests.push(structuredClone(r.messages));
     const data = JSON.parse(r.messages[1].content);
-    return { text: JSON.stringify(r.max_tokens === 400 ? { summary: "约定2026-10-01看牙。" } : {
+    return { text: JSON.stringify(r.max_tokens === 1024 ? { summary: "约定2026-10-01看牙。" } : {
       summary: "2026-09-30讨论过看牙约定。", cognition: [{ text: "2026-09-30提到牙科安排。", evidence: [data.episodes[0].id], time_range: { start: "forged" } }],
     }), toolCalls: [], usage: { prompt_tokens: 100, completion_tokens: 20 } };
   };

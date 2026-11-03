@@ -178,7 +178,7 @@ test("excluded inputs invalidate derived context, reject stale consolidation, an
   await engine.summaryState(f.id, key, { ...stale, retry_at: Date.now() });
   assert.equal(await engine.readSummary(f.id, key), "");
   const rows = await engine.contextRows(f.id);
-  f.model(input => ({ text: JSON.stringify({ summary: "用户喜欢蓝莓", ...(input.max_tokens === 1000
+  f.model(input => ({ text: JSON.stringify({ summary: "用户喜欢蓝莓", ...(input.max_tokens === 4096
     ? { cognition: [{ text: "用户喜欢蓝莓", evidence: ["good0"], uncertain: false }], reviews: [] } : {}) }),
     toolCalls: [], usage: { prompt_tokens: 15, completion_tokens: 5 } }));
   const options = { services: f.app, id: f.id, provider: {}, limit: 32000, timezone: "Asia/Shanghai" };

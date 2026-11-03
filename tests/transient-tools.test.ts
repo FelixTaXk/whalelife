@@ -218,7 +218,7 @@ test("short and long memory consolidation only receives durable projections", as
   // Supply enough ordinary evidence to exercise both summarizers rather than a threshold no-op.
   for (let i = 0; i < 12; i++) rows.push({ id: `ordinary${i}`, type: "message", role: "user", text: "用户喜欢蓝莓。".repeat(40), ts: "2020-01-02T00:00:00Z" });
   f.requests.length = 0;
-  f.model(request => ({ text: JSON.stringify({ summary: "用户喜欢蓝莓", ...(request.max_tokens === 1000 ? { cognition: [], reviews: [] } : {}) }), toolCalls: [] }));
+  f.model(request => ({ text: JSON.stringify({ summary: "用户喜欢蓝莓", ...(request.max_tokens === 4096 ? { cognition: [], reviews: [] } : {}) }), toolCalls: [] }));
   const options = { services: f.app, id: f.id, provider: {}, limit: 32000, timezone: "Asia/Shanghai", rows };
   await compressShort({ ...options, key: "s_test", overflow: rows.slice(0, 4), checkpoint: {} });
   await consolidateLong({ ...options, key: "p_test", policy: contextPolicy({ short_term_min_messages: 1, short_term_days: 1 }), revision: "test" });

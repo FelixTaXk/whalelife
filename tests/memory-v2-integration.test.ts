@@ -159,9 +159,9 @@ test("incremental consolidation catches up after restart without gaps, duplicate
   let reservedEstimate = 0;
   f.services.llm.chat = async (request: any) => {
     if (request.messages[0].content.includes("只返回JSON")) {
-      assert.equal(request.max_tokens, 1000);
+      assert.equal(request.max_tokens, 4096);
       reservedEstimate +=
-        estimateTokens(JSON.stringify(request.messages)) + 1000;
+        estimateTokens(JSON.stringify(request.messages)) + 4096;
       const input = JSON.parse(request.messages[1].content);
       batches.push(input.episodes);
       return {

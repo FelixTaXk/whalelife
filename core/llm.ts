@@ -80,6 +80,7 @@ export class LLM {
           let buffer = "",
             text = "",
             reasoning: string | undefined,
+            finishReason: string | undefined,
             usage: any;
           const calls: any[] = [];
           const decoder = new TextDecoder();
@@ -100,7 +101,13 @@ export class LLM {
             }
             if (obj.error) throw Error(modelErrorMessage(undefined, obj, opts.provider.api_key));
             usage = obj.usage ?? usage;
-            const delta = obj.choices?.[0]?.delta;
+            const choice = obj.choices?.[0];
+            if (typeof choice?.finish_reason === "string") {
+              // Only log known protocol labels; an arbitrary value may contain private text.
+              finishReason = ["stop", "length", "content_filter", "tool_calls", "insufficient_system_resource", "aborted"]
+                .includes(choice.finish_reason) ? choice.finish_reason : "unknown";
+            }
+            const delta = choice?.delta;
             if (typeof delta?.reasoning_content === "string")
               reasoning = (reasoning ?? "") + delta.reasoning_content;
             if (delta?.content) {
@@ -133,8 +140,10 @@ export class LLM {
             model: opts.provider.model,
             ms: Date.now() - start,
             usage,
+            ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
           });
           return { text, toolCalls: calls.filter(Boolean), usage,
+            ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
             ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) };
         },
         opts.signal,

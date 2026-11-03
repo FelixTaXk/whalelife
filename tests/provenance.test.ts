@@ -23,8 +23,8 @@ async function fixture(t: TestContext) {
   const app = await boot(root), requests: any[] = [];
   app.llm.chat = async (r: any) => {
     requests.push({ messages: structuredClone(r.messages), max_tokens: r.max_tokens });
-    if (r.max_tokens === 400) return { text: JSON.stringify({ summary: "保留不同来源的交流约定。" }), toolCalls: [] };
-    if (r.max_tokens === 1000) {
+    if (r.max_tokens === 1024) return { text: JSON.stringify({ summary: "保留不同来源的交流约定。" }), toolCalls: [] };
+    if (r.max_tokens === 4096) {
       const input = JSON.parse(r.messages[1].content);
       return { text: JSON.stringify({ summary: "交流中讨论了星光。", cognition: [{ text: "用户讨论过星光。", evidence: [input.episodes[0].id],
         origins: [{ plugin: "forged-by-model" }] }] }), toolCalls: [] };
