@@ -268,6 +268,7 @@ export class Runtime {
           if (name === "tools") facade = {
             register: (tool: any) => { alive(); const dispose = value.register({ ...tool, owner: id }, controller.signal); return native.effect(() => dispose); },
             registerTransient: (tool: any) => { alive(); const dispose = value.registerTransient({ ...tool, owner: id }, controller.signal); return native.effect(() => dispose); },
+            registerMultimodal: (tool: any) => { alive(); const dispose = value.registerMultimodal({ ...tool, owner: id }, controller.signal); return native.effect(() => dispose); },
             list: () => { alive(); return structuredClone(value.list()); },
             call: (name: string, args: any, session: any, ...rest: any[]) => { alive(); return value.call(name, args, { ...session, signal: AbortSignal.any([controller.signal, ...(session?.signal ? [session.signal] : [])]) }, ...rest); },
           };
@@ -431,6 +432,10 @@ export class Runtime {
               },
               registerTransient: (tool: any) => {
                 const dispose = service.registerTransient({ ...tool, owner: id });
+                return native.effect(() => dispose);
+              },
+              registerMultimodal: (tool: any) => {
+                const dispose = service.registerMultimodal({ ...tool, owner: id });
                 return native.effect(() => dispose);
               },
               list: () => service.list(),

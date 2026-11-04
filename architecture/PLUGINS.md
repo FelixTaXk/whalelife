@@ -199,6 +199,40 @@ const reply = await ctx.sessions.runTransient({
 });
 ```
 
+### 临时多模态工具（2026-11-04兼容新增）
+
+`ctx.tools.registerMultimodal` 把插件准备的文字和图片交给**当前会话正在使用的同一个模型**。它始终遵守上文临时工具持久化规则，返回 `{ content: ToolContentPart[], receipt: JSON | null }`。旧 `register` 和 `registerTransient` 的结果仍按原样处理，不靠猜测 JSON 字段把旧工具升级成图片工具。公开类型从 `whalelife` 导入。
+
+```ts
+import type { Context, MultimodalToolOutput } from 'whalelife';
+export function installViewer(ctx: Context,
+  read: (ref: string, sessionId: string, signal?: AbortSignal) => Promise<Uint8Array>) {
+  // API 1.x 的旧宿主可能没有此新增方法：禁用直接看图即可，保留其他能力。
+  if (typeof ctx.tools.registerMultimodal !== 'function') return;
+  return ctx.tools.registerMultimodal({
+    name: 'view_media', description: '查看指定的临时图片', danger: 'safe',
+    schema: { ref: { type: 'string' } },
+    async run(args: { ref: string }, session): Promise<MultimodalToolOutput> {
+      if (!session.id) return { content: [{ type: 'text', text: '缺少会话，未读取图片' }], receipt: null };
+      // 插件须检查 ref 归属这个真实 session.id、是否过期，并响应 signal。
+      const bytes = await read(args.ref, session.id, session.signal);
+      return { content: [
+        { type: 'text', text: '资料说明；视频帧可在这里注明时间戳' },
+        { type: 'image', mimeType: 'image/png', data: bytes, detail: 'auto' },
+      ], receipt: { action: 'view', count: 1 } };
+    },
+  });
+}
+```
+
+- **内容与上限：** `text` 块仅有 `text:string`；`image` 块包含 `mimeType`、`data:Uint8Array`（也接受 Buffer）和可选 `detail:auto|low|high`。仅 PNG/JPEG/WebP；主干检查非空、格式签名与 MIME 一致，复制允许字段，不解码图片，因此有效解码、尺寸控制及动态图片抽帧由插件保证。每次输出1–64块、文字合计64KiB、最多16张、单张4MiB、图片合计16MiB；一轮对话跨工具/续轮累计也不能超过16张/16MiB。超限或格式错误明确失败，原文和字节不写日志。实际供应商可能有更小限制。
+- **协议转换：** OpenAI兼容Chat Completions的tool角色只承载文字（见[官方类型定义](https://github.com/openai/openai-python/blob/main/src/openai/types/chat/chat_completion_tool_message_param.py)）。主干先补齐同批全部tool回复及`tool_call_id`，再按工具顺序追加user角色的临时附件，使用标准`image_url`数据URI，配套文字标明工具调用ID、宿主归属来源和“不是用户发言或授权”。图片以真正的图片块进入模型，不放进普通JSON字符串。此user角色仅是协议载体，不生成用户历史；模型可能按供应商语义开启新的推理段。本轮已有`reasoning_content`仍原样回传，不伪造、关闭或改写思考。未兼容该消息顺序的服务会报错，不自动重放工具。
+- **模型与用量：** 不另选视觉模型、不按模型名称猜测看图能力。所选对话模型须同时支持图片输入及工具调用；供应商明确拒绝时显示安全错误，不静默换模型或退化为文字识图。文字预算排除base64；图片精确token预估未知，不能保证预先避免供应商上下文溢出。完成请求后沿用服务商真实usage统计全部输入/输出，缺失时保持未知，不能报成0或编造图片token。
+- **隔离与生命周期：** 从该批工具开始启用临时隔离；自动记忆、事件、日志只保留经验证的receipt及用量，后续参数和最终回复不自动留正文。receipt同样是插件筛选的可信动作投影，不能放图片/OCR/第三方原文。直接`tools.call`返回`{ok:true,result:content}`，调用者自行处理字节，主干不另起模型请求。停止工具/所属插件会撤销入口，取消持有其附件的在途请求，下一轮普通聊天仍可用；已确认动作回执保留，不重放动作。各会话的附件和取消信号独立，不放进全局缓存。插件主动写日志/记忆/私有存储不在自动隔离保证内。
+- **能力边界：** 媒体引用、会话绑定、过期、下载、裁剪、解码、视频抽帧与时间戳都归插件；主干不访问URL或文件路径、不依赖具体插件、FFmpeg或图像库。首版没有原生视频或音频块；视频由插件提供带时间说明的图片序列。插件在旧宿主必须通过方法存在性检测显示“无法直接交给主模型看图”，禁止退回普通工具塞base64或擅自选另一模型。
+
+专项测试 `tests/multimodal-tools.test.ts` 使用独立插件进程、合成图片和本地HTTP/SSE模型，覆盖协议、当前模型/人格、用量、隔离、跨会话、取消/停用、拒绝和上限；不代表对所有真实供应商的视频/视觉效果验收。
+
 ### 统一会话队列
 
 Web、渠道receive以及新的enqueue/enqueueTransient共用按会话串行的调度。不同会话可并行，不把供应商或模型配置当作全局互斥资源。渠道的一次入站从生成到投递完成占用一个执行位；直接channels.send只走独立传输队列，当前工具可以等待真实发送回执，不会排到自身会话结束之后。

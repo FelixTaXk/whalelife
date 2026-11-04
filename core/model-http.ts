@@ -30,6 +30,10 @@ export function modelErrorMessage(status: number | undefined, body: any, secret 
   else if (/invalid.{0,20}(api.?key|authentication)|unauthorized/i.test(message)) reason = "服务拒绝了认证信息";
   else if (/insufficient.{0,20}(quota|balance)|quota.{0,20}exceed/i.test(message)) reason = "服务额度或余额不足";
   else if (/rate.{0,10}limit/i.test(message)) reason = "服务请求频率受限";
+  else if (/(image|vision|multimodal|图片|图像)/i.test(message) && /not support|unsupported|not allowed|only.{0,15}text|不支持/i.test(message))
+    reason = "当前模型或接口不支持图片输入，请选择支持图片与工具调用的模型；未自动切换模型";
+  else if (/(invalid|invalid_value|corrupt|format).{0,40}image|image.{0,40}(invalid|corrupt|format)/i.test(message))
+    reason = "模型服务拒绝了图片格式，请检查插件提供的图片";
   else if (/(tool|function).{0,40}(invalid|schema)|invalid.{0,30}(tool|function)/i.test(message)) reason = "服务拒绝了工具定义或调用格式";
   const known = new Set(["invalid_request_error", "authentication_error", "permission_error", "rate_limit_error", "server_error", "insufficient_quota", "context_length_exceeded", "invalid_api_key"]);
   const type = [error?.type, error?.code].find(x => typeof x === "string" && known.has(x));

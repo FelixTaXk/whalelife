@@ -71,16 +71,28 @@ export interface TransientToolOutput<Content = unknown, Receipt = unknown> {
   /** Trusted, JSON-only durable projection of the action/result; null saves no experience. */
   receipt: Receipt | null;
 }
+/** Temporary tool media; no URLs, paths, native video or audio. Buffer is also accepted. */
+export type ToolContentPart = { type: "text"; text: string } | {
+  type: "image"; mimeType: "image/png" | "image/jpeg" | "image/webp";
+  data: Uint8Array; detail?: "auto" | "low" | "high";
+};
+export type MultimodalToolOutput<Receipt = unknown> = TransientToolOutput<ToolContentPart[], Receipt>;
 export interface ToolsAPI {
   register<Arguments = Record<string, unknown>, Result = unknown>(tool: ToolDefinition<Arguments, Result>): () => void;
   /** Opt in explicitly; old hosts must not fall back to ordinary register. */
   registerTransient<Arguments = Record<string, unknown>, Content = unknown, Receipt = unknown>(tool: ToolDefinition<Arguments, TransientToolOutput<Content, Receipt>>): () => void;
+  /** Native visual input for the current model; always transient. Feature-detect on older hosts. */
+  registerMultimodal<Arguments = Record<string, unknown>, Receipt = unknown>(tool: ToolDefinition<Arguments, MultimodalToolOutput<Receipt>>): () => void;
   list(): ModelTool[];
   call<Result = unknown>(name: string, args: unknown, session: ToolSession, callId?: string): Promise<ToolResult<Result>>;
 }
+export type ChatContentPart = { type: "text"; text: string } | {
+  type: "image_url"; image_url: { url: string; detail?: "auto" | "low" | "high" };
+};
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  /** Content arrays are supported for user messages on compatible vision models. */
+  content: string | null | ChatContentPart[];
   /** Provider protocol data, not user-visible content or a memory record. */
   reasoning_content?: string;
   tool_call_id?: string;

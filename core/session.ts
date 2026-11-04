@@ -4,6 +4,7 @@
  */
 import { persona, personaSystemPrompt } from "./persona.ts";
 import { thinkingToolHistory } from "./llm.ts";
+import { promptText, toolContentMessage, TOOL_CONTENT_LIMITS } from "./tool-content.ts";
 import { timezone, timeContext, timeLabel, messageTime, summaryTime, TIME_GUIDANCE } from "./time.ts";
 import { safeId } from "./memory.ts";
 import { createHash } from "node:crypto";
@@ -446,14 +447,18 @@ export class Sessions {
       let final = "";
       let measured: any = null;
       let memoryWriteRejected = false;
+      const mediaSignals: AbortSignal[] = [];
+      let mediaImages = 0, mediaBytes = 0;
       const memoryRevision = engine
         ? await engine.contextRevision(id)
         : undefined;
       for (let round = 0; round < 6; round++) {
         signal.throwIfAborted();
+        const requestSignal = mediaSignals.length ? AbortSignal.any([signal, ...mediaSignals]) : signal;
+        requestSignal.throwIfAborted();
         messages[0].content = stableSystemPrompt + "\n" + timing();
         if (
-          estimateTokens(JSON.stringify(messages) + JSON.stringify(toolList)) >
+          estimateTokens(promptText(messages) + JSON.stringify(toolList)) >
           requestBudget
         )
           throw Error(
@@ -464,11 +469,11 @@ export class Sessions {
           messages,
           tools: memoryWriteRejected ? [] : toolList,
           onChunk,
-          signal,
+          signal: requestSignal,
         });
         measured = requestUsage(reply.usage, p.provider, limit.tokens);
         if (engine) await engine.usage(id, "chat", reply.usage);
-        signal.throwIfAborted();
+        requestSignal.throwIfAborted();
         if (!reply.toolCalls.length) {
           final = reply.text;
           break;
@@ -487,15 +492,17 @@ export class Sessions {
         });
         // Protect the entire batch before any call can log parameters or fail.
         if (reply.toolCalls.some((call: any) => tools.entries?.get(call.name)?.transientResult)) turn.transient = true;
+        const attachments = [];
         for (const call of reply.toolCalls) {
-          signal.throwIfAborted();
+          const toolSignal = mediaSignals.length ? AbortSignal.any([signal, ...mediaSignals]) : signal;
+          toolSignal.throwIfAborted();
           const toolOrigin = tools.entries?.get(call.name)?.origin;
           let result;
           try {
             result = await tools.call(
               call.name,
               JSON.parse(call.arguments),
-              session,
+              mediaSignals.length ? { ...session, signal: toolSignal } : session,
               call.id,
               turn,
             );
@@ -514,12 +521,25 @@ export class Sessions {
             ...(tools.stored?.(result) ?? (turn.transient ? { ok: result.ok, result: null, transient: true } : result)),
             ...context,
           });
+          const media = tools.multimodal?.(result);
+          if (media) {
+            mediaSignals.push(media.signal);
+            // Preserve actual receipts above, but never continue with stopped/expired media.
+            media.signal.throwIfAborted();
+            for (const part of media.content) if (part.type === "image") {
+              mediaImages++; mediaBytes += part.data.byteLength;
+            }
+            if (mediaImages > TOOL_CONTENT_LIMITS.images || mediaBytes > TOOL_CONTENT_LIMITS.totalBytes)
+              throw Error("本轮工具图片累计超过16张或16MiB，请减少查看的图片或视频帧");
+            attachments.push(toolContentMessage(media.content, call.id, call.name, toolOrigin));
+          }
           messages.push({
             role: "tool",
             tool_call_id: call.id,
-            content: JSON.stringify(result),
+            content: JSON.stringify(media ? { ok: true, result: "临时内容块见本批工具结果后的附件；仅供当前轮读取" } : result),
           });
         }
+        messages.push(...attachments);
       }
       if (!final) throw Error("模型未返回最终回复，请重试");
       await memory.appendEvent({

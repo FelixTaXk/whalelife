@@ -7,12 +7,15 @@ import type { Logger } from "./logger.ts";
 import { randomUUID, createHash } from "node:crypto";
 import { pluginOrigin } from "./provenance.ts";
 import { receiptSnapshot, type ToolTurn } from "./tool-retention.ts";
+import { toolContentSnapshot, ToolContentError } from "./tool-content.ts";
+import type { ToolContentPart } from "./plugin-api.ts";
 export class Tools {
   entries = new Map<string, any>();
   logger: Logger;
   overrides: any;
   observe?: (event: any) => Promise<void>;
   private persisted = new WeakMap<object, { ok: boolean; result: unknown; transient: true }>();
+  private media = new WeakMap<object, { content: ToolContentPart[]; signal: AbortSignal }>();
   constructor(logger: Logger, overrides: any = {}) {
     this.logger = logger;
     this.overrides = { remember_fact: "full", ...overrides };
@@ -23,12 +26,15 @@ export class Tools {
   registerTransient(tool: any, signal?: AbortSignal) {
     return this.add(tool, signal, true);
   }
-  private add(tool: any, signal: AbortSignal | undefined, transientResult: boolean) {
+  registerMultimodal(tool: any, signal?: AbortSignal) {
+    return this.add(tool, signal, true, true);
+  }
+  private add(tool: any, signal: AbortSignal | undefined, transientResult: boolean, multimodalResult = false) {
     signal?.throwIfAborted();
     if (this.entries.has(tool.name)) throw Error("工具重名：" + tool.name);
     const origin = pluginOrigin(tool.owner || "core", tool.origin);
     const controller = new AbortController();
-    const entry = { ...tool, origin, transientResult, signal: signal
+    const entry = { ...tool, origin, transientResult, multimodalResult, signal: signal
       ? AbortSignal.any([signal, controller.signal]) : controller.signal };
     this.entries.set(tool.name, entry);
     const dispose = () => {
@@ -57,6 +63,7 @@ export class Tools {
     }));
   }
   stored(result: any) { return this.persisted.get(result) ?? result; }
+  multimodal(result: object) { return this.media.get(result); }
   async call(name: string, args: any, session: any, callId = randomUUID(), turn: ToolTurn = { transient: false }) {
     const tool = this.entries.get(name);
     if (tool?.transientResult || session.transientContext) turn.transient = true;
@@ -108,11 +115,17 @@ export class Tools {
         if (!result || typeof result !== "object" || !Object.hasOwn(result, "content") || !Object.hasOwn(result, "receipt"))
           throw Error("临时工具必须返回content和receipt");
         const receipt = receiptSnapshot(result.receipt);
+        if (tool.multimodalResult) {
+          const content = toolContentSnapshot(result.content);
+          const returned = await report(true, content, receipt);
+          this.media.set(returned, { content, signal });
+          return returned;
+        }
         return report(true, result.content, receipt);
       }
       return report(true, result);
     } catch (error: any) {
-      const message = turn.transient ? "临时工具调用失败，未保存原始错误；外部动作结果请通过插件回执核对，不要自动重试。" : error?.message ?? String(error);
+      const message = error instanceof ToolContentError ? error.message : turn.transient ? "临时工具调用失败，未保存原始错误；外部动作结果请通过插件回执核对，不要自动重试。" : error?.message ?? String(error);
       this.logger.error("工具调用失败", { name: storedName, error: turn.transient ? message : error });
       return report(false, message);
     }

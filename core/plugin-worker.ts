@@ -25,17 +25,18 @@ peer.bind("entry", {
     const ctx = Object.create(null);
     for (const key of ["apiVersion", "logger", "signal", "config", "llm", "memory", "approval", "channels", "models", "personas", "sessions"])
       Object.defineProperty(ctx, key, { enumerable: true, get: () => remote[key] });
-    const registerTool = (tool: any, transient: boolean) => remote.tools[transient ? "registerTransient" : "register"]({ ...tool, run: async (...args: any[]) => {
+    const registerTool = (tool: any, mode: "register" | "registerTransient" | "registerMultimodal") => remote.tools[mode]({ ...tool, run: async (...args: any[]) => {
         try { return await tool.run(...args); }
         catch (error) {
-          const safe = transient || args[1]?.transientContext ? Error("临时工具执行异常；原始错误未记录，请核对插件回执") : error;
+          const safe = mode !== "register" || args[1]?.transientContext ? Error("临时工具执行异常；原始错误未记录，请核对插件回执") : error;
           if (!remote.signal.aborted) setImmediate(() => fault(safe));
           throw safe;
         }
       } });
     ctx.tools = Object.freeze({
-      register: (tool: any) => registerTool(tool, false),
-      registerTransient: (tool: any) => registerTool(tool, true),
+      register: (tool: any) => registerTool(tool, "register"),
+      registerTransient: (tool: any) => registerTool(tool, "registerTransient"),
+      registerMultimodal: (tool: any) => registerTool(tool, "registerMultimodal"),
       list: () => remote.tools.list(),
       call: (...args: any[]) => remote.tools.call(...args),
     });
