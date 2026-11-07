@@ -3,7 +3,7 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 /** Host-only state for one model turn; never a global/session-wide switch. */
-export type ToolTurn = { transient: boolean };
+export type ToolTurn = { transient: boolean; execution?: import("./execution-archive.ts").ExecutionRun; round?: number };
 export const TRANSIENT_REPLY = "本轮使用了临时资料，完整回复不保存；实际动作及结果以已保存的工具回执为准。";
 
 /** Receipts must be bounded JSON snapshots, never live objects or media bytes. */

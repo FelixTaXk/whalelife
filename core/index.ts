@@ -20,6 +20,7 @@ import { PersonaFiles } from "./persona-config.ts";
 import { MemoryEngine } from "./memory-engine.ts";
 import { registerMemoryTools } from "./memory-tools.ts";
 import { pluginServices } from "./plugin-services.ts";
+import { ExecutionArchive, registerExecutionTools } from "./execution-archive.ts";
 export async function boot(
   root = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
 ) {
@@ -62,6 +63,8 @@ export async function boot(
       resolveModel(config, id),
     ),
     tools = new Tools(logger, config.permissions?.tools);
+  const executionArchive = new ExecutionArchive(resolve(root, "logs/executions"), logger);
+  tools.executionArchive = executionArchive;
   const runtime = new Runtime(root, logger, config.plugin_runtime);
   const services: any = {
     logger,
@@ -69,6 +72,7 @@ export async function boot(
     memoryEngine,
     llm,
     tools,
+    executionArchive,
     approval,
     modelConfig,
     personaFiles: new PersonaFiles(root, config, logger),
@@ -85,6 +89,7 @@ export async function boot(
   await runtime.builtin("facts", {}, (ctx) =>
     registerMemoryTools(ctx.tools, memoryEngine),
   );
+  await runtime.builtin("execution_archive", {}, (ctx) => registerExecutionTools(ctx.tools, executionArchive));
   memoryEngine.maintenance = (id) =>
     sessions.memoryMaintenance || !!(id && sessions.blockedSessions.has(id));
   memoryEngine.inputEditGuard = (id) => {

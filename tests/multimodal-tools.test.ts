@@ -183,37 +183,37 @@ test("media limits also apply across tool rounds", async t => {
   await f.clean();
 });
 
-test("six tool rounds reserve a seventh HTTP request for a reply, with images, reasoning and exact usage preserved", async t => {
+test("tools remain available beyond six rounds; images, reasoning and exact usage survive until the model finishes", async t => {
   const f = await fixture(t), reply = "已经完成查看，尚未进行其他操作。";
   f.model((body, res) => {
-    if (f.requests.length <= 6) return sse(res, "", [call("view_media", {}, "view_" + f.requests.length)]);
-    assert.equal(body.tools, undefined);
-    assert.equal(body.tool_choice, "none");
-    assert.match(body.messages[0].content, /收尾答复/);
-    assert.equal(body.messages.filter((m: any) => m.role === "tool").length, 6);
-    assert.equal(body.messages.filter((m: any) => Array.isArray(m.content)).length, 6);
+    assert.ok(body.tools.some((t: any) => t.function.name === "view_media"));
+    assert.notEqual(body.tool_choice, "none");
+    assert.match(body.messages[0].content, /不设固定调用轮数/);
+    if (f.requests.length <= 8) return sse(res, "", [call("view_media", {}, "view_" + f.requests.length)]);
+    assert.equal(body.messages.filter((m: any) => m.role === "tool").length, 8);
+    assert.equal(body.messages.filter((m: any) => Array.isArray(m.content)).length, 8);
     assert.ok(body.messages.filter((m: any) => m.role === "assistant").every((m: any) => m.reasoning_content === "SYNTHETIC_PROTOCOL_REASONING"));
     sse(res, reply);
   });
   assert.equal(await f.api().run({ text: "查看资料" }), reply);
-  assert.equal(f.requests.length, 7);
-  assert.equal(f.events.filter((e: any) => e.name === "view_media").length, 6);
-  assert.equal((await f.app.memoryEngine.state(f.id)).usage.chat.requests, 7);
-  assert.equal((await f.app.memoryEngine.state(f.id)).usage.chat.input_tokens, 6300);
+  assert.equal(f.requests.length, 9);
+  assert.equal(f.events.filter((e: any) => e.name === "view_media").length, 8);
+  assert.equal((await f.app.memoryEngine.state(f.id)).usage.chat.requests, 9);
+  assert.equal((await f.app.memoryEngine.state(f.id)).usage.chat.input_tokens, 8100);
   assert.equal((await f.app.memory.readSession(f.id)).at(-1).text, reply);
   await f.clean();
 });
 
-test("a model ignoring reply-only mode cannot execute a seventh tool or replay the task", async t => {
+test("removing the round limit does not remove cumulative media limits or replay actions", async t => {
   const f = await fixture(t);
   f.model((_body, res) => sse(res, "", [call("view_media", {}, "view_" + f.requests.length)]));
-  await assert.rejects(f.api().run({ text: "查看资料" }), /额外工具未执行/);
-  assert.equal(f.requests.length, 7);
-  assert.equal(f.events.filter((e: any) => e.name === "view_media").length, 6);
+  await assert.rejects(f.api().run({ text: "查看资料" }), /累计超过/);
+  assert.equal(f.requests.length, 17);
+  assert.equal(f.events.filter((e: any) => e.name === "view_media").length, 17);
   await f.clean();
 });
 
-test("reply-only request still honors cancellation without replaying completed tools", async t => {
+test("continued requests still honor cancellation without replaying completed tools", async t => {
   const f = await fixture(t), abort = new AbortController();
   f.model((_body, res) => { if (f.requests.length <= 6) sse(res, "", [call("view_media", {}, "view_" + f.requests.length)]); });
   const pending = assert.rejects(f.api().run({ text: "查看资料", signal: abort.signal }), /cancel-closing/);

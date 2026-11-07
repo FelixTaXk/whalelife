@@ -9,11 +9,13 @@ import { pluginOrigin } from "./provenance.ts";
 import { receiptSnapshot, type ToolTurn } from "./tool-retention.ts";
 import { toolContentSnapshot, ToolContentError } from "./tool-content.ts";
 import type { ToolContentPart } from "./plugin-api.ts";
+import type { ExecutionArchive } from "./execution-archive.ts";
 export class Tools {
   entries = new Map<string, any>();
   logger: Logger;
   overrides: any;
   observe?: (event: any) => Promise<void>;
+  executionArchive?: ExecutionArchive;
   private persisted = new WeakMap<object, { ok: boolean; result: unknown; transient: true }>();
   private media = new WeakMap<object, { content: ToolContentPart[]; signal: AbortSignal }>();
   constructor(logger: Logger, overrides: any = {}) {
@@ -68,10 +70,31 @@ export class Tools {
     const tool = this.entries.get(name);
     if (tool?.transientResult || session.transientContext) turn.transient = true;
     const storedName = turn.transient && !tool ? "[未注册工具]" : name;
+    const started = Date.now();
+    const execution = turn.execution ?? (session.id ? await this.executionArchive?.start(session.id, {
+      kind: "direct_tool", tool: storedName, origin: tool?.origin,
+    }) : undefined);
+    const call = createHash("sha256").update(String(callId)).digest("hex").slice(0, 24);
+    let verdict: string | undefined;
+    let argumentsDigest: string | undefined;
+    try { argumentsDigest = createHash("sha256").update(JSON.stringify(args) ?? "undefined").digest("hex"); } catch { /* Diagnostic hashing must not change tool semantics. */ }
+    await execution?.write("tool_start", { round: turn.round, call, tool: storedName, origin: tool?.origin,
+      ...(turn.transient ? { arguments: "临时参数不保存" } : { arguments: args }),
+      arguments_digest: argumentsDigest,
+    });
     const report = async (ok: boolean, result: any, receipt: unknown = null) => {
       const returned = { ok, result };
       const stored = turn.transient ? { ok, result: receipt, transient: true as const } : returned;
       if (turn.transient) this.persisted.set(returned, stored as any);
+      await execution?.write("tool_result", { round: turn.round, call, tool: storedName, ok,
+        elapsed_ms: Date.now() - started, transient: turn.transient, permission: verdict,
+        // Archive reads never copy another archive into this one. Transient contracts still exclude raw content.
+        result: tool?.archiveRead ? "按需读取，内容不重复存档" : stored.result,
+        ...(!ok ? { error: result, failure: session.signal?.aborted || tool?.signal.aborted ? "cancelled"
+          : !tool ? "tool_unavailable" : verdict && verdict !== "allow" ? "permission_" + verdict : "tool_failed" } : {}),
+        note: "ok仅表示工具执行状态，业务是否成功以实际回执为准",
+      });
+      if (!turn.execution) await execution?.end(ok ? "completed" : session.signal?.aborted || tool?.signal.aborted ? "cancelled" : "failed");
       try {
         await this.observe?.({
           id: turn.transient ? "temporary_" + createHash("sha256").update(callId).digest("hex") : callId,
@@ -92,7 +115,7 @@ export class Tools {
       if (!tool) throw Error("工具不存在");
       const signal = AbortSignal.any([tool.signal, ...(session.signal ? [session.signal] : [])]);
       signal.throwIfAborted();
-      const verdict = decision(
+      verdict = decision(
         session.permission,
         tool.danger ?? "ask",
         this.overrides[name],
