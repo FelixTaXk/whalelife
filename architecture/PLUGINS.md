@@ -280,6 +280,18 @@ const text = await ctx.sessions.enqueueTransient({
 });
 ```
 
+### 渠道轮内追加（2026-11-08兼容新增）
+
+渠道handle可选提供 `openTurn(message, {signal?}) -> Promise<ChannelTurn>`。插件先检测 `typeof channel.openTurn === "function"`；旧宿主降级为原 `receive` 逐条独立处理，或在必须依赖追加时提示能力缺失。普通 `receive`、`run/runTransient`、`enqueue/enqueueTransient` 保持原行为，不自动合并消息。
+
+`ChannelTurn` 提供 `id`、`sessionId`、可选 `duplicate`，以及 `append(IncomingMessageData)`、`closeInput()`、`result()`。首条输入持久化后即可取得handle，任务由主干继续执行；`result()`返回最终 `ChannelResult` 的Promise，可重复等待，不关闭输入。`closeInput()`显式封口，已接纳的消息仍处理。提前确认平台收件不应调用它。字段、返回状态和示例详见[CHANNELS.md的轮内追加契约](CHANNELS.md#轮内追加输入2026-11-08兼容新增)。
+
+追加仅允许同一注册账号、peer和sender，每条保留独立消息ID和实际接收时间；`append`返回 `{status: 'accepted'|'duplicate'|'closed'|'full'|'cancelled', messageId}`，格式、归属冲突和保存失败拒绝Promise。每轮最多128条/128000字符、每条最多16000字符，包含首条和已消费消息。等待执行、模型生成和工具执行期间均可追加；最终候选采用前原子封口，`closed`后的新消息必须另开一轮。
+
+补充到达后保留已开始动作及真实结果，当前批次尚未开始的工具明确记为未执行，配对完成后再让模型结合补充判断；不会撤销或自动重放动作。无工具的旧候选不会保存或投递，本轮只产生一次最终回复。补充真人消息即使遇到临时工具也正常存为历史；思考字段及多模态附件保持本轮协议。首条与所有成员共用一个deliveryId，任一成员的重复入站或显式retry都引用同一最终结果，retry只重投已存正文。
+
+输入先保存在各自的渠道回执，取消、插件停用或崩溃时保留核对依据，不自动重放模型、工具或投递。此入口不提供跨重启任务恢复，也不保证跨平台恰好一次投递。输入归并、外部收件确认和后续业务策略由插件决定，不增加平台分支或修改人格配置。
+
 ### 与Web共用当前会话
 
 完整会话请求默认携带主干当前日期、时间、星期、时区及允许读取的历史时间信息；Web、`sessions.run`及渠道生成共用这条链路，工具调用后再次请求模型会刷新时间。插件无需自行注入系统时间，直接`llm.chat`保持原始调用语义。时间规则见[MEMORY.md](MEMORY.md)。

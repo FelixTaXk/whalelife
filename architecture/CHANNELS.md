@@ -62,6 +62,7 @@ export async function apply(ctx: Context) {
 | 方法 | 行为 |
 | --- | --- |
 | `receive({peer,sender,messageId,text}, {signal?}?)` | 生成并发送最终回复，返回带 sessionId/status/deliveryId 的结果 |
+| `openTurn?({peer,sender,messageId,text}, {signal?}?)` | 可选的轮内追加入口；返回 `Promise<ChannelTurn>`，本轮继续排队/生成，最终只投递一次回复 |
 | `bind(peer, existingSessionId)` | 首次使用前绑定已有且未删除的会话；相同绑定可重复调用 |
 | `rebind(peer,{expectedSessionId,sessionId?})` | 显式切换会话；expectedSessionId为预期旧绑定，null表示首次；省略sessionId则显式新建；在途时拒绝迁移 |
 | `send({peer,messageId,text}, {signal?}?)` | 直接发送文本并记录回执，不生成模型回复 |
@@ -70,6 +71,58 @@ export async function apply(ctx: Context) {
 | `dispose()` | 注销账号、取消生命周期信号；可重复调用 |
 
 `ctx.channels.send({channel,account,peer,messageId,text}, options?)` 是同插件已注册账号的直接发送便捷入口。它不能使用其他插件的账号。`send` 不是授权机制：插件须在自己的工具权限与业务授权范围内调用。
+
+## 轮内追加输入（2026-11-08兼容新增）
+
+插件显式使用 `channel.openTurn(message, {signal?})`，才会得到允许后续真人消息加入的轮次。`receive` 仍是一条入站对应一次独立生成；`sessions.run/runTransient/enqueue/enqueueTransient` 的忙碌、排队、保存和返回语义不变。主干不会按文本、平台或时间间隔猜测哪些消息应合并，插件负责决定何时使用同一个轮次。
+
+`openTurn` 在首条输入回执持久化、任务交给主干后返回，不等待最终生成和投递。返回的 `ChannelTurn` 包含：
+
+| 字段或方法 | 行为 |
+| --- | --- |
+| `id` / `sessionId` | 本轮标识及已固定的目标会话 |
+| `duplicate?` | 已存在的相同首条消息返回 `true`；不重新生成或发送 |
+| `append({peer,sender,messageId,text})` | 返回 `Promise<{status,messageId}>`；接纳后参与本轮下一次模型判断 |
+| `closeInput()` | 返回 `Promise<void>`；显式拒绝新的消息，已接纳的补充仍处理；不取消任务、不立即投递 |
+| `result()` | 返回 `Promise<ChannelResult>`，等待本轮唯一最终生成/投递结果；重复调用等待同一个结果，不封口、不触发重跑 |
+
+轮次固定在创建它的插件注册、渠道、账号、`peer` 和 `sender`。补充必须来自相同 `peer` 和 `sender`，不能借共享会话跨发送者追加。每条消息保留自己的稳定 `messageId`、主干实际接收时间和时区，不继承首条消息的ID或到达时间；来源、人格和权限沿用本轮固定路由。相同ID和正文重复提交不重复保存，相同ID而正文或发送者不同会拒绝；已被另一轮接纳的消息不能再次加入。
+
+`append` 的回执仅表示输入接纳状态，不代表最终回复已生成或已送达：
+
+| status | 含义 |
+| --- | --- |
+| `accepted` | 已持久保存输入回执并加入本轮，随后由会话消费 |
+| `duplicate` | 同一条已见消息，不再次加入；原保存还在进行时先等待该保存完成 |
+| `closed` | 本轮已封口；这条新消息未被接纳，需要由插件作为新一轮提交 |
+| `full` | 本轮容量已满；这条消息未被接纳，插件须明确保留并处理，不能当作成功丢弃 |
+| `cancelled` | 本轮取消信号已生效；这条消息未被接纳 |
+
+格式错误、归属冲突或持久化失败会拒绝Promise，不伪装成 `accepted`。每轮最多128条消息、合计128000字符，每条1–16000字符，均包含首条和已消费的消息；重复消息不占新额度。正在保存的补充先同步占位，最终回复不能越过它完成封口。以上容量独立于会话等待队列及模型上下文预算，新增正文仍受实际模型窗口限制。
+
+轮次在等待会话执行位、模型生成或工具执行期间均可追加。模型返回时若有补充，未发送的最终候选会被丢弃，读取补充后继续判断；不会把候选保存成助手历史或另发一条回复。工具批次中已经开始的动作照常等待结果，不撤回、不重放；尚未开始的剩余调用补齐明确“未执行，需结合用户补充重新判断”的工具结果。整批工具结果与附件配对完成后才加入补充，保留思考字段和多模态协议顺序。
+
+没有待消费或正在保存的补充时，主干在采用最终候选前原子封口。之后的消息返回 `closed`，即使本轮还在保存最终回复或投递，也必须进入新一轮。调用 `result()` 不需要先 `closeInput()`；平台提前确认收件、插件回复“已收到”等行为，也不应顺带关闭追加入口。插件自行发送正式文字或媒体结果时，应在正式提交前调用 `closeInput()`；提前接话与正式结果的分类由插件明确决定，主干不按文字猜测。
+
+使用前检测 `typeof channel.openTurn === "function"`。旧宿主可降级为每条消息独立调用原 `receive`，并明确不支持轮内追加；若业务必须依赖追加，则提示宿主缺少能力。不能把旧 `receive` 的独立回复当成同轮结果，也不要为降级修改旧插件行为。示意调用：
+
+```ts
+if (typeof channel.openTurn !== "function") {
+  await channel.receive(first, { signal }); // 旧宿主按原方式逐条处理
+  await channel.receive(followup, { signal });
+} else {
+  const turn = await channel.openTurn(first, { signal });
+  // 插件保留turn；随后同peer、sender的外部事件调用：
+  const added = await turn.append(followup);
+  if (added.status !== "accepted" && added.status !== "duplicate")
+    throw Error(`补充未接纳：${added.status}`); // closed需新建轮；其余状态明确处理
+  const result = await turn.result(); // 不先closeInput，不再次发送result.text
+}
+```
+
+首条及补充成员共享一个 `deliveryId`。按任一成员消息ID查询重复入站或显式 `retry(peer,messageId)`，都关联同一最终结果；retry只投递已保存的最终正文，不重新运行模型或工具，不为每条补充制造独立回复。仍须遵守下文“不保证跨平台恰好一次投递”的边界。
+
+首条和补充的原始文本先保留在各自的pending回执中，作为取消、等待中断或进程崩溃时的核对依据；会话消费后，每条只追加一次真实user历史，即使本轮调用过临时工具也不丢失真人消息。技术回执不参与历史或召回，执行档案只记录补充ID和时间，不复制补充正文。取消/停用保留已产生的动作和回执；重启后的pending或不确定结果不会自动恢复追加句柄、重放输入、工具或投递。插件需核对实际结果，再按用户授权发起新的工作。
 
 ## 路由、人格与信任
 
@@ -122,3 +175,5 @@ Web 的 `/ws/chat` 通过同一可信生成入口进入 Sessions，保留显式 
 ## 本地验证
 
 使用 Node 24 执行 `tests/channels.test.ts`、`tests/channel-rebinding.test.ts`、`tests/plugin-cancellation.test.ts` 以及 `web/core/persona-context` 相关测试，全部使用临时记忆目录、假模型与内存 transport，不访问实际平台或真实模型。专项覆盖路由隔离、跨渠道共享、重启与备份恢复、墓碑、在途去重、投递重试、取消/卸载、归属隔离、persona 历史、工具内发送及记忆/用量路径。
+
+轮内追加的专项入口为 `tests/turn-input.test.ts`、`tests/channel-turn.test.ts` 和 `tests/channel-turn-backup.test.ts`：使用纯内存单元测试或项目内自动清理的临时目录、模拟模型/工具/传输及隔离插件进程，检查保存与封口竞态、追加去重和容量、工具批次、单次最终投递、回执与取消、备份恢复后不重放及组关联损坏拒绝等边界。该验证不代表真实平台插件已经接入或完成供应商联调。

@@ -14,6 +14,7 @@ import { shortSummaryKey, shortContext, compressShort, consolidateLong } from ".
 import { attribution, historyTail, originNote, originOf, renderHistory } from "./provenance.ts";
 import { SessionQueue, type QueuePolicy } from "./session-queue.ts";
 import { TRANSIENT_REPLY, type ToolTurn } from "./tool-retention.ts";
+import type { TurnInput } from "./turn-input.ts";
 import {
   contextPolicy,
   validateContext,
@@ -228,10 +229,10 @@ export class Sessions {
   }
   /** Internal channel entry: reserve one slot through generation and delivery.
    * Direct sends use the transport queue, so a tool can await its own receipt. */
-  dispatchIncoming<T>(id: string, route: ChannelRoute, run: (generate: (text: string) => Promise<string>, turn: ToolTurn) => Promise<T>): Promise<T> {
+  dispatchIncoming<T>(id: string, route: ChannelRoute, run: (generate: (text: string) => Promise<string>, turn: ToolTurn) => Promise<T>, input?: TurnInput): Promise<T> {
     const captured = this.captureRoute(id, route);
     const turn: ToolTurn = { transient: false };
-    return this.dispatch(id, captured.signal, () => run(text => this.runChat(id, text, () => {}, captured.signal!, undefined, captured.persona, captured, false, turn), turn), { wait: true });
+    return this.dispatch(id, captured.signal, () => run(text => this.runChat(id, text, () => {}, captured.signal!, undefined, captured.persona, captured, false, turn, input), turn), { wait: true });
   }
   private async runChat(
     id: string,
@@ -243,6 +244,7 @@ export class Sessions {
     route?: ChannelRoute,
     transient = false,
     turn: ToolTurn = { transient: false },
+    input?: TurnInput,
   ) {
     signal.throwIfAborted();
     if (this.memoryMaintenance) throw Error("记忆恢复中，请稍后重试");
@@ -462,10 +464,27 @@ export class Sessions {
       const memoryRevision = engine
         ? await engine.contextRevision(id)
         : undefined;
+      const consumeInput = async () => {
+        if (!input) return;
+        for (const message of await input.take()) {
+          signal.throwIfAborted();
+          // A real person's additions remain history even after transient tools.
+          const row = { type: "message", ...source, ...context,
+            origin: { ...source.origin, action: "接收消息" }, session: id, role: "user",
+            text: message.text, external_message_id: message.messageId,
+            ts: message.receivedAt, timezone: message.timezone };
+          await memory.appendEvent(row);
+          messages.push({ role: "user", content: "【本轮用户补充；消息时间 " + messageTime(row, zone) +
+            "；来源 " + JSON.stringify(source.origin) + "】\n" + message.text });
+          await execution?.write("input_appended", { message_id: message.messageId,
+            received_at: message.receivedAt, timezone: message.timezone });
+        }
+      };
       // Completion is the model's decision; cancellation, permissions and context capacity still apply.
       for (let round = 0; ; round++) {
         turn.round = round + 1;
         const activeTools = memoryWriteRejected ? [] : toolList;
+        while (input?.hasPending()) await consumeInput();
         signal.throwIfAborted();
         const requestSignal = mediaSignals.length ? AbortSignal.any([signal, ...mediaSignals]) : signal;
         requestSignal.throwIfAborted();
@@ -481,6 +500,16 @@ export class Sessions {
         }
         const modelStarted = Date.now();
         await execution?.write("model_start", { round: turn.round });
+        // Archival writes can yield to incoming messages; include those before this request.
+        if (input?.hasPending()) {
+          do { await consumeInput(); } while (input.hasPending());
+          requestSignal.throwIfAborted();
+          messages[0].content = stableSystemPrompt + "\n" + timing();
+          if (estimateTokens(promptText(messages) + JSON.stringify(activeTools)) > requestBudget) {
+            await execution?.write("blocked", { reason: "context_capacity_exceeded", round: turn.round, request_budget: requestBudget });
+            throw Error("本轮内容或工具结果超出模型上下文预算，请减少输入或切换更大上下文模型");
+          }
+        }
         const reply = await llm.chat({
           provider: p.provider,
           messages,
@@ -494,6 +523,8 @@ export class Sessions {
         if (engine) await engine.usage(id, "chat", reply.usage);
         requestSignal.throwIfAborted();
         if (!reply.toolCalls.length) {
+          // Seal synchronously after the last await. Unsent candidates never enter history.
+          if (input && !input.tryFinish()) continue;
           final = reply.text;
           break;
         }
@@ -512,12 +543,19 @@ export class Sessions {
         // Protect the entire batch before any call can log parameters or fail.
         if (reply.toolCalls.some((call: any) => tools.entries?.get(call.name)?.transientResult)) turn.transient = true;
         const attachments = [];
+        let superseded = false;
         for (const call of reply.toolCalls) {
           const toolSignal = mediaSignals.length ? AbortSignal.any([signal, ...mediaSignals]) : signal;
           toolSignal.throwIfAborted();
           const toolOrigin = tools.entries?.get(call.name)?.origin;
           let result;
-          try {
+          superseded ||= input?.hasPending() ?? false;
+          if (superseded) {
+            result = { ok: false, executed: false, reason: "user_input_appended",
+              result: "未执行：用户补充了消息，请结合补充内容重新判断是否仍需调用此工具。" };
+            await execution?.write("tool_skipped", { round: turn.round, tool_call_id: call.id,
+              tool: turn.transient && !toolOrigin ? "[未注册工具]" : call.name, reason: "user_input_appended" });
+          } else try {
             result = await tools.call(
               call.name,
               JSON.parse(call.arguments),
@@ -531,7 +569,7 @@ export class Sessions {
               tool: turn.transient && !toolOrigin ? "[未注册工具]" : call.name, error: result.result,
               ...(turn.transient ? {} : { arguments: call.arguments }) });
           }
-          if (!result.ok && ["remember_fact", "edit_facts"].includes(call.name))
+          if (!superseded && !result.ok && ["remember_fact", "edit_facts"].includes(call.name))
             memoryWriteRejected = true;
           await memory.appendEvent({
             type: "tool",
@@ -590,6 +628,7 @@ export class Sessions {
         error: turn.transient ? "含临时资料的执行失败，原始错误不落盘；请核对前序步骤和插件回执" : error });
       throw error;
     } finally {
+      input?.closeInput();
       await execution?.end(signal.aborted ? "cancelled" : executionStatus);
     }
   }

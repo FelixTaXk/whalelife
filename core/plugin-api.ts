@@ -238,10 +238,23 @@ export type ChannelResult = {
   text?: string; error?: string; duplicate?: boolean; transient?: true;
 };
 export type ReceiveOptions = { signal?: AbortSignal };
+export type TurnAppendResult = { status: "accepted" | "duplicate" | "closed" | "full" | "cancelled"; messageId: string };
+/** Explicit opt-in input group. Methods remain usable across the plugin RPC boundary. */
+export interface ChannelTurn {
+  id: string;
+  sessionId: string;
+  duplicate?: boolean;
+  append(message: IncomingMessageData): Promise<TurnAppendResult>;
+  /** Stop accepting new input, without discarding already accepted additions. */
+  closeInput(): Promise<void>;
+  /** Wait for the one final delivery. Does not rerun generation or tools. */
+  result(): Promise<ChannelResult>;
+}
 export type SendMessage = { peer: string; messageId: string; text: string };
 export type RebindOptions = { expectedSessionId: string | null; sessionId?: string };
 export interface ChannelHandle {
   receive(message: IncomingMessageData, options?: ReceiveOptions): Promise<ChannelResult>;
+  openTurn?(message: IncomingMessageData, options?: ReceiveOptions): Promise<ChannelTurn>;
   bind(peer: string, sessionId: string): Promise<string>;
   rebind(peer: string, options: RebindOptions): Promise<string>;
   retry(peer: string, messageId: string, options?: ReceiveOptions & { direction?: "in" | "out" }): Promise<ChannelResult>;

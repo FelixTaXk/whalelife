@@ -9,6 +9,8 @@ import type { Sessions } from "./session.ts";
 import type { Permission } from "./permission.ts";
 import { validateOrigin, type Origin } from "./provenance.ts";
 import type { ToolTurn } from "./tool-retention.ts";
+import { TurnInput } from "./turn-input.ts";
+import type { ChannelTurn, TurnAppendResult } from "./plugin-api.ts";
 
 export type ChannelRoute = {
   channel: string;
@@ -68,6 +70,7 @@ export type RebindOptions = {
 };
 export interface ChannelHandle {
   receive(message: IncomingMessage, options?: ReceiveOptions): Promise<ChannelResult>;
+  openTurn?(message: IncomingMessage, options?: ReceiveOptions): Promise<ChannelTurn>;
   bind(peer: string, sessionId: string): Promise<string>;
   rebind(peer: string, options: RebindOptions): Promise<string>;
   retry(peer: string, messageId: string, options?: ReceiveOptions & { direction?: "in" | "out" }): Promise<ChannelResult>;
@@ -98,6 +101,13 @@ type Receipt = {
   transient?: true;
   /** Preserve chat text without allowing adapter/storage errors to echo temporary tool material. */
   private_errors?: true;
+  /** Append-only group members resolve delivery through their initial message. */
+  group_message_id?: string;
+  group_id?: string;
+  /** Durable evidence of accepted input, including a cancelled/queued execution. Never auto-replayed. */
+  input_text?: string;
+  input_sender?: string;
+  received_at?: string;
 };
 type StoredReceipt = { sessionId: string; receipt: Receipt };
 type RouteState = {
@@ -128,6 +138,7 @@ export class Channels {
   config: any;
   private registrations = new Map<string, Registration>();
   private flights = new Map<string, { fingerprint?: string; promise: Promise<ChannelResult> }>();
+  private inputTurns = new Map<Registration, Map<string, { fingerprint: string; promise: Promise<ChannelTurn> }>>();
   private transportQueues = new Map<string, Promise<unknown>>();
   private bindingQueue: Promise<unknown> = Promise.resolve();
   private routeOperations = new Map<string, number>();
@@ -275,9 +286,16 @@ export class Channels {
     };
   }
   private receipt(key: string, messageId: string, direction: "in" | "out"): Promise<StoredReceipt | undefined> {
-    return this.memory.channelRoute(key, async (route: RouteState) => ({
-      result: route?.receipts[this.receiptKey(messageId, direction)],
-    }));
+    return this.memory.channelRoute(key, async (route: RouteState) => {
+      const own = route?.receipts[this.receiptKey(messageId, direction)];
+      if (!own?.receipt.group_message_id) return { result: own };
+      const leader = route.receipts[this.receiptKey(own.receipt.group_message_id, "in")];
+      if (!leader || leader.receipt.group_message_id || leader.sessionId !== own.sessionId || leader.receipt.group_id !== own.receipt.group_id)
+        throw Error("追加输入的组回执不完整，请核对档案；不会自动重放");
+      return { result: { sessionId: own.sessionId, receipt: { ...leader.receipt,
+        external_message_id: messageId, fingerprint: own.receipt.fingerprint,
+        group_message_id: own.receipt.group_message_id } } };
+    });
   }
   private async save(id: string, route: ChannelRoute, receipt: Receipt, mode: "update" | "reserve" | "delivery" = "update"): Promise<StoredReceipt | undefined> {
     // Keep the delivery id/status for deduplication, never the temporary reply or echoed error.
@@ -398,9 +416,7 @@ export class Channels {
   }
   private incoming(reg: Registration, input: IncomingMessage | SendMessage, options: ReceiveOptions, direction: "in" | "out") {
     this.alive(reg, options.signal);
-    if (!input || typeof input !== "object") throw Error("消息无效");
-    for (const key of ["persona", "permission", "session", "sessionId", "owner", "channel", "account", "origin", "platform", "action"])
-      if (Object.hasOwn(input, key)) throw Error("消息不能指定路由策略：" + key);
+    this.validateInput(input);
     const peer = identifier(input.peer, "peer"), messageId = identifier(input.messageId, "messageId"), text = messageText(input.text);
     const sender = direction === "in" ? identifier((input as IncomingMessage).sender, "sender") : undefined;
     const message = { peer, sender: sender ?? reg.adapter.account, messageId, text };
@@ -449,6 +465,132 @@ export class Channels {
       });
     })));
   }
+  private validateInput(input: unknown) {
+    if (!input || typeof input !== "object") throw Error("消息无效");
+    for (const key of ["persona", "permission", "session", "sessionId", "owner", "channel", "account", "origin", "platform", "action"])
+      if (Object.hasOwn(input, key)) throw Error("消息不能指定路由策略：" + key);
+  }
+  /** Explicit input group. Admission is separate from waiting for its final delivery. */
+  private openTurn(reg: Registration, input: IncomingMessage, options: ReceiveOptions): Promise<ChannelTurn> {
+    this.alive(reg, options.signal);
+    this.validateInput(input);
+    const message = { peer: identifier(input.peer, "peer"), sender: identifier(input.sender, "sender"),
+      messageId: identifier(input.messageId, "messageId"), text: messageText(input.text) };
+    const key = this.key(reg, message.peer), groupKey = hash([key, message.messageId, "in"]);
+    const fingerprint = hash([message.sender, message.text]);
+    const groups = this.inputTurns.get(reg) ?? new Map<string, { fingerprint: string; promise: Promise<ChannelTurn> }>();
+    this.inputTurns.set(reg, groups);
+    const existing = groups.get(groupKey);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
+      return existing.promise.then(handle => ({ ...handle, duplicate: true,
+        result: () => handle.result().then(result => ({ ...result, duplicate: true })) }));
+    }
+    const failure = new AbortController();
+    // Strongly retain RPC-origin signals until the whole turn ends, not merely until openTurn returns.
+    const sourceSignals = [reg.controller.signal, failure.signal, ...(options.signal ? [options.signal] : [])];
+    const signal = AbortSignal.any(sourceSignals);
+    const route = this.sessions.captureRoute(message.peer, this.route(reg, message.peer, message, signal));
+    const checkMember = (value: IncomingMessage) => {
+      this.validateInput(value);
+      const next = { peer: identifier(value.peer, "peer"), sender: identifier(value.sender, "sender"),
+        messageId: identifier(value.messageId, "messageId"), text: messageText(value.text) };
+      if (next.peer !== message.peer || next.sender !== message.sender) throw Error("追加输入必须来自同一渠道对象和发送者");
+      return next;
+    };
+    const closed = (saved: StoredReceipt): ChannelTurn => ({
+      id: saved.receipt.group_id ?? "turn_" + hash([key, message.messageId]), sessionId: saved.sessionId, duplicate: true,
+      append: async value => {
+        const next = checkMember(value);
+        if (signal.aborted) return { status: "cancelled", messageId: next.messageId };
+        this.alive(reg);
+        const previous = await this.receipt(key, next.messageId, "in");
+        if (previous && previous.receipt.fingerprint !== hash([next.sender, next.text])) throw Error("相同消息 ID 的内容不一致");
+        const same = next.messageId === message.messageId || (saved.receipt.group_id && saved.receipt.group_id === previous?.receipt.group_id);
+        return { status: previous && same ? "duplicate" : "closed", messageId: next.messageId };
+      },
+      closeInput: async () => {}, result: async () => this.result(saved.sessionId, saved.receipt, true),
+    });
+    let launched = false;
+    const opening = this.operation(reg, signal, () => this.lease(reg, message.peer, async () => {
+      const id = await this.resolve(reg, message.peer);
+      return this.tracked(id, async () => {
+        const previous = await this.receipt(key, message.messageId, "in");
+        if (previous) {
+          if (previous.receipt.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
+          return closed(previous);
+        }
+        this.alive(reg, signal);
+        const groupId = "turn_" + hash([key, message.messageId]);
+        let receipt: Receipt = { type: "channel_receipt", channel_key: key, external_message_id: message.messageId,
+          direction: "in", fingerprint, delivery_id: "delivery_" + hash([key, message.messageId, "in"]), status: "pending",
+          group_id: groupId, input_text: message.text, input_sender: message.sender, received_at: route.receivedAt };
+        const reserved = await this.save(id, route, receipt, "reserve");
+        if (reserved) {
+          if (reserved.receipt.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
+          return closed(reserved);
+        }
+        const inbox = new TurnInput({ messageId: message.messageId, text: message.text,
+          receivedAt: route.receivedAt!, timezone: route.timezone! }, route.signal!);
+        const completion = this.watch(this.operation(reg, signal, () => this.lease(reg, message.peer,
+          () => this.tracked(id, () => this.sessions.dispatchIncoming(id, route, async (generate, turn) => {
+            const response = await generate(message.text);
+            receipt = { ...receipt, status: "generated", text: response, ...(turn.transient ? { private_errors: true } : {}) };
+            await this.save(id, route, receipt);
+            return this.deliver(reg, id, route, receipt, signal);
+          }, inbox).catch(async () => {
+            // Accepted raw inputs remain in pending receipts even if execution never got its slot.
+            receipt = { ...receipt, status: "generation_failed", error: signal.aborted
+              ? "本轮已取消或渠道停用；已执行动作不会重放，已接纳来信保留在回执中"
+              : "本轮生成或记录失败；已接纳来信保留，请核对执行档案，不要自动重跑" };
+            try { await this.save(id, route, receipt); }
+            catch { receipt = { ...receipt, status: "uncertain", error: "执行或回执记录中断；已发生动作待核对，不会自动重放" }; }
+            return this.result(id, receipt);
+          }))))).finally(() => {
+            inbox.closeInput(); sourceSignals.length = 0;
+            groups.delete(groupKey);
+            if (!groups.size) this.inputTurns.delete(reg);
+          });
+        // The host owns the flight even when the caller has not invoked result() yet.
+        void completion.catch(() => {});
+        launched = true;
+        return {
+          id: groupId, sessionId: id,
+          append: async (value: IncomingMessage): Promise<TurnAppendResult> => {
+            const next = checkMember(value);
+            const arrival = new Date().toISOString();
+            return inbox.append({ messageId: next.messageId, text: next.text, receivedAt: arrival, timezone: route.timezone! }, async () => {
+              this.alive(reg, route.signal);
+              let previous: StoredReceipt | undefined;
+              try { previous = await this.receipt(key, next.messageId, "in"); }
+              catch (error) { failure.abort(Error("追加输入回执读取失败")); throw error; }
+              if (previous) {
+                if (previous.receipt.fingerprint !== hash([next.sender, next.text])) throw Error("相同消息 ID 的内容不一致");
+                throw Error("此消息已经属于其他轮次，不能再次加入当前轮");
+              }
+              const member: Receipt = { type: "channel_receipt", channel_key: key, external_message_id: next.messageId, direction: "in",
+                fingerprint: hash([next.sender, next.text]), delivery_id: receipt.delivery_id, status: "pending", group_id: groupId,
+                group_message_id: message.messageId, input_text: next.text, input_sender: next.sender, received_at: arrival };
+              let existing: StoredReceipt | undefined;
+              try { existing = await this.save(id, route, member, "reserve"); }
+              catch (error) { failure.abort(Error("追加输入保存失败")); throw error; }
+              if (existing) throw Error("此消息已经被其他轮次接纳，不能重复处理");
+            });
+          },
+          closeInput: async () => { inbox.closeInput(); },
+          result: () => completion,
+        } satisfies ChannelTurn;
+      });
+    }));
+    const promise = opening.finally(() => {
+      if (!launched) {
+        groups.delete(groupKey);
+        if (!groups.size) this.inputTurns.delete(reg);
+      }
+    });
+    groups.set(groupKey, { fingerprint, promise });
+    return promise;
+  }
   private generate(id: string, text: string, route: ChannelRoute, onChunk: (text: string) => void = () => {}, onContext?: (value: any) => void, expectedPersona?: string) {
     route.signal?.throwIfAborted();
     return this.sessions.chat(id, text, onChunk, onContext, expectedPersona, route, false, { wait: true,
@@ -475,6 +617,7 @@ export class Channels {
     const reg = { adapter: { ...adapter }, owner, controller: new AbortController() } as Registration;
     const handle: ChannelHandle = {
       receive: (message, options = {}) => this.incoming(reg, message, options, "in"),
+      openTurn: (message, options = {}) => this.openTurn(reg, message, options),
       send: (message, options = {}) => this.incoming(reg, message, options, "out"),
       bind: (peer, id) => this.operation(reg, undefined, () => this.resolve(reg, identifier(peer, "peer"), safeId(id))),
       rebind: (peer, options) => this.operation(reg, undefined, () => {
@@ -501,12 +644,17 @@ export class Channels {
           return this.tracked(id, async () => {
           const previous = await this.receipt(this.key(reg, peer), messageId, direction);
           if (!previous) throw Error("没有可重试的消息");
-          const { receipt } = previous;
-          if (receipt.status === "sent") return this.result(previous.sessionId, receipt, true);
+          const requested = previous;
+          const canonical = previous.receipt.group_message_id
+            ? await this.receipt(this.key(reg, peer), previous.receipt.group_message_id, "in") : previous;
+          if (!canonical) throw Error("组回复回执缺失，不能重放");
+          const { receipt } = canonical;
+          if (receipt.status === "sent") return { ...this.result(previous.sessionId, receipt, true), messageId: requested.receipt.external_message_id };
           if (previous.sessionId !== id) throw Error("消息属于重绑前的会话，不能跨会话重试发送");
           if (!["generated", "delivery_failed"].includes(receipt.status) || typeof receipt.text !== "string")
             throw Error("没有已保存的最终回复；不能重放模型或工具");
-          return this.deliver(reg, id, route, receipt, signal);
+          const result = await this.deliver(reg, id, route, receipt, signal);
+          return { ...result, messageId: requested.receipt.external_message_id };
           });
         })));
       },

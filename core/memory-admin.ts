@@ -1130,12 +1130,32 @@ export class MemoryAdmin {
         if (!object(stored) || !object(receipt) || receipt.type !== "channel_receipt" || receipt.channel_key !== key ||
             !label(receipt.external_message_id) || !["in", "out"].includes(receipt.direction) ||
             !HASH.test(receipt.fingerprint) || messageKey !== digest(JSON.stringify([receipt.external_message_id, receipt.direction])) ||
-            receipt.delivery_id !== "delivery_" + digest(JSON.stringify([key, receipt.external_message_id, receipt.direction])) ||
             !["pending", "delivering", "sent", "generated", "generation_failed", "delivery_failed", "uncertain"].includes(receipt.status) ||
             (receipt.text !== undefined && typeof receipt.text !== "string") ||
             (receipt.error !== undefined && typeof receipt.error !== "string"))
           throw new MemoryAdminError("渠道消息回执损坏，不能安全恢复记忆");
         identifier(stored.sessionId);
+        const member = receipt.group_message_id !== undefined;
+        const leaderId = member ? receipt.group_message_id : receipt.external_message_id;
+        if ((member && (!label(leaderId) || leaderId === receipt.external_message_id)) ||
+            receipt.delivery_id !== "delivery_" + digest(JSON.stringify([key, leaderId, receipt.direction])))
+          throw new MemoryAdminError("渠道消息回执损坏，不能安全恢复记忆");
+        if (member || receipt.group_id !== undefined) {
+          // Group members share one delivery, but retain independent input fingerprints.
+          if (receipt.direction !== "in" || receipt.group_id !== "turn_" + digest(JSON.stringify([key, leaderId])) ||
+              typeof receipt.input_text !== "string" || !receipt.input_text.trim() || receipt.input_text.length > 16000 ||
+              !label(receipt.input_sender) || receipt.fingerprint !== digest(JSON.stringify([receipt.input_sender, receipt.input_text])) ||
+              typeof receipt.received_at !== "string" || !Number.isFinite(Date.parse(receipt.received_at)))
+            throw new MemoryAdminError("渠道分组回执损坏，不能安全恢复记忆");
+          if (member) {
+            const leader = route.receipts[digest(JSON.stringify([leaderId, "in"]))];
+            if (!object(leader) || !object(leader.receipt) || leader.sessionId !== stored.sessionId ||
+                leader.receipt.group_message_id !== undefined || leader.receipt.group_id !== receipt.group_id ||
+                leader.receipt.direction !== "in" || leader.receipt.external_message_id !== leaderId ||
+                leader.receipt.delivery_id !== receipt.delivery_id || leader.receipt.input_sender !== receipt.input_sender)
+              throw new MemoryAdminError("渠道分组回执缺失或冲突，不能安全恢复记忆");
+          }
+        }
       }
     }
     return routes;
@@ -1154,7 +1174,8 @@ export class MemoryAdmin {
       const receipts = { ...previous?.receipts };
       for (const [messageKey, saved] of Object.entries<any>(live.receipts)) {
         const older = receipts[messageKey];
-        if (older && (older.sessionId !== saved.sessionId || older.receipt.fingerprint !== saved.receipt.fingerprint))
+        if (older && (older.sessionId !== saved.sessionId || older.receipt.fingerprint !== saved.receipt.fingerprint ||
+            ["delivery_id", "group_id", "group_message_id"].some(field => older.receipt[field] !== saved.receipt[field])))
           throw new MemoryAdminError("备份渠道消息 ID 与当前回执冲突，不能安全恢复记忆");
         // Restoring conversation history cannot undo an already confirmed external send.
         receipts[messageKey] = older?.receipt.status === "sent" ? older : saved;
@@ -1173,6 +1194,8 @@ export class MemoryAdmin {
       if (!meta.deleted) mirrors.add(id);
     }
     stagedIndex.channel_routes = restored;
+    // Validate the selected sent records and retained members together before committing.
+    await this.channelSnapshot(staged, stagedIndex);
     await atomic(join(staged.root, "index.json"), JSON.stringify(stagedIndex, null, 2));
     for (const id of mirrors) {
       await directoryChain(staged.sessionDir(id), true);

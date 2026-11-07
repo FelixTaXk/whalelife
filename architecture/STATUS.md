@@ -1,6 +1,6 @@
 # WhaleLife 主干现状与开发说明
 
-核对日期：2026-11-07。插件独立执行、公开契约及统一模型连接已完成；在213b52b上核验回退后增加Web与插件共用当前会话、时间上下文、通用会话文档、临时输入及思考协议兼容、统一会话执行队列、临时工具持久化隔离和通用多模态工具输入。验证记录见第6节。
+核对日期：2026-11-08。插件独立执行、公开契约及统一模型连接已完成；在213b52b上核验回退后增加Web与插件共用当前会话、时间上下文、通用会话文档、临时输入及思考协议兼容、统一会话执行队列、临时工具持久化隔离、通用多模态工具输入和渠道显式轮内追加。验证记录见第6节。
 
 **本文是主干整体状态的唯一入口**，说明已经做了什么、现在怎样运行、代码为何这样组织，以及现存问题。接口细节见[PLUGINS.md](PLUGINS.md)，记忆算法见[MEMORY.md](MEMORY.md)，现有渠道接口见[CHANNELS.md](CHANNELS.md)。旧设计稿和阶段报告是历史材料，不能作为另一份当前任务清单。
 
@@ -27,6 +27,8 @@
 思考模式工具链支持reasoning_content的流式收集及当轮回传。临时输入开启新协议轮次，带工具的思考模式将缺少协议思考字段的既有历史作为保留角色/来源的引用提供；不改原文、不关闭思考、不存思考过程为记忆。模型失败响应增加限量、非正文回显的安全诊断。该修复不重放已失败的插件任务或约定。
 
 会话执行现由统一内存队列协调Web、渠道入站和插件enqueue/enqueueTransient；同会话串行，不中断在途操作，不同会话可并行。可选优先级、插件实例内等待项去重、signal取消及执行前有效性检查均为通用机制；不加入自主性业务。旧run/runTransient保留忙时拒绝语义，插件可独立接入新接口。正式插件未由本轮代改，队列不跨重启重放。
+
+渠道兼容新增可选openTurn：插件显式将同账号、peer和sender的补充加入正在等待、生成或执行工具的同一轮，保留每条消息ID和接收时间。已开始动作不撤销，当前批次剩余工具按补充重新判断；最终候选前原子封口，整轮只投递一次最终回复。首条与成员共享最终投递结果，取消/崩溃保留各自输入核对依据、不自动重放；旧receive和sessions各入口不变。接入须特性检测，归并与提前收件确认仍由插件负责，未代改正式平台插件。
 
 主干升级不得要求已有合规插件同步修改；插件升级不得要求修改主干或无关插件。提供方负责维持公开契约。插件可以出错，但主干须能切割它，让无关功能继续运行。完整约束见[AGENTS.md](../AGENTS.md)。
 
@@ -236,7 +238,9 @@ index集中组装核心服务，Sessions复用模型、记忆和工具；Runtime
 
 ## 6. 现有验证与证据边界
 
-本机本轮运行副本另通过32项执行档案/临时工具/多模态专项及类型检查，备份后优雅重启加载；86份配置与记忆文件、会话数量及原有插件状态不变，新执行档案核心服务已激活。原控制台窗口及桌面QQ保留，本次测试临时目录已清理。未调用真实模型或重放真实平台动作。
+- 2026-11-08轮内追加：新增34项输入、渠道/RPC及分组回执备份恢复测试，连同更新后的test:compat、相关渠道/记忆/执行档案专项和类型检查通过。覆盖保存与封口竞态、来源隔离、工具批次调整、单次最终投递、成员去重重试、取消、恢复不重放及临时资料隔离；冻结旧插件未改。本机运行副本34项新增测试及类型检查通过，备份后在原控制台正常重启；94份配置与记忆文件、会话数量及原有插件状态未变，桌面QQ进程保留。未调用真实模型、未改平台插件，真实QQ合并仍需插件显式接入。
+
+此前聊天与工具工作分离的本机运行副本另通过32项执行档案/临时工具/多模态专项及类型检查，备份后优雅重启加载；86份配置与记忆文件、会话数量及原有插件状态不变，新执行档案核心服务已激活。当时原控制台窗口及桌面QQ保留，该次测试临时目录已清理。未调用真实模型或重放真实平台动作。
 
 - 2026-11-07聊天与工具工作分离、按需执行档案：208项兼容回归、85项执行档案/记忆/渠道/上下文专项及类型检查通过，冻结旧插件未改。验证普通聊天提问衔接、实际对用户表达的内容保留、工具过程退出召回和明确业务结果保留；按用户后续决定取消六轮限制，HTTP/SSE覆盖超过六轮后继续调用、图片/思考协议/用量和取消不重放。新档案覆盖模型自主分页查档、下一轮不携带细节、跨会话/路径/链接拒绝、权限、脱敏、临时回执边界、上下文容量、档案失败不中断业务；无额外总结请求。只用合成资料及模拟模型，不发真实平台消息。旧的未保存聊天不能还原；无法与原始工具档案核对的旧条目不猜测删除。
 
@@ -283,7 +287,7 @@ index集中组装核心服务，Sessions复用模型、记忆和工具；Runtime
 | 人格与会话 | [persona-context](../tests/persona-context.test.ts)、[session-management](../tests/session-management.test.ts)、[session-context](../tests/session-context.test.ts)、[console-layout-persona](../tests/console-layout-persona.test.ts) |
 | 记忆与恢复 | [memory-engine](../tests/memory-engine.test.ts)、[memory-lifecycle](../tests/memory-lifecycle.test.ts)、[cognition](../tests/cognition.test.ts)、[memory-admin](../tests/memory-admin.test.ts)、[memory-v2-resilience](../tests/memory-v2-resilience.test.ts)、[memory-storage-v2](../tests/memory-storage-v2.test.ts) |
 | 插件运行 | [plugin-contract](../tests/plugin-contract.test.ts)、[plugin-state](../tests/plugin-state.test.ts)、[plugin-cancellation](../tests/plugin-cancellation.test.ts)、[plugin-isolation](../tests/plugin-isolation.test.ts)、[plugin-rpc](../tests/plugin-rpc.test.ts)、[plugin-http-bridge](../tests/plugin-http-bridge.test.ts)、[plugin-compatibility](../tests/plugin-compatibility.test.ts)、[plugin-model-connection](../tests/plugin-model-connection.test.ts)、[core](../tests/core.test.ts) |
-| 渠道及来源 | [channels](../tests/channels.test.ts)、[channel-rebinding](../tests/channel-rebinding.test.ts)、[provenance](../tests/provenance.test.ts) |
+| 渠道及来源 | [channels](../tests/channels.test.ts)、[channel-rebinding](../tests/channel-rebinding.test.ts)、[channel-turn](../tests/channel-turn.test.ts)、[channel-turn-backup](../tests/channel-turn-backup.test.ts)、[turn-input](../tests/turn-input.test.ts)、[provenance](../tests/provenance.test.ts) |
 | Web及界面 | [web](../tests/web.test.ts)、[console](../tests/console.test.ts)、[model-ui](../tests/model-ui.test.ts)、[memory-v2-ui](../tests/memory-v2-ui.test.ts)、[temporal-memory-ui](../tests/temporal-memory-ui.test.ts) |
 
 用Node 24。契约/生命周期改动运行npm run test:compat与npm run check，其他按影响范围选测试。[冻结样本](../tests/fixtures/plugin-contract/2026-10-29/README.md)不得为迁就不兼容改动而修改、重算摘要或弱化断言。
