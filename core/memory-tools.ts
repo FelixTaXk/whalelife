@@ -29,7 +29,7 @@ export function registerMemoryTools(tools: any, engine: MemoryEngine) {
     tools.register({
       name: "remember_fact",
       description:
-        "在当前会话独立事实中追加简短事实；整份最多100字符。共享事实只读，满额时用edit_facts精简。",
+        "在当前会话独立事实中追加值得长期保留的稳定资料，如称呼和长期偏好；整份最多100字符。临时活动、当日安排留在会话经历，不自行写成常驻事实或督促任务。共享事实只读，满额时用edit_facts精简。",
       schema: { text: { type: "string", maxLength: 100 } },
       danger: "safe",
       run: (args: any, session: any) => {
@@ -40,7 +40,7 @@ export function registerMemoryTools(tools: any, engine: MemoryEngine) {
     tools.register({
       name: "edit_facts",
       description:
-        "替换当前会话整份独立事实以更正、精简或删除。最多100字符，空文字表示清空；不可改共享事实。",
+        "替换当前会话整份独立事实以更正、精简或删除，保留仍有效的稳定资料和用户明确要求保留的内容，不用临时安排反复覆盖。最多100字符，空文字表示清空；不可改共享事实，保存事实不等于设置提醒。",
       schema: { text: { type: "string", maxLength: 100 } },
       danger: "safe",
       run: (args: any, session: any) => {
