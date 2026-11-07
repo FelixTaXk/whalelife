@@ -38,7 +38,11 @@ async function fixture(t: TestContext) {
         return { content: { text: foreign, image: { description: media, bytes: [1, 2, 3] } }, receipt: args.mode === 'null' ? null : { action: 'read', count: 1 } };
       } });
     ctx.tools.registerTransient({ name: 'temporary_action', description: 'Confirmed own action', schema: { text: { type: 'string' } }, danger: 'safe',
-      run: () => ({ content: 'done', receipt: { status: 'sent', id: 'actual-receipt-17', ownText: '自己的评论' } }) });
+      async run(args, session) {
+        await ctx.memory.recordExperience(session.id, { event_id: 'actual-receipt-17', outcome: 'succeeded',
+          text: '已发表自己的评论，平台回执 actual-receipt-17。', origin: { platform: '测试平台', action: '发表评论' } });
+        return { content: 'done', receipt: { status: 'sent', id: 'actual-receipt-17', ownText: '自己的评论' } };
+      } });
     ctx.tools.register({ name: 'ordinary_echo', description: 'Legacy echo', schema: { text: { type: 'string' } }, danger: 'safe', run: args => args });
     ctx.provide('probe', {
       supported: () => typeof ctx.tools.registerTransient === 'function',
@@ -139,6 +143,67 @@ test("ordinary results keep their old shape and persistence; transient direct ca
   await f.clean();
 });
 
+test("normal dialogue keeps its question across restart; explicit outcomes survive and tool internals never become recall", async t => {
+  const f = await fixture(t), reply = "已发表自己的评论。还要继续查看吗？";
+  f.model(request => request.messages.some((m: any) => m.role === "tool")
+    ? { text: reply, toolCalls: [] } : { text: "", toolCalls: [call("temporary_read"), call("temporary_action")] });
+  assert.equal(await f.api().run({ text: "帮我查看并评论" }), reply);
+  const row = (await f.app.memory.readSession(f.id)).at(-1);
+  assert.equal(row.text, reply);
+  assert.equal(row.transient, undefined);
+  const listed = await f.app.memoryEngine.inspect(f.id);
+  assert.ok(listed.items.some((r: any) => r.text.includes("平台回执 actual-receipt-17")), "explicit confirmed experience remains");
+  assert.ok(!listed.items.some((r: any) => r.text.startsWith("工具 ")), "automatic execution traces are not everyday memory");
+  await f.clean();
+  await f.restart();
+  f.model(request => {
+    assert.ok(request.messages.some((m: any) => m.role === "assistant" && m.content?.includes(reply)), "可以 must retain the preceding question");
+    assert.ok(!JSON.stringify(request.messages).includes(foreign));
+    assert.ok(!JSON.stringify(request.messages).includes("工具 temporary_read 调用完成"));
+    return { text: "按刚才说的继续查看。", toolCalls: [] };
+  });
+  assert.equal(await f.api().run({ text: "可以" }), "按刚才说的继续查看。");
+  await f.clean();
+});
+
+test("material actually quoted in a user-facing reply is conversation; unquoted tool material stays temporary", async t => {
+  const f = await fixture(t), visible = "对你说的引用：SYNTHETIC_VISIBLE_QUOTE。要继续吗？";
+  f.model(request => request.messages.some((m: any) => m.role === "tool")
+    ? { text: visible, toolCalls: [] } : { text: "", toolCalls: [call("temporary_read")] });
+  await f.api().run({ text: "说给我听" });
+  assert.equal((await f.app.memory.readSession(f.id)).at(-1).text, visible);
+  assert.ok((await f.app.memoryEngine.search(f.id, "SYNTHETIC_VISIBLE_QUOTE", { manual: true })).items.some((r: any) => r.text === visible));
+  await f.clean();
+});
+
+test("legacy tool projections are excluded only with matching archived evidence; explicit business records remain", async t => {
+  const f = await fixture(t), marker = "LEGACY_EXECUTION_PARAMETER", origin = { plugin: "probe", platform: "测试平台", action: "工作查询" };
+  const result = { cursor: marker }, text = "工具 legacy_work 调用完成：" + JSON.stringify(result);
+  await f.app.memory.appendEvent({ session: f.id, type: "tool", name: "legacy_work", origin, ok: true, result });
+  const legacy = await f.app.memoryEngine.experience(f.id, "probe", { event_id: "legacy", outcome: "succeeded", origin, text });
+  await f.app.memoryEngine.update(f.id, (state: any) => { delete state.records.find((r: any) => r.id === legacy.id).tool_trace; });
+  await f.app.memoryEngine.experience(f.id, "probe", { event_id: "explicit", outcome: "succeeded", origin,
+    text: "已完成检查并确认成功。" });
+  const explicit = await f.app.memoryEngine.experience(f.id, "probe", { event_id: "explicit-same-format", outcome: "succeeded", origin, text });
+  const found = await f.app.memoryEngine.search(f.id, marker, { manual: true });
+  assert.deepEqual(found.items.map((r: any) => r.id), [explicit.id], "new explicitly recorded experiences must not be guessed from their wording");
+  assert.ok((await f.app.memoryEngine.state(f.id)).records.some((r: any) => r.id === legacy.id), "audit is preserved, not deleted");
+  assert.ok((await f.app.memoryEngine.inspect(f.id)).items.some((r: any) => r.text === "已完成检查并确认成功。"));
+  await f.clean();
+});
+
+test("old temporary placeholders remain in the audit archive but are not conversation or recall", async t => {
+  const f = await fixture(t);
+  await f.app.memory.appendEvent({ session: f.id, type: "message", role: "assistant", text: TRANSIENT_REPLY, transient: true });
+  await f.app.memory.appendEvent({ session: f.id, type: "message", role: "user", text: TRANSIENT_REPLY });
+  const raw = await f.app.memory.readSession(f.id);
+  assert.equal(raw.length, 2, "do not rewrite old files");
+  const active = await f.app.memoryEngine.contextRows(f.id);
+  assert.equal(active.length, 1);
+  assert.equal(active[0].role, "user", "a user's actual quote must not be guessed away");
+  assert.ok((await f.app.memoryEngine.inspect(f.id)).items.every((r: any) => r.source !== "assistant"));
+});
+
 test("invalid projections and worker exceptions cannot leak content into logs or durable errors", async t => {
   const f = await fixture(t);
   for (const mode of ["invalid", "binary", "oversize"]) {
@@ -184,27 +249,33 @@ test("stopping an isolated temporary tool cancels its run and leaves no resumabl
   assert.ok(!(await f.app.memory.readSession(f.id)).some((r: any) => r.role === "assistant"));
 });
 
-test("temporary channel replies are delivered once but excluded from receipts, retry and restart", async t => {
+test("user-facing channel replies survive temporary tools, deduplication, explicit delivery retry and restart", async t => {
   const f = await fixture(t), sent: any[] = [];
+  const replyText = "看完了，要继续吗？";
+  let failOnce = true;
   const handle = f.app.channels.register({ id: "temporary", account: "test", persona: "a", permission: "full",
-    async send(message: any) { sent.push(message); if (message.peer === "fail") throw Error(foreign); } }, "test-owner");
+    async send(message: any) { sent.push(message); if (message.peer === "fail" && failOnce) { failOnce = false; throw Error(foreign); } } }, "test-owner");
   f.model(request => request.messages.some((m: any) => m.role === "tool")
-    ? { text: foreign, toolCalls: [] } : { text: "", toolCalls: [call("temporary_read")] });
+    ? { text: replyText, toolCalls: [] } : { text: "", toolCalls: [call("temporary_read")] });
   const input = { peer: "ok", sender: "user", messageId: "1", text: "查看资料" };
   const result = await handle.receive(input);
   assert.equal(result.status, "sent");
-  assert.equal(result.text, foreign);
-  assert.equal(result.transient, true);
-  assert.equal(sent[0].text, foreign);
-  assert.equal(sent[0].transient, true);
+  assert.equal(result.text, replyText);
+  assert.equal(result.transient, undefined);
+  assert.equal(sent[0].text, replyText);
+  assert.equal(sent[0].transient, undefined);
   const duplicate = await handle.receive(input);
-  assert.equal(duplicate.text, undefined);
+  assert.equal(duplicate.text, replyText);
   assert.equal(duplicate.duplicate, true);
   assert.equal(sent.length, 1);
   assert.equal((await handle.receive({ ...input, peer: "fail" })).status, "delivery_failed");
-  await assert.rejects(handle.retry("fail", "1"), /没有已保存的最终回复/);
+  const generated = f.requests.length;
+  assert.equal((await handle.retry("fail", "1")).status, "sent");
+  assert.equal(f.requests.length, generated, "explicit delivery retry must not rerun tools/model");
+  assert.ok((await f.app.memory.readSession(result.sessionId)).some((r: any) => r.role === "assistant" && r.text === replyText));
   await f.clean();
   await f.restart();
+  assert.ok((await f.app.memory.readSession(result.sessionId)).some((r: any) => r.role === "assistant" && r.text === replyText));
   await f.clean();
 });
 
@@ -212,7 +283,7 @@ test("short and long memory consolidation only receives durable projections", as
   const f = await fixture(t);
   f.model(request => request.messages.some((m: any) => m.role === "tool")
     ? { text: foreign, toolCalls: [] } : { text: "", toolCalls: [call("temporary_read")] });
-  await f.api().run({ text: "查看资料" });
+  await f.api().transient({ text: "查看资料" });
   const rows = await f.app.memoryEngine.contextRows(f.id);
   for (const row of rows) row.ts = "2020-01-01T00:00:00Z";
   // Supply enough ordinary evidence to exercise both summarizers rather than a threshold no-op.

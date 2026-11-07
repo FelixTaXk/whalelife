@@ -108,7 +108,7 @@ export async function boot(
       origin: event.origin,
       outcome: event.ok ? "succeeded" : "failed",
       text: `工具 ${event.name} ${event.ok ? "调用完成" : "调用失败"}：${String(JSON.stringify(event.result)).slice(0, 350)}`,
-    });
+    }, { toolTrace: true });
   };
   services.memoryAdmin = new MemoryAdmin(memory, sessions, logger);
   await runtime.builtin("chat", sessions);

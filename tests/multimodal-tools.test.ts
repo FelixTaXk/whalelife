@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { boot } from "../core/index.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
 import { toolContentSnapshot, promptText, TOOL_CONTENT_LIMITS } from "../core/tool-content.ts";
-import { TRANSIENT_REPLY } from "../core/tool-retention.ts";
 import type { Context, MultimodalToolOutput, ChatOptions } from "whalelife";
 
 const foreign = "SYNTHETIC_PRIVATE_VISUAL_TEXT";
@@ -93,10 +92,10 @@ test("HTTP/SSE sees real images after complete tool batch; same model/persona/re
   assert.equal(await f.api().supported(), true);
   f.model((body, res) => {
     const rounds = body.messages.filter((m: any) => m.role === "assistant").length;
-    sse(res, rounds === 2 ? foreign : "", rounds === 0 ? [call("view_media", { large: true }), call("plain_echo", { text: "ordinary" })]
+    sse(res, rounds === 2 ? "图片查看完了，要继续吗？" : "", rounds === 0 ? [call("view_media", { large: true }), call("plain_echo", { text: "ordinary" })]
       : rounds === 1 ? [call("plain_echo", { text: foreign }), call("remember_fact", { text: foreign })] : []);
   });
-  assert.equal(await f.api().run({ text: "看一下图片" }), foreign);
+  assert.equal(await f.api().run({ text: "看一下图片" }), "图片查看完了，要继续吗？");
   assert.equal(f.requests.length, 3);
   const body = f.requests[1];
   assert.deepEqual(body.messages.slice(-4).map((m: any) => m.role), ["assistant", "tool", "tool", "user"]);
@@ -120,13 +119,14 @@ test("HTTP/SSE sees real images after complete tool batch; same model/persona/re
   assert.equal(state.usage.chat.input_tokens, 2700);
   assert.equal(state.usage.chat.requests, 3);
   assert.equal((await f.app.sessions.contextStatus(f.id, { persona: "p" })).usage.used_tokens, 911);
-  assert.equal((await f.app.memory.readSession(f.id)).at(-1).text, TRANSIENT_REPLY);
+  assert.equal((await f.app.memory.readSession(f.id)).at(-1).text, "图片查看完了，要继续吗？");
   assert.equal((await f.app.memoryEngine.localFacts(f.id)).text, "");
   await f.clean();
   assert.deepEqual(f.events.find((e: any) => e.name === "view_media").result, { action: "view", count: 1 });
   f.model((_body, res) => sse(res, "下一轮"));
   await f.api().run({ text: "继续交流" });
   assert.ok(!hasMedia(f.requests.at(-1)));
+  assert.match(JSON.stringify(f.requests.at(-1)), /图片查看完了，要继续吗/);
   assert.ok(!JSON.stringify(f.requests.at(-1)).includes(foreign));
   await f.clean();
 });
@@ -180,6 +180,48 @@ test("media limits also apply across tool rounds", async t => {
   f.model((_body, res) => sse(res, "", [call("view_media", { count: 9 })]));
   await assert.rejects(f.api().run({ text: "查看多帧" }), /累计超过/);
   assert.equal(f.requests.length, 2);
+  await f.clean();
+});
+
+test("six tool rounds reserve a seventh HTTP request for a reply, with images, reasoning and exact usage preserved", async t => {
+  const f = await fixture(t), reply = "已经完成查看，尚未进行其他操作。";
+  f.model((body, res) => {
+    if (f.requests.length <= 6) return sse(res, "", [call("view_media", {}, "view_" + f.requests.length)]);
+    assert.equal(body.tools, undefined);
+    assert.equal(body.tool_choice, "none");
+    assert.match(body.messages[0].content, /收尾答复/);
+    assert.equal(body.messages.filter((m: any) => m.role === "tool").length, 6);
+    assert.equal(body.messages.filter((m: any) => Array.isArray(m.content)).length, 6);
+    assert.ok(body.messages.filter((m: any) => m.role === "assistant").every((m: any) => m.reasoning_content === "SYNTHETIC_PROTOCOL_REASONING"));
+    sse(res, reply);
+  });
+  assert.equal(await f.api().run({ text: "查看资料" }), reply);
+  assert.equal(f.requests.length, 7);
+  assert.equal(f.events.filter((e: any) => e.name === "view_media").length, 6);
+  assert.equal((await f.app.memoryEngine.state(f.id)).usage.chat.requests, 7);
+  assert.equal((await f.app.memoryEngine.state(f.id)).usage.chat.input_tokens, 6300);
+  assert.equal((await f.app.memory.readSession(f.id)).at(-1).text, reply);
+  await f.clean();
+});
+
+test("a model ignoring reply-only mode cannot execute a seventh tool or replay the task", async t => {
+  const f = await fixture(t);
+  f.model((_body, res) => sse(res, "", [call("view_media", {}, "view_" + f.requests.length)]));
+  await assert.rejects(f.api().run({ text: "查看资料" }), /额外工具未执行/);
+  assert.equal(f.requests.length, 7);
+  assert.equal(f.events.filter((e: any) => e.name === "view_media").length, 6);
+  await f.clean();
+});
+
+test("reply-only request still honors cancellation without replaying completed tools", async t => {
+  const f = await fixture(t), abort = new AbortController();
+  f.model((_body, res) => { if (f.requests.length <= 6) sse(res, "", [call("view_media", {}, "view_" + f.requests.length)]); });
+  const pending = assert.rejects(f.api().run({ text: "查看资料", signal: abort.signal }), /cancel-closing/);
+  await until(() => f.requests.length === 7);
+  abort.abort(Error("cancel-closing"));
+  await pending;
+  assert.equal(f.requests.length, 7);
+  assert.equal(f.events.filter((e: any) => e.name === "view_media").length, 6);
   await f.clean();
 });
 

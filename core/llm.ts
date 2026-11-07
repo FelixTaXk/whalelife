@@ -74,6 +74,7 @@ export class LLM {
           stream: true,
           stream_options: { include_usage: true },
           ...(opts.tools?.length ? { tools: opts.tools } : {}),
+          ...(opts.tool_choice === "none" ? { tool_choice: "none" } : {}),
         },
         async (response) => {
           if (!response.body) throw Error("模型返回空响应");

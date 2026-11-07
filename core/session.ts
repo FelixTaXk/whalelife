@@ -452,13 +452,18 @@ export class Sessions {
       const memoryRevision = engine
         ? await engine.contextRevision(id)
         : undefined;
-      for (let round = 0; round < 6; round++) {
+      // Six execution rounds, then one reply-only round. A limit must not discard the result.
+      for (let round = 0; round <= 6; round++) {
+        const closing = round === 6;
+        const activeTools = closing || memoryWriteRejected ? [] : toolList;
         signal.throwIfAborted();
         const requestSignal = mediaSignals.length ? AbortSignal.any([signal, ...mediaSignals]) : signal;
         requestSignal.throwIfAborted();
-        messages[0].content = stableSystemPrompt + "\n" + timing();
+        messages[0].content = stableSystemPrompt + "\n" + timing() + (closing
+          ? "\n【本次工具执行已达上限】不再调用工具。请依据已有结果给出简短收尾答复，区分已确认的结果、失败或未确认的结果及尚未完成的事项；不得将计划、调用完成或生成内容说成已经执行或送达。不要要求用户重做整个操作。"
+          : "");
         if (
-          estimateTokens(promptText(messages) + JSON.stringify(toolList)) >
+          estimateTokens(promptText(messages) + JSON.stringify(activeTools)) >
           requestBudget
         )
           throw Error(
@@ -467,13 +472,16 @@ export class Sessions {
         const reply = await llm.chat({
           provider: p.provider,
           messages,
-          tools: memoryWriteRejected ? [] : toolList,
+          tools: activeTools,
+          ...(closing ? { tool_choice: "none" } : {}),
           onChunk,
           signal: requestSignal,
         });
         measured = requestUsage(reply.usage, p.provider, limit.tokens);
         if (engine) await engine.usage(id, "chat", reply.usage);
         requestSignal.throwIfAborted();
+        if (closing && reply.toolCalls.length)
+          throw Error("模型未遵守收尾要求，额外工具未执行；请核对已有结果，不要重复整个操作");
         if (!reply.toolCalls.length) {
           final = reply.text;
           break;
@@ -548,8 +556,9 @@ export class Sessions {
         origin: { ...source.origin, action: "生成回复" },
         session: id,
         role: "assistant",
-        text: turn.transient ? TRANSIENT_REPLY : final,
-        ...(turn.transient ? { transient: true } : {}),
+        // User-facing conversation is primary history. Technical plugin runs retain their opt-in privacy.
+        text: transient && turn.transient ? TRANSIENT_REPLY : final,
+        ...(transient && turn.transient ? { transient: true } : {}),
         ...context,
         request_usage: measured,
         memory_revision: memoryRevision,

@@ -10,6 +10,7 @@ import { occurrence, collectTimes, timestamp } from "./time.ts";
 import { applyCognitions, cognitionRevision, undoCognition, type CognitionMaintenance } from "./cognition.ts";
 import { attribution, collectOrigins, originOf, pluginOrigin, validateAttribution, validateOrigin } from "./provenance.ts";
 import type { DocumentWrite, SessionDocument } from "./plugin-api.ts";
+import { TRANSIENT_REPLY } from "./tool-retention.ts";
 
 export const charCount = (text: string) => Array.from(text).length;
 export function estimateTokens(text: string) {
@@ -19,6 +20,8 @@ export function estimateTokens(text: string) {
 const cut = (text: string, n: number) => Array.from(text).slice(0, n).join("");
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
+const temporaryPlaceholder = (row: any) => row.type === "message" && row.role === "assistant" &&
+  row.transient === true && row.text === TRANSIENT_REPLY;
 const excludedInputs = (state: { records: any[] }) => new Set<string>(
   state.records.filter(x => x.kind === "event-state" && x.context_excluded === true).map(x => x.id));
 const inputRevision = (state: { records: any[] }) => {
@@ -348,7 +351,7 @@ export class MemoryEngine {
   }
   async contextRows(id: string, rows?: any[]) {
     const excluded = excludedInputs(await this.state(id));
-    return (rows ?? await this.memory.readSession(id)).filter((row: any) => !excluded.has(row.id));
+    return (rows ?? await this.memory.readSession(id)).filter((row: any) => !excluded.has(row.id) && !temporaryPlaceholder(row));
   }
   private async excludeInputs(id: string, owner: string, messageIds: string[], check: () => void) {
     if (!Array.isArray(messageIds) || !messageIds.length || messageIds.length > 100 ||
@@ -483,7 +486,7 @@ export class MemoryEngine {
     });
     return this.inspect(id);
   }
-  async record(id: string, input: any) {
+  async record(id: string, input: any, options: { toolTrace?: boolean } = {}) {
     const occurredAt = occurrence(input.occurred_at);
     const origin = input.origin === undefined ? undefined : validateOrigin(input.origin);
     const kind = input.kind;
@@ -528,12 +531,13 @@ export class MemoryEngine {
         evidence,
         persona_revision: input.persona_revision || null,
         outcome: input.outcome || null,
+        ...(kind === "episode" ? { tool_trace: options.toolTrace === true } : {}),
       };
       s.records.push(item);
       return item;
     });
   }
-  async experience(id: string, source: string, input: any) {
+  async experience(id: string, source: string, input: any, options: { toolTrace?: boolean } = {}) {
     if (
       typeof input.event_id !== "string" ||
       !input.event_id ||
@@ -549,17 +553,26 @@ export class MemoryEngine {
       kind: "episode",
       source,
       event_id: input.event_id + ":" + input.outcome,
-    });
+    }, options);
   }
   private async candidates(id: string) {
     const s = await this.state(id),
       rows = await this.memory.readSession(id);
-    const items = [...s.records];
+    // Match legacy automatic projections against actual archived tool events, not loose text patterns.
+    // Preserve the files for audit; only change their eligibility for conversational recall.
+    const traceKey = (source: unknown, origin: any, outcome: unknown, text: string) => JSON.stringify([
+      source, origin?.plugin, origin?.platform, origin?.action ?? "工具调用", outcome, text,
+    ]);
+    const legacyTraces = new Set(rows.filter((row: any) => row.type === "tool" && row.origin?.plugin).map((row: any) =>
+      traceKey(row.origin.plugin, row.origin, row.ok ? "succeeded" : "failed",
+        `工具 ${row.name} ${row.ok ? "调用完成" : "调用失败"}：${String(JSON.stringify(row.result)).slice(0, 350)}`)));
+    const items = s.records.filter((item: any) => !item.tool_trace && !(item.kind === "episode" && item.tool_trace === undefined &&
+      legacyTraces.has(traceKey(item.source, item.origin, item.outcome, item.text))));
     const muted = new Map(
       s.records.filter((x) => x.kind === "event-state").map((x) => [x.id, x]),
     );
     for (const row of rows) {
-      if (row.type !== "message" || !row.text || muted.get(row.id)?.context_excluded) continue;
+      if (row.type !== "message" || !row.text || muted.get(row.id)?.context_excluded || temporaryPlaceholder(row)) continue;
       const rid = row.id || hash(JSON.stringify(row)).slice(0, 32);
       items.push({
         id: rid,

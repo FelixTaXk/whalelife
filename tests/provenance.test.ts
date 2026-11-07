@@ -77,7 +77,8 @@ test("plugin actions, tool observations and explicit experiences preserve declar
   assert.equal(state.records[0].origin.action, "读取视频内容");
   assert.equal(state.records[1].origin.platform, "轨道视频");
   const found = await app.memoryEngine.search("one", "轨道视频", { manual: true });
-  assert.equal(found.items.length, 2, "platform names are searchable without rewriting the action text");
+  assert.equal(found.items.length, 1, "explicit business experience is searchable; automatic tool traces stay out of recall");
+  assert.equal(found.items[0].origin.action, "读取字幕");
   const recalled = await app.tools.call("recall_memory", { query: "轨道视频" }, { id: "one", permission: "full" });
   assert.ok(recalled.result.every((x: any) => x.origin.plugin === "orbit-video"));
   await app.sessions.chat("one", "轨道视频里的星光是什么", () => {});

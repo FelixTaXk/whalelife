@@ -96,6 +96,8 @@ type Receipt = {
   text?: string;
   error?: string;
   transient?: true;
+  /** Preserve chat text without allowing adapter/storage errors to echo temporary tool material. */
+  private_errors?: true;
 };
 type StoredReceipt = { sessionId: string; receipt: Receipt };
 type RouteState = {
@@ -339,6 +341,7 @@ export class Channels {
   }
   private async deliver(reg: Registration, id: string, route: ChannelRoute, receipt: Receipt, signal: AbortSignal) {
     return this.queue(this.transportQueues, id, async () => {
+    const privateErrors = receipt.transient || receipt.private_errors;
     if (this.sessions.blockedSessions.has(id))
       throw Error("会话正在处理，请稍后重试发送");
     let called = false;
@@ -362,8 +365,8 @@ export class Channels {
         await this.save(id, route, sent);
       } catch (error: any) {
         // The transport already confirmed success. Storage failure cannot undo it.
-        sent.error = "发送已确认，但回执保存失败：" + (receipt.transient ? "临时回复记录异常" : error.message);
-        this.sessions.services.logger.warn("渠道发送已确认，回执保存失败", { error: receipt.transient ? sent.error : error });
+        sent.error = "发送已确认，但回执保存失败：" + (privateErrors ? "回执记录异常，原始错误未保存" : error.message);
+        this.sessions.services.logger.warn("渠道发送已确认，回执保存失败", { error: privateErrors ? sent.error : error });
       }
       if (receipt.direction === "out") {
         try {
@@ -381,13 +384,13 @@ export class Channels {
     } catch (error: any) {
       const failed: Receipt = {
         ...receipt, status: "delivery_failed",
-        error: (called ? "发送结果可能不确定；重试可能重复投递：" : "尚未调用发送：") + (receipt.transient ? "临时回复未保存，不能重试原文" : error.message),
+        error: (called ? "发送结果可能不确定；重试可能重复投递：" : "尚未调用发送：") + (receipt.transient ? "临时回复未保存，不能重试原文" : privateErrors ? "投递失败，原始错误未保存" : error.message),
       };
       try {
         await this.save(id, route, failed);
       } catch (storageError: any) {
         failed.status = "uncertain";
-        failed.error += "；投递回执保存失败：" + (receipt.transient ? "临时回复记录异常" : storageError.message);
+        failed.error += "；投递回执保存失败：" + (privateErrors ? "回执记录异常，原始错误未保存" : storageError.message);
       }
       return this.result(id, failed);
     }
@@ -437,7 +440,8 @@ export class Channels {
           return this.result(id, receipt);
         }
       }
-      receipt = { ...receipt, status: "generated", text: response, ...(turn?.transient ? { transient: true } : {}) };
+      // A reply addressed to the user is conversation, even if temporary tools informed it.
+      receipt = { ...receipt, status: "generated", text: response, ...(turn?.transient ? { private_errors: true } : {}) };
       await this.save(id, route, receipt);
       return this.deliver(reg, id, route, receipt, signal);
       };
