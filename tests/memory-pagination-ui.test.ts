@@ -8,8 +8,8 @@ import assert from "node:assert/strict";
 const { loadMemory, bindMemory, renderMemory } =
   await import(new URL("../core/ui/memory.js", import.meta.url).href);
 const json = (value: unknown) => new Response(JSON.stringify(value));
-const page = (offset: number, total = 80, text = `server-page-${offset}`) => ({
-  offset, limit: 25, total, items: [{ id: `item-${offset}`, kind: "episode", status: "active", text }],
+const page = (offset: number, total = 80, text = `server-page-${offset}`, limit = 25) => ({
+  offset, limit, total, items: [{ id: `item-${offset}`, kind: "episode", status: "active", text }],
 });
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: Error) => void;
@@ -19,23 +19,40 @@ function deferred<T>() {
 function fixture() {
   const state: any = { session: "active", memorySession: "viewed", page: "memory", memoryTab: "knowledge",
     memoryLoadedTab: "knowledge", memoryLoadedSession: "viewed", memoryDetails: page(0),
-    knowledgeQuery: "", knowledgeArchived: false, knowledgeOffset: 0,
-    knowledgePageKey: JSON.stringify(["viewed", "", false]) };
+    knowledgeQuery: "", knowledgeArchived: false, knowledgeOffset: 0, knowledgeLimit: 25,
+    knowledgePageKey: JSON.stringify(["viewed", "", false, 25]) };
   const pagers: any[] = ["prev", "next", "prev", "next"].map(direction => ({ dataset: { knowledgePage: direction }, disabled: false }));
+  const numbers: any[] = [];
+  const makeForms = (name: string) => [0, 1].map(() => {
+    const input = { value: "", disabled: false }, button = { disabled: false };
+    return { input, button, querySelector: (key: string) => key === `[name="${name}"]` ? input : null } as any;
+  });
+  const jumps = makeForms("page"), sizes = makeForms("limit");
+  const controls = [...jumps, ...sizes].flatMap(form => [form.input, form.button]);
   const fields = { query: "", archived: false };
   const checkbox: any = {}, selector: any = { value: "viewed" };
   const form: any = { querySelector: (selector: string) => selector === '[name="archived"]' ? checkbox : null };
   const refresh = {}, backup = {}, actions: any[] = [], errors: string[] = [];
-  const app: any = { state, fields, checkbox, selector, form, pagers, actions, errors, html: "",
+  const app: any = { state, fields, checkbox, selector, form, pagers, numbers, jumps, sizes, controls, actions, errors, html: "",
     content: {
       querySelector: (key: string) => key === "#knowledge-search-form" ? (state.memoryTab === "knowledge" ? form : null) :
         key === "#context-session" ? selector : key === "[data-memory-refresh]" ? refresh : key === "[data-memory-backup]" ? backup : null,
-      querySelectorAll: (key: string) => key === "[data-knowledge-page]" && state.memoryTab === "knowledge" ? pagers :
+      querySelectorAll: (key: string) => key === "[data-knowledge-page]" && state.memoryTab === "knowledge" ? [...pagers, ...numbers] :
+        key === "[data-knowledge-jump]" ? jumps : key === "[data-knowledge-size]" ? sizes : key === "[data-knowledge-control]" ? controls :
         key === "[data-knowledge-action]" ? actions : [],
     },
     toast: (message: string, failed: boolean) => { if (failed) errors.push(message); },
     dialog() {},
-    render() { app.html = renderMemory(app); bindMemory(app); },
+    render() {
+      app.html = renderMemory(app);
+      numbers.splice(0, numbers.length, ...[...app.html.matchAll(/data-knowledge-page="(\d+)"/g)].map(match => ({ dataset: { knowledgePage: match[1] }, disabled: false })));
+      jumps.forEach(form => {
+        form.input.value = String(Math.floor((state.memoryDetails?.offset || 0) / (state.memoryDetails?.limit || state.knowledgeLimit)) + 1);
+        form.input.disabled = form.button.disabled = !!state.memoryLoading || !state.memoryDetails?.total;
+      });
+      sizes.forEach(form => { form.input.value = String(state.knowledgeLimit); form.input.disabled = form.button.disabled = !!state.memoryLoading; });
+      bindMemory(app);
+    },
   };
   app.render();
   return app;
@@ -99,7 +116,7 @@ test("pagination shows server totals, disables boundaries and tolerates older re
   app.state.memoryDetails = { items: page(0).items }; app.render();
   assert.match(app.html, /第 1 \/ 1 页 · 共 1 条/); assert.doesNotMatch(app.html, /NaN|undefined/);
   app.state.memoryDetails = page(25); app.state.memoryLoading = true; app.render();
-  assert.equal((app.html.match(/data-knowledge-page="(?:prev|next)" disabled/g) || []).length, 4);
+  assert.equal((app.html.match(/data-knowledge-page="(?:prev|next)"[^>]* disabled/g) || []).length, 4);
 });
 
 test("search, archive filter and viewed-session changes reset the page while spaces explicitly request a small first page", async t => {
@@ -172,4 +189,101 @@ test("archiving on the last page reloads its server offset and adopts the server
   assert.match(app.html, /第 2 \/ 2 页 · 共 50 条/);
   assert.equal(app.pagers[0].disabled, false); assert.equal(app.pagers[1].disabled, true);
   assert.deepEqual(app.errors, []);
+});
+
+test("bounded page buttons and direct jumps request the selected server page and reject invalid page numbers", async t => {
+  const app = fixture(), total = 25000;
+  app.state.memoryDetails = page(5000, total); app.state.knowledgeOffset = 5000; app.render();
+  const { calls } = mockRead(t, url => page(Number(url.searchParams.get("offset")), total));
+  assert.deepEqual(app.numbers.map((button: any) => Number(button.dataset.knowledgePage)), [1, 200, 201, 202, 1000, 1, 200, 201, 202, 1000]);
+  assert.equal((app.html.match(/aria-current="page"/g) || []).length, 2);
+  assert.equal((app.html.match(/class="memory-page-ellipsis"/g) || []).length, 4);
+  assert.match(app.html, /aria-label="第 1000 页"/);
+  await app.numbers.find((button: any) => button.dataset.knowledgePage === "1000").onclick();
+  assert.equal(calls.length, 1); assert.equal(calls[0].searchParams.get("offset"), "24975");
+  app.jumps[1].input.value = "357";
+  await app.jumps[1].onsubmit({ preventDefault() {} });
+  assert.equal(calls.length, 2); assert.equal(calls[1].searchParams.get("offset"), "8900");
+  assert.ok(app.jumps.every((form: any) => form.input.value === "357"));
+  assert.match(app.html, /第 357 \/ 1000 页/);
+  for (const value of ["", "0", "-1", "1001", "2.5", "abc", "Infinity"]) {
+    app.jumps[0].input.value = value;
+    await app.jumps[0].onsubmit({ preventDefault() {} });
+  }
+  assert.equal(calls.length, 2, "invalid or out-of-range jumps never fetch");
+  assert.equal(app.state.knowledgeOffset, 8900);
+  assert.ok(calls.every(url => url.pathname === "/api/memory/knowledge"));
+});
+
+test("custom page size is validated, persisted locally, synchronized, and used for subsequent navigation", async t => {
+  const app = fixture(), pending = deferred<any>();
+  const storage = new Map<string, string>();
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  } });
+  t.after(() => { if (original) Object.defineProperty(globalThis, "localStorage", original); else Reflect.deleteProperty(globalThis, "localStorage"); });
+  const { calls } = mockRead(t, url => Number(url.searchParams.get("limit")) === 17 && calls.length === 1 ? pending.promise :
+    page(Number(url.searchParams.get("offset")), 80, "custom-size-page", Number(url.searchParams.get("limit"))));
+  app.state.memoryDetails = page(25); app.state.knowledgeOffset = 25; app.render();
+  for (const value of ["", "0", "101", "-1", "2.5", "abc"]) {
+    app.sizes[0].input.value = value;
+    await app.sizes[0].onsubmit({ preventDefault() {} });
+  }
+  assert.equal(calls.length, 0); assert.equal(app.state.knowledgeLimit, 25);
+  app.sizes[1].input.value = "17";
+  const request = app.sizes[1].onsubmit({ preventDefault() {} });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(Object.fromEntries(calls[0].searchParams), { id: "viewed", query: "", archived: "false", offset: "0", limit: "17" });
+  assert.ok(app.controls.every((control: any) => control.disabled));
+  assert.ok(app.pagers.every((control: any) => control.disabled));
+  app.sizes[0].input.value = "30";
+  app.sizes[0].onsubmit({ preventDefault() {} }); app.jumps[0].onsubmit({ preventDefault() {} });
+  assert.equal(calls.length, 1, "pending size requests block repeated applications and jumps");
+  pending.resolve(page(0, 80, "custom-size-page", 17)); await request;
+  assert.ok(app.sizes.every((form: any) => form.input.value === "17"));
+  assert.equal(storage.get("whaleMemoryPageSize"), "17");
+  await app.pagers[1].onclick();
+  assert.equal(calls.at(-1)!.searchParams.get("offset"), "17");
+  assert.equal(calls.at(-1)!.searchParams.get("limit"), "17");
+  app.jumps[0].input.value = "4"; await app.jumps[0].onsubmit({ preventDefault() {} });
+  assert.equal(calls.at(-1)!.searchParams.get("offset"), "51");
+  await app.pagers[0].onclick();
+  assert.equal(calls.at(-1)!.searchParams.get("offset"), "34");
+  const restored = fixture(); delete restored.state.knowledgeLimit;
+  await loadMemory(restored, { knowledgeOnly: true });
+  assert.equal(restored.state.knowledgeLimit, 17);
+  assert.equal(calls.at(-1)!.searchParams.get("limit"), "17");
+  assert.ok(calls.every(url => url.pathname === "/api/memory/knowledge"));
+  storage.set("whaleMemoryPageSize", "1000");
+  const invalidPreference = fixture(); delete invalidPreference.state.knowledgeLimit;
+  await loadMemory(invalidPreference, { knowledgeOnly: true });
+  assert.equal(invalidPreference.state.knowledgeLimit, 25);
+});
+
+test("a late response for an earlier page size cannot overwrite the latest limit or page", async t => {
+  const app = fixture(), stale = deferred<any>();
+  mockRead(t, url => url.searchParams.get("limit") === "25" ? stale.promise : page(0, 80, "latest-size", 17));
+  const earlier = loadMemory(app, { knowledgeOnly: true });
+  app.state.knowledgeLimit = 17;
+  await loadMemory(app, { knowledgeOnly: true });
+  stale.resolve(page(0, 100, "old-size", 25)); await earlier;
+  assert.equal(app.state.knowledgeLimit, 17); assert.equal(app.state.memoryDetails.limit, 17);
+  assert.equal(app.state.memoryDetails.items[0].text, "latest-size");
+  assert.equal(app.state.memoryLoading, false);
+  assert.equal((app.html.match(/name="limit"[^>]*value="17"/g) || []).length, 2);
+});
+
+test("automatic retrieval and usage notes distinguish search, context, diary generation and historical totals", () => {
+  const app = fixture();
+  app.state.memoryDetails.trace = { query: "an earlier chat", selected: [], estimated_tokens: 0 };
+  app.render();
+  assert.match(app.html, /上次聊天的自动检索/);
+  assert.match(app.html, /不是当前搜索结果；检索本身不调用模型/);
+  assert.match(app.html, /自动检索与用量/);
+  assert.match(app.html, /不删除原文，也不按天压缩对话/);
+  assert.match(app.html, /默认 800，仅限制额外补充的相关片段，不是完整上下文预算/);
+  assert.match(app.html, /仅在触发整理时消耗；关闭自动日记不会生成新日记/);
+  assert.match(app.html, /历史累计包含旧机制消耗，清理旧摘要不会清零用量/);
 });

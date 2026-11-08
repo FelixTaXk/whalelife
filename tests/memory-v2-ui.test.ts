@@ -185,7 +185,7 @@ test("knowledge view escapes sources and separates measured cumulative usage fro
     html,
     /name="daily_memory_tokens" required min="0" max="10000000" step="1" value="20000"/,
   );
-  assert.match(html, /0 停止后续自动整理；已有有效日记和记忆仍可使用/);
+  assert.match(html, /0 会停止后续整理。已有有效日记仍可使用/);
 });
 
 test("daily memory budget can be set to zero independently from retrieval settings", async (t) => {

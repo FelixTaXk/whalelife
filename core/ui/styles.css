@@ -1281,6 +1281,78 @@ dialog::backdrop {
   gap: 6px;
   white-space: nowrap;
 }
+.memory-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  min-width: 0;
+  padding: 12px 0;
+}
+.memory-pagination-summary {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.memory-pagination-pages,
+.memory-pagination-controls,
+.memory-pagination-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.memory-pagination-controls {
+  gap: 10px 14px;
+  margin-left: auto;
+}
+.memory-page-button {
+  min-width: 32px;
+  font-variant-numeric: tabular-nums;
+}
+.memory-page-button[aria-current="page"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  opacity: 1;
+}
+.memory-page-button[aria-current="page"]:hover {
+  background: var(--accent-hover);
+}
+.memory-page-ellipsis {
+  width: 20px;
+  text-align: center;
+  color: var(--muted);
+}
+.memory-pagination-form label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.memory-pagination-form input[type="number"] {
+  width: 4rem;
+  padding: 6px;
+  border-color: var(--line);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.memory-pagination-form input[type="number"]:focus {
+  border-color: var(--accent);
+}
+@media (max-width: 600px) {
+  .memory-pagination-summary {
+    flex-basis: 100%;
+  }
+  .memory-pagination-controls {
+    width: 100%;
+    margin-left: 0;
+  }
+}
 .memory-knowledge-item {
   padding: 18px 0;
   border-bottom: 1px solid var(--border, #e6e7ef);
