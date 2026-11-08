@@ -35,6 +35,7 @@ import {
 } from "./memory.ts";
 import type { Logger } from "./logger.ts";
 import { MemoryEngine, validateMemoryState } from "./memory-engine.ts";
+import { diaryContext, type DiaryContext, type DiaryEntry } from "./memory-diary.ts";
 import { contextPolicy, matchingHistory, memoryWindow } from "./session-context.ts";
 import { persona } from "./persona.ts";
 
@@ -54,6 +55,30 @@ type FileEntry = {
   mtime: number;
 };
 type StoredFile = { path: string; bytes: number; sha256: string };
+type SummaryView = {
+  id: string;
+  text: string;
+  bytes: number;
+  chars: number;
+  updated_at: string | null;
+  session_id: string | null;
+  session_name: string | null;
+  mode: string;
+  status: string;
+  available: boolean;
+  status_message: string;
+  last_error?: string;
+  retry_at?: number;
+  diary_id?: string;
+  version?: number;
+  created_at?: string;
+  scope?: string;
+  source_ids?: string[];
+  source_revision?: string;
+  covered_messages?: number;
+  time_range?: DiaryEntry["time_range"];
+  model?: string;
+};
 type Manifest = {
   version: 1;
   id: string;
@@ -80,6 +105,7 @@ const BACKUP_ID = /^memory-\d{8}T\d{9}Z-[a-f0-9]{12}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
+const diaryViewId = (owner: string, id: string) => "d_" + digest(owner + ":" + id).slice(0, 40);
 const inside = (base: string, target: string) => {
   const path = relative(resolve(base), resolve(target));
   return (
@@ -721,6 +747,13 @@ export class MemoryAdmin {
             index.summaryOwners?.[basename(f.path, ".md")]
           ),
       );
+      const diaryFiles: FileEntry[] = [], engine = new MemoryEngine(this.memory);
+      for (const [owner, meta] of Object.entries<any>(index.sessions)) {
+        if (meta.deleted) continue;
+        for (const diary of (await engine.state(owner)).diaries ?? [])
+          diaryFiles.push({ path: diaryViewId(owner, diary.id), bytes: Buffer.byteLength(diary.text),
+            updated_at: diary.created_at, mtime: Date.parse(diary.created_at) });
+      }
       const matched: FileEntry[] = [];
       for (const entry of allSessions) {
         const id = basename(entry.path, ".jsonl");
@@ -795,7 +828,7 @@ export class MemoryAdmin {
           limit,
           items,
         },
-        summaries: aggregate(summaryFiles),
+        summaries: aggregate([...summaryFiles, ...diaryFiles]),
         busy: this.sessions.locks.size > 0 || !!this.sessions.channelOperations?.size,
         restoring: this.sessions.memoryMaintenance === true,
       };
@@ -832,7 +865,7 @@ export class MemoryAdmin {
     await this.ensureRoots();
     const { files } = await inventory(this.root), { index } = await this.sessionIndex();
     const engine = new MemoryEngine(this.memory);
-    const entries = new Map<string, { owner?: string; file?: FileEntry; checkpoint?: any; stateFile?: FileEntry }>();
+    const entries = new Map<string, { owner?: string; file?: FileEntry; checkpoint?: any; stateFile?: FileEntry; diary?: DiaryEntry }>();
     for (const file of files) {
       const id = basename(file.path, ".md"), owner = file.path.startsWith("sessions/")
         ? file.path.split("/")[1] : index.summaryOwners?.[id];
@@ -851,9 +884,16 @@ export class MemoryAdmin {
         entries.set(id, { ...existing, owner, checkpoint: await engine.summaryState(owner, id),
           stateFile: files.find(file => file.path === `sessions/${owner}/knowledge/state.json`) });
       }
+      for (const diary of state.diaries ?? []) {
+        const id = diaryViewId(owner, diary.id);
+        if (wanted && id !== wanted) continue;
+        if (entries.has(id)) throw new MemoryAdminError("日记归属冲突，请检查记忆索引");
+        entries.set(id, { owner, diary });
+      }
     }
-    const views = [];
+    const views: SummaryView[] = [];
     const windows = new Map<string, any[]>();
+    const diaries = new Map<string, DiaryContext>();
     let selectedRevision: string | undefined;
     const personaId = this.sessions.config?.channels?.web?.persona;
     if (personaId && [...entries.values()].some(entry => entry.owner &&
@@ -865,11 +905,38 @@ export class MemoryAdmin {
     for (const [id, entry] of entries) {
       const { owner, checkpoint, file, stateFile } = entry;
       const meta = owner ? indexSessionMeta(index, owner) : null;
+      const policy = contextPolicy(this.sessions.config?.memory ?? {}, meta?.context);
+      if (entry.diary) {
+        const diary = entry.diary, scope = policy.history_scope === "session" ? "session" :
+          selectedRevision ? "persona:" + selectedRevision : undefined;
+        const currentScope = diary.scope === scope;
+        let status = "other_scope", available = false;
+        let statusMessage = "其他历史或人格范围的日记，保留供查看，不带入当前范围。";
+        if (currentScope) {
+          if (!diaries.has(owner!)) diaries.set(owner!, await diaryContext(engine, owner!, scope!,
+            matchingHistory(await engine.contextRows(owner!), selectedRevision ?? "", policy.history_scope)));
+          const valid = diaries.get(owner!)!.entries.some(value => value.id === diary.id);
+          status = valid ? "ready" : "needs_rebuild";
+          available = valid && policy.memory_mode === "diary" && policy.history_enabled;
+          statusMessage = !valid ? "来源已被排除或发生变化，当前不带入；旧日记保留供核对，需从有效原文重建。" :
+            available ? "日记来源有效，按当前范围带入上下文；后续整理只追加新日记。" :
+              policy.memory_mode === "diary" ? "日记来源有效；带入历史已关闭，当前不带入上下文。" :
+                "当前未启用日记模式，日记已存档供查看，不带入上下文。";
+          if (valid && policy.memory_mode !== "diary") status = "archived";
+        }
+        views.push({ id, diary_id: diary.id, version: diary.version, text: diary.text,
+          bytes: Buffer.byteLength(diary.text), chars: Array.from(diary.text).length,
+          updated_at: diary.created_at, created_at: diary.created_at,
+          session_id: owner!, session_name: meta?.name ?? owner!, mode: "diary", scope: diary.scope,
+          source_ids: [...diary.source_ids], source_revision: diary.source_revision,
+          covered_messages: diary.source_ids.length, time_range: { ...diary.time_range },
+          ...(diary.model ? { model: diary.model } : {}), status, available, status_message: statusMessage });
+        continue;
+      }
       const mode = checkpoint?.mode ?? (id.startsWith("s_") ? "short" : "long");
       const text = checkpoint !== undefined ? (typeof checkpoint.text === "string" ? checkpoint.text : "")
         : (await boundedRead(await this.file(file!.path), MAX_TEXT_BYTES)).toString("utf8");
       const failed = !!checkpoint && (typeof checkpoint.last_error === "string" || !!checkpoint.retry_at);
-      const policy = contextPolicy(this.sessions.config?.memory ?? {}, meta?.context);
       const scope = policy.history_scope === "session" ? "session" : selectedRevision;
       const sessionKey = owner && scope ? digest(owner + ":" + scope).slice(0, 40) : "";
       const currentScope = !!owner && !!scope && id === (mode === "short" ? "s_" : "p_") + sessionKey;
@@ -893,6 +960,10 @@ export class MemoryAdmin {
           status = text ? "needs_rebuild" : "pending";
           statusMessage = text ? "覆盖范围已变化，需要重建；以下旧正文不会作为当前短期摘要带入。" : "尚无有效正文，等待满足条件后整理。";
         }
+      }
+      if (policy.memory_mode !== "legacy") {
+        available = false; status = "legacy";
+        statusMessage = "旧版摘要，保留供查看；普通模式和日记模式不带入此内容。";
       }
       views.push({ id, text, bytes: Buffer.byteLength(text), chars: Array.from(text).length,
         updated_at: checkpoint?.updated_at ?? file?.updated_at ?? stateFile?.updated_at ?? null,

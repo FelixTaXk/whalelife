@@ -203,6 +203,8 @@ export async function startWeb(config: any, services: any, runtime: any) {
           200,
           await sessions.contextStatus(memoryUrl.searchParams.get("id")),
         );
+      if (req.method === "POST" && memoryUrl.pathname === "/api/memory/diary/retry")
+        return send(200, await sessions.retryDiary((await body(req, 4096)).id));
       if (
         req.method === "POST" &&
         memoryUrl.pathname === "/api/session/context"
@@ -297,10 +299,9 @@ export async function startWeb(config: any, services: any, runtime: any) {
       }
       if (req.url === "/api/model-config/models" && req.method === "POST") {
         const value = await body(req);
-        return send(
-          200,
-          await services.modelConfig.listModels(value.providerId),
-        );
+        const result = await services.modelConfig.listModels(value.providerId);
+        sessions.modelLimits.clear();
+        return send(200, result);
       }
       if (req.url === "/api/model-config/test" && req.method === "POST") {
         const value = await body(req);
@@ -312,11 +313,13 @@ export async function startWeb(config: any, services: any, runtime: any) {
           ),
         );
       }
-      if (req.url === "/api/model-config/models/draft" && req.method === "POST")
-        return send(
-          200,
-          await services.modelConfig.listDraftModels(await body(req)),
-        );
+      if (req.url === "/api/model-config/models/draft" && req.method === "POST") {
+        const result = await services.modelConfig.listDraftModels(await body(req));
+        // Refresh from saved connections on the next context read. Draft metadata
+        // must never become an active model's capacity without saving its config.
+        sessions.modelLimits.clear();
+        return send(200, result);
+      }
       if (req.url === "/api/model-config/probe" && req.method === "POST") {
         return send(
           200,

@@ -11,8 +11,11 @@ import { applyCognitions, cognitionRevision, undoCognition, type CognitionMainte
 import { attribution, collectOrigins, originOf, pluginOrigin, validateAttribution, validateOrigin } from "./provenance.ts";
 import type { DocumentWrite, SessionDocument } from "./plugin-api.ts";
 import { TRANSIENT_REPLY } from "./tool-retention.ts";
+import { diaryRowInScope, validateDiaryEntry, validateDiaryScope, validateDiaryState, validDiarySources,
+  type DiaryEntry, type DiaryFailure } from "./memory-diary-state.ts";
 
 export const charCount = (text: string) => Array.from(text).length;
+export const MAX_DAILY_MEMORY_TOKENS = 10000000;
 export type MemoryReservation = Readonly<{ id: string; day: string; reserved: number }>;
 export function estimateTokens(text: string) {
   const ascii = (text.match(/[\x00-\x7f]/g) || []).length;
@@ -57,6 +60,8 @@ const initial = () => ({
     },
   },
   summaries: {} as Record<string, any>,
+  diaries: [] as DiaryEntry[],
+  diary_failures: {} as Record<string, DiaryFailure>,
   trace: { query: "", selected: [], estimated_tokens: 0 } as any,
 });
 export function validateMemoryState(s: any) {
@@ -75,6 +80,7 @@ export function validateMemoryState(s: any) {
     )
   )
     throw Error("独立记忆损坏或超过100字符，未覆盖原文件");
+  validateDiaryState(s);
   if (
     !s.settings ||
     typeof s.settings.enabled !== "boolean" ||
@@ -90,7 +96,7 @@ export function validateMemoryState(s: any) {
   if (
     s.settings.daily_memory_tokens !== undefined &&
     (!count(s.settings.daily_memory_tokens) ||
-      s.settings.daily_memory_tokens > 200000)
+      s.settings.daily_memory_tokens > MAX_DAILY_MEMORY_TOKENS)
   )
     throw Error("整理预算损坏");
   if (
@@ -325,13 +331,13 @@ export class MemoryEngine {
       await this.memory.saveSessionMeta(id, {});
     return this.memory.serial(async () => {
       const s = await this.state(id);
-      const before = JSON.stringify([s.facts, s.records, s.summaries]);
+      const before = JSON.stringify([s.facts, s.records, s.summaries, s.diaries, s.diary_failures]);
       const result = await fn(s);
       validateMemoryState(s);
       const file = await this.file(id);
       await mkdir(dirname(file), { recursive: true });
       await atomic(file, JSON.stringify(s, null, 2));
-      if (before !== JSON.stringify([s.facts, s.records, s.summaries]))
+      if (before !== JSON.stringify([s.facts, s.records, s.summaries, s.diaries, s.diary_failures]))
         this.memory.notify("memory/updated", { session: id });
       return result;
     });
@@ -354,6 +360,7 @@ export class MemoryEngine {
         s.memberships,
         s.records.map((x) => [x.id, x.status, x.pinned, x.text, x.uncertain, attribution(x), x.context_excluded]),
         Object.entries(s.summaries).map(([key, x]) => [key, x.text, x.mode, attribution(x)]),
+        s.diaries, s.diary_failures,
         await this.memory.readFacts(),
       ]),
     );
@@ -480,8 +487,8 @@ export class MemoryEngine {
       throw Error("记忆设置无效");
     const available = (await this.spaceData()).spaces.map((x: any) => x.id);
     const daily = settings.daily_memory_tokens ?? 20000;
-    if (!Number.isInteger(daily) || daily < 0 || daily > 200000)
-      throw Error("每日整理预算需为0–200000");
+    if (!Number.isInteger(daily) || daily < 0 || daily > MAX_DAILY_MEMORY_TOKENS)
+      throw Error(`每日整理预算需为0–${MAX_DAILY_MEMORY_TOKENS}`);
     if (memberships.some((x) => !available.includes(x)))
       throw Error("共享空间不存在");
     await this.update(id, (s) => {
@@ -894,6 +901,55 @@ export class MemoryEngine {
       s.daily.reserved = Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, s.daily.reserved + actual - ticket.reserved));
     }).finally(() => { this.memoryReservations.delete(ticket.id); });
     return entry.settlement;
+  }
+  /** Text, exact source coverage and source version are committed as one atomic state write. */
+  async commitDiary(id: string, value: DiaryEntry, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const entry = structuredClone(value);
+    validateDiaryEntry(entry);
+    if (entry.session !== id) throw Error("日记不属于当前会话");
+    return this.update(id, async s => {
+      signal?.throwIfAborted();
+      const excluded = excludedInputs(s);
+      const rows = (await this.memory.readSession(id)).filter(row =>
+        !excluded.has(row.id) && !temporaryPlaceholder(row) && diaryRowInScope(row, id, entry.scope));
+      if (!validDiarySources(entry, id, entry.scope, rows)) throw Error("日记来源已变更，请重新读取原文");
+      const sources = new Set(entry.source_ids);
+      const expectedTimes = collectTimes(undefined, rows.filter(row => sources.has(row.id))).time_range;
+      if (["start", "end", "incomplete"].some(key =>
+          expectedTimes[key as keyof typeof expectedTimes] !== entry.time_range[key as keyof typeof entry.time_range]))
+        throw Error("日记来源时间范围不匹配");
+      const diaries = s.diaries ?? [];
+      const duplicate = diaries.find(item => item.id === entry.id);
+      if (duplicate) {
+        if (JSON.stringify(duplicate) === JSON.stringify(entry)) return duplicate;
+        throw Error("日记ID已存在，不能覆盖旧日记");
+      }
+      if (diaries.some(item => validDiarySources(item, id, entry.scope, rows) &&
+          item.source_ids.some(source => sources.has(source))))
+        throw Error("日记来源范围与已有有效日记重叠");
+      signal?.throwIfAborted();
+      s.diaries = [...diaries, entry];
+      return entry;
+    });
+  }
+  async pauseDiary(id: string, scope: string, reason: string) {
+    validateDiaryScope(scope);
+    if (typeof reason !== "string" || !reason.trim() || charCount(reason) > 200)
+      throw Error("日记暂停原因需要1–200字符");
+    return this.update(id, s => {
+      // Keep the first failure and its date until an explicit reset.
+      s.diary_failures ??= {};
+      return s.diary_failures[scope] ??= { reason: reason.trim(), at: new Date().toISOString() };
+    });
+  }
+  async retryDiary(id: string, scope: string) {
+    validateDiaryScope(scope);
+    return this.update(id, s => {
+      const paused = !!s.diary_failures?.[scope];
+      if (s.diary_failures) delete s.diary_failures[scope];
+      return { reset: paused };
+    });
   }
   async summaryState(id: string, key: string, value?: any) {
     safeId(key);

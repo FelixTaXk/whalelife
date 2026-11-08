@@ -198,6 +198,21 @@ const row = (name, label, description, control) =>
   `<div class="setting-row"><div class="setting-description"><label for="setting-${name}">${label}</label>${description ? `<p>${description}</p>` : ""}</div><div class="setting-control">${control}</div></div>`;
 const input = (d, name, extra = "") =>
   `<input id="setting-${name}" name="${name}" value="${e(d[name] ?? "")}" ${extra}>`;
+function contextCapacityMessage(d) {
+  const manual = Number(d.context_window);
+  const configured = Number.isSafeInteger(manual) && manual > 0 && manual <= 10000000;
+  const parts = configured
+    ? [`手动上限：${manual.toLocaleString()} token${d.dirty ? "（保存后生效）" : ""}。`]
+    : [];
+  if (d.capacityLoading) parts.push("正在读取当前模型的服务上限…");
+  else if (d.capacityError) parts.push(`读取失败：${d.capacityError}。可手动填写上下文容量。`);
+  else if (d.capacityResult?.tokens)
+    parts.push(`服务返回：${d.capacityResult.tokens.toLocaleString()} token${configured ? "，当前优先采用手动值" : "（自动）"}。`);
+  else if (d.capacityResult)
+    parts.push("服务未提供此模型的上下文容量，可按服务商文档手动填写。");
+  else if (!configured) parts.push("服务上限尚未读取；未知时不会显示占用百分比。");
+  return parts.join(" ");
+}
 function renderEditor(app, d) {
   const embedding = d.type === "embedding";
   const supported = d.type === "chat" ? d.protocol === "openai-compatible"
@@ -234,7 +249,7 @@ function renderEditor(app, d) {
     ${row("timeout_seconds", "超时时间", "请求最长等待时间，单位：秒。", input(d, "timeout_seconds", 'type="number" required min="1" max="600" step="1"'))}
     ${row("proxy_url", "代理地址", "可选，仅用于此连接。支持 HTTP / HTTPS 代理。", input(d, "proxy_url", 'type="url" placeholder="http://127.0.0.1:7890"'))}
     <h3 class="model-section-heading">当前模型设置</h3>
-    ${d.type === "chat" ? row("context_window", "模型上下文上限", "单位 token。留空时尝试读取服务返回的上限；服务未提供时，可按模型文档填写。此项用于容量显示，不是历史消息条数。", input(d, "context_window", 'type="number" min="1" max="10000000" step="1" placeholder="自动读取 / 手动填写"')) : ""}
+    ${d.type === "chat" ? row("context_window", "模型上下文容量", "一次请求可容纳的总 token，不是单次输出上限。留空使用服务返回的容量；手动填写后优先采用手动值，保存后生效。", `<div class="dimension-input">${input(d, "context_window", 'type="number" min="1" max="10000000" step="1" placeholder="留空自动读取 / 手动填写"')}<button type="button" class="btn tonal" data-fetch-context ${d.protocol === "openai-compatible" && !d.capacityLoading ? "" : "disabled"}>${d.capacityLoading ? "读取中…" : "自动获取"}</button></div><p id="context-capacity-result" class="hint" role="status">${e(contextCapacityMessage(d))}</p>`) : ""}
     ${row("name", "当前模型名称", "用于使用配置中的模型选择；在上方列表切换要编辑的模型。", input(d, "name", 'required maxlength="200" placeholder="例如：百炼向量"'))}
     ${row("enabled", "启用", "允许使用这条模型配置。", `<label class="setting-toggle"><input id="setting-enabled" name="enabled" type="checkbox" ${d.enabled ? "checked" : ""}><span>启用此配置</span></label>`)}
     ${row("model", embedding ? "嵌入模型" : "模型 ID", `服务商提供的实际模型名称，与上方配置名称分开。${embedding ? "例如 text-embedding-v4。" : "请以服务文档中的名称为准。"}`, input(d, "model", `required maxlength="300" placeholder="${e(t?.example || (embedding ? "例如 text-embedding-3-small" : "填写实际模型名称"))}"`))}
@@ -392,6 +407,10 @@ function markDirty(app, form, d) {
   d.version++;
   d.probeMessage = "";
   d.probeError = false;
+  d.capacityResult = null;
+  d.capacityError = "";
+  const capacityOutput = form.querySelector("#context-capacity-result");
+  if (capacityOutput) capacityOutput.textContent = contextCapacityMessage(d);
   form.querySelector("#draft-state").textContent = "有未保存的修改";
   form.querySelector("#connection-save").disabled = false;
   form.querySelector("#connection-result").textContent = "";
@@ -459,6 +478,9 @@ export function bindModels(app) {
   root
     .querySelector("[data-custom-model]")
     ?.addEventListener("click", () => customModel(app, form, d));
+  form
+    .querySelector("[data-fetch-context]")
+    ?.addEventListener("click", () => fetchContextCapacity(app, form, d));
   form.oninput = () => markDirty(app, form, d);
   form.querySelector("[name=template]").onchange = () => {
     const t = templates.find((t) => t.id === form.elements.template.value);
@@ -471,6 +493,8 @@ export function bindModels(app) {
     d.dirty = true;
     d.version++;
     d.probeMessage = "";
+    d.capacityResult = null;
+    d.capacityError = "";
     app.render();
   };
   const protocolInput = form.querySelector("[name=protocol]");
@@ -522,6 +546,48 @@ export function bindModels(app) {
   form
     .querySelector("[data-delete]")
     ?.addEventListener("click", () => deleteConnection(app, d));
+}
+async function fetchContextCapacity(app, form, d) {
+  capture(form, d);
+  const version = d.version;
+  const button = form.querySelector("[data-fetch-context]");
+  const output = form.querySelector("#context-capacity-result");
+  if (!d.model.trim()) {
+    d.capacityError = "请先填写实际模型 ID";
+    output.textContent = contextCapacityMessage(d);
+    return;
+  }
+  button.disabled = true;
+  d.capacityLoading = true;
+  d.capacityError = "";
+  d.capacityResult = null;
+  output.textContent = contextCapacityMessage(d);
+  try {
+    const { provider } = payloadFor(d);
+    const result = await api("/api/model-config/models/draft", { provider });
+    if (app.state.modelDraft !== d || d.version !== version) return;
+    const values = (result.details || [])
+      .filter((model) => model.id === d.model.trim())
+      .map((model) => model.context_window)
+      .filter((value) => Number.isSafeInteger(value) && value > 0 && value <= 10000000);
+    d.capacityResult = { tokens: values.length ? Math.min(...values) : null };
+  } catch (error) {
+    if (app.state.modelDraft !== d || d.version !== version) return;
+    d.capacityError = error.message;
+  } finally {
+    d.capacityLoading = false;
+    button.disabled = d.protocol !== "openai-compatible";
+    if (app.state.modelDraft === d) {
+      const currentForm = app.content.querySelector("#connection-form");
+      const currentButton = currentForm?.querySelector("[data-fetch-context]");
+      const currentOutput = currentForm?.querySelector("#context-capacity-result");
+      if (currentButton) {
+        currentButton.disabled = d.protocol !== "openai-compatible";
+        currentButton.textContent = "自动获取";
+      }
+      if (currentOutput) currentOutput.textContent = contextCapacityMessage(d);
+    }
+  }
 }
 function payloadFor(d) {
   let parameters;

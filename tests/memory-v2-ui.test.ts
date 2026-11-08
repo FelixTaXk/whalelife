@@ -183,7 +183,7 @@ test("knowledge view escapes sources and separates measured cumulative usage fro
   assert.match(html, /含 1 次未报告用量请求/);
   assert.match(
     html,
-    /name="daily_memory_tokens" required min="0" max="200000" step="1" value="20000"/,
+    /name="daily_memory_tokens" required min="0" max="10000000" step="1" value="20000"/,
   );
   assert.match(html, /0 停止自动摘要和认知提炼/);
 });

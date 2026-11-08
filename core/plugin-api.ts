@@ -138,6 +138,9 @@ export type SessionQueuedRun = SessionRun & {
 };
 export type SessionInfo = { id: string; name: string; updatedAt?: string };
 export interface ContextPolicy {
+  memory_mode?: "full" | "diary" | "legacy";
+  compression_trigger_percent?: number;
+  compression_target_percent?: number;
   history_enabled: boolean;
   short_term_days: number;
   short_term_min_messages: number;
@@ -155,6 +158,10 @@ export interface RequestUsage {
   settings_changed?: boolean;
 }
 export interface SessionContext {
+  context_estimate?: { input_tokens: number; reserved_output_tokens: number; total_tokens: number;
+    percent: number | null; source: "estimate" };
+  diary?: { count: number; covered_messages: number; remaining_messages: number; chars: number;
+    invalid: number; enabled: boolean; paused?: { reason: string; at: string }; notice?: string; budget_remaining: number };
   id: string;
   name: string | null;
   persona: string;

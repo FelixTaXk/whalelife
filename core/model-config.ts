@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Logger } from "./logger.ts";
 import { proxyURL, timeoutSeconds, withModelResponse } from "./model-http.ts";
 import type { ModelConnection } from "./model-connection.ts";
+import { modelContextMetadata } from "./model-context.ts";
 
 export const MODEL_TYPES = [
   "chat",
@@ -867,12 +868,7 @@ export class ModelConfig {
         .filter((m: any) => typeof m?.id === "string" && m.id.length <= 300)
         .map((m: any) => ({
           id: m.id,
-          context_window:
-            Number.isSafeInteger(m.context_window) &&
-            m.context_window > 0 &&
-            m.context_window <= 10000000
-              ? m.context_window
-              : null,
+          context_window: modelContextMetadata(m),
         })),
       models: [
         ...new Set<string>(
@@ -908,9 +904,8 @@ export class ModelConfig {
       for (const model of output.models) {
         if (typeof model?.model !== "string" || !model.model.trim() || model.model.length > 300) continue;
         if (Array.isArray(model.capabilities) && !model.capabilities.includes("TR")) continue;
-        const limit = model.model_info?.context_window;
         details.set(model.model, { id: model.model,
-          context_window: Number.isSafeInteger(limit) && limit > 0 && limit <= 10000000 ? limit : null });
+          context_window: modelContextMetadata(model) });
       }
       received += output.models.length;
       if (received >= output.total) return { details: [...details.values()], models: [...details.keys()].sort() };

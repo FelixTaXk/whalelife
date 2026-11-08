@@ -3,6 +3,10 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 export type ContextPolicy = {
+  /** Omitted by old clients; explicit legacy settings keep their historical semantics. */
+  memory_mode?: "full" | "diary" | "legacy";
+  compression_trigger_percent?: number;
+  compression_target_percent?: number;
   history_enabled: boolean;
   short_term_days: number;
   short_term_min_messages: number;
@@ -13,7 +17,13 @@ export type ContextPolicy = {
   history_scope: "persona" | "session";
 };
 export function contextPolicy(config: any, saved: any = {}): ContextPolicy {
+  const legacy = (value: any) => ["recent_lines", "budget_tokens", "include_summary", "long_term_enabled",
+    "short_term_days", "short_term_min_messages"].some(key => value[key] !== undefined);
+  const mode = saved.memory_mode ?? (legacy(saved) ? "legacy" : config.memory_mode ?? (legacy(config) ? "legacy" : "full"));
   return {
+    memory_mode: mode,
+    compression_trigger_percent: saved.compression_trigger_percent ?? config.compression_trigger_percent ?? 80,
+    compression_target_percent: saved.compression_target_percent ?? config.compression_target_percent ?? 50,
     history_enabled: saved.history_enabled ?? config.history_enabled ??
       (saved.recent_lines ?? config.recent_lines) !== 0,
     short_term_days: saved.short_term_days ?? config.short_term_days ?? 7,
@@ -30,19 +40,24 @@ export function validateContext(input: any): ContextPolicy {
   if (input.recent_lines !== undefined && (!Number.isInteger(input.recent_lines) ||
       input.recent_lines < 0 || input.recent_lines > 1000)) throw Error("旧历史条数无效");
   const policy = contextPolicy({}, input);
+  if (!["full", "diary", "legacy"].includes(policy.memory_mode!)) throw Error("记忆模式无效");
+  const trigger = policy.compression_trigger_percent!, target = policy.compression_target_percent!;
+  if (!Number.isFinite(trigger) || trigger < 10 || trigger > 95 ||
+      !Number.isFinite(target) || target < 5 || target >= trigger)
+    throw Error("日记触发比例应为10–95%，压后目标应为5%以上且低于触发比例");
   if (!Number.isInteger(policy.short_term_days) || policy.short_term_days < 1 || policy.short_term_days > 3650)
     throw Error("短期时间窗口应为1–3650天");
   if (!Number.isInteger(policy.short_term_min_messages) || policy.short_term_min_messages < 1 || policy.short_term_min_messages > 10000)
     throw Error("短期保底消息数应为1–10000条");
   if (
-    !Number.isInteger(input.budget_tokens) ||
-    input.budget_tokens < 100 ||
-    input.budget_tokens > 10000000
+    !Number.isInteger(policy.budget_tokens) ||
+    policy.budget_tokens < 100 ||
+    policy.budget_tokens > 10000000
   )
     throw Error("历史上下文预算应为 100–10000000 的整数");
   if (
     typeof input.include_facts !== "boolean" ||
-    typeof input.include_summary !== "boolean" ||
+    (policy.memory_mode === "legacy" && typeof input.include_summary !== "boolean") ||
     typeof policy.history_enabled !== "boolean" ||
     typeof policy.long_term_enabled !== "boolean" ||
     !["persona", "session"].includes(input.history_scope)

@@ -360,7 +360,7 @@ test("daily consolidation reservations persist across restart, cannot overspend 
   const { engine, memory } = await fixture(t);
   const original = (await engine.state("one")).settings;
   assert.equal(original.daily_memory_tokens, 20000);
-  for (const daily_memory_tokens of [-1, 200001, 1.5]) {
+  for (const daily_memory_tokens of [-1, 10000001, 1.5]) {
     await assert.rejects(
       engine.settings("one", { ...original, daily_memory_tokens }, []),
       /预算/,
