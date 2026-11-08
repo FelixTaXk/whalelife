@@ -21,9 +21,9 @@ function fixture() {
     memoryLoadedTab: "knowledge", memoryLoadedSession: "viewed", memoryDetails: page(0),
     knowledgeQuery: "", knowledgeArchived: false, knowledgeOffset: 0, knowledgeLimit: 25,
     knowledgePageKey: JSON.stringify(["viewed", "", false, 25]) };
-  const pagers: any[] = ["prev", "next", "prev", "next"].map(direction => ({ dataset: { knowledgePage: direction }, disabled: false }));
+  const pagers: any[] = ["prev", "next"].map(direction => ({ dataset: { knowledgePage: direction }, disabled: false }));
   const numbers: any[] = [];
-  const makeForms = (name: string) => [0, 1].map(() => {
+  const makeForms = (name: string) => [0].map(() => {
     const input = { value: "", disabled: false }, button = { disabled: false };
     return { input, button, querySelector: (key: string) => key === `[name="${name}"]` ? input : null } as any;
   });
@@ -78,7 +78,7 @@ function mockRead(t: TestContext, getPage: (url: URL) => any | Promise<any> = ur
   return { calls };
 }
 
-test("first load requests a server page, and both pagination bars fetch only the requested knowledge page", async t => {
+test("a single pagination bar below the list fetches only the requested knowledge page", async t => {
   const app = fixture(), pending = deferred<any>();
   const { calls } = mockRead(t, url => Number(url.searchParams.get("offset")) === 25 ? pending.promise : page(0));
   await loadMemory(app);
@@ -87,7 +87,9 @@ test("first load requests a server page, and both pagination bars fetch only the
   assert.deepEqual(Object.fromEntries(first.searchParams), { id: "viewed", query: "", archived: "false", offset: "0", limit: "25" });
   const catalog = app.state.memoryCatalog, context = app.state.memoryContext;
   calls.length = 0;
-  const request = app.pagers[3].onclick();
+  assert.equal((app.html.match(/aria-label="记忆分页"/g) || []).length, 1);
+  assert.ok(app.html.indexOf('aria-label="记忆分页"') > app.html.indexOf('class="memory-table"'));
+  const request = app.pagers[1].onclick();
   assert.equal(app.state.memoryLoading, true);
   assert.ok(app.pagers.every((button: any) => button.disabled));
   app.pagers[1].onclick();
@@ -98,7 +100,7 @@ test("first load requests a server page, and both pagination bars fetch only the
   assert.strictEqual(app.state.memoryCatalog, catalog); assert.strictEqual(app.state.memoryContext, context);
   assert.deepEqual(app.state.memoryDetails.items.map((item: any) => item.text), ["only-this-server-page"]);
   assert.doesNotMatch(app.html, /server-page-0/);
-  assert.equal((app.html.match(/第 2 \/ 4 页 · 共 80 条/g) || []).length, 2);
+  assert.equal((app.html.match(/第 2 \/ 4 页 · 共 80 条/g) || []).length, 1);
   assert.equal(app.state.session, "active");
   calls.length = 0;
   await app.pagers[0].onclick();
@@ -108,15 +110,15 @@ test("first load requests a server page, and both pagination bars fetch only the
 test("pagination shows server totals, disables boundaries and tolerates older responses without totals", () => {
   const app = fixture();
   app.state.memoryDetails = page(50, 51); app.render();
-  assert.equal((app.html.match(/第 3 \/ 3 页 · 共 51 条/g) || []).length, 2);
+  assert.equal((app.html.match(/第 3 \/ 3 页 · 共 51 条/g) || []).length, 1);
   assert.equal(app.pagers[0].disabled, false); assert.equal(app.pagers[1].disabled, true);
   app.state.memoryDetails = { items: [] }; app.render();
-  assert.equal((app.html.match(/第 0 \/ 0 页 · 共 0 条/g) || []).length, 2);
+  assert.equal((app.html.match(/第 0 \/ 0 页 · 共 0 条/g) || []).length, 1);
   assert.ok(app.pagers.every((button: any) => button.disabled));
   app.state.memoryDetails = { items: page(0).items }; app.render();
   assert.match(app.html, /第 1 \/ 1 页 · 共 1 条/); assert.doesNotMatch(app.html, /NaN|undefined/);
   app.state.memoryDetails = page(25); app.state.memoryLoading = true; app.render();
-  assert.equal((app.html.match(/data-knowledge-page="(?:prev|next)"[^>]* disabled/g) || []).length, 4);
+  assert.equal((app.html.match(/data-knowledge-page="(?:prev|next)"[^>]* disabled/g) || []).length, 2);
 });
 
 test("search, archive filter and viewed-session changes reset the page while spaces explicitly request a small first page", async t => {
@@ -195,14 +197,14 @@ test("bounded page buttons and direct jumps request the selected server page and
   const app = fixture(), total = 25000;
   app.state.memoryDetails = page(5000, total); app.state.knowledgeOffset = 5000; app.render();
   const { calls } = mockRead(t, url => page(Number(url.searchParams.get("offset")), total));
-  assert.deepEqual(app.numbers.map((button: any) => Number(button.dataset.knowledgePage)), [1, 200, 201, 202, 1000, 1, 200, 201, 202, 1000]);
-  assert.equal((app.html.match(/aria-current="page"/g) || []).length, 2);
-  assert.equal((app.html.match(/class="memory-page-ellipsis"/g) || []).length, 4);
+  assert.deepEqual(app.numbers.map((button: any) => Number(button.dataset.knowledgePage)), [1, 200, 201, 202, 1000]);
+  assert.equal((app.html.match(/aria-current="page"/g) || []).length, 1);
+  assert.equal((app.html.match(/class="memory-page-ellipsis"/g) || []).length, 2);
   assert.match(app.html, /aria-label="第 1000 页"/);
   await app.numbers.find((button: any) => button.dataset.knowledgePage === "1000").onclick();
   assert.equal(calls.length, 1); assert.equal(calls[0].searchParams.get("offset"), "24975");
-  app.jumps[1].input.value = "357";
-  await app.jumps[1].onsubmit({ preventDefault() {} });
+  app.jumps[0].input.value = "357";
+  await app.jumps[0].onsubmit({ preventDefault() {} });
   assert.equal(calls.length, 2); assert.equal(calls[1].searchParams.get("offset"), "8900");
   assert.ok(app.jumps.every((form: any) => form.input.value === "357"));
   assert.match(app.html, /第 357 \/ 1000 页/);
@@ -215,7 +217,7 @@ test("bounded page buttons and direct jumps request the selected server page and
   assert.ok(calls.every(url => url.pathname === "/api/memory/knowledge"));
 });
 
-test("custom page size is validated, persisted locally, synchronized, and used for subsequent navigation", async t => {
+test("custom page size is validated, persisted locally, and used for subsequent navigation", async t => {
   const app = fixture(), pending = deferred<any>();
   const storage = new Map<string, string>();
   const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -232,8 +234,8 @@ test("custom page size is validated, persisted locally, synchronized, and used f
     await app.sizes[0].onsubmit({ preventDefault() {} });
   }
   assert.equal(calls.length, 0); assert.equal(app.state.knowledgeLimit, 25);
-  app.sizes[1].input.value = "17";
-  const request = app.sizes[1].onsubmit({ preventDefault() {} });
+  app.sizes[0].input.value = "17";
+  const request = app.sizes[0].onsubmit({ preventDefault() {} });
   assert.equal(calls.length, 1);
   assert.deepEqual(Object.fromEntries(calls[0].searchParams), { id: "viewed", query: "", archived: "false", offset: "0", limit: "17" });
   assert.ok(app.controls.every((control: any) => control.disabled));
@@ -272,7 +274,7 @@ test("a late response for an earlier page size cannot overwrite the latest limit
   assert.equal(app.state.knowledgeLimit, 17); assert.equal(app.state.memoryDetails.limit, 17);
   assert.equal(app.state.memoryDetails.items[0].text, "latest-size");
   assert.equal(app.state.memoryLoading, false);
-  assert.equal((app.html.match(/name="limit"[^>]*value="17"/g) || []).length, 2);
+  assert.equal((app.html.match(/name="limit"[^>]*value="17"/g) || []).length, 1);
 });
 
 test("automatic retrieval and usage notes distinguish search, context, diary generation and historical totals", () => {
@@ -282,6 +284,7 @@ test("automatic retrieval and usage notes distinguish search, context, diary gen
   assert.match(app.html, /上次聊天的自动检索/);
   assert.match(app.html, /不是当前搜索结果；检索本身不调用模型/);
   assert.match(app.html, /自动检索与用量/);
+  assert.match(app.html, /插件经历、共享空间记录，或已整理成日记的旧对话细节/);
   assert.match(app.html, /不删除原文，也不按天压缩对话/);
   assert.match(app.html, /默认 800，仅限制额外补充的相关片段，不是完整上下文预算/);
   assert.match(app.html, /仅在触发整理时消耗；关闭自动日记不会生成新日记/);
