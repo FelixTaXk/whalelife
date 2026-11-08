@@ -217,6 +217,10 @@ function words(text: string) {
   tokenCache.set(key, tokens);
   return tokens;
 }
+const newestFirst = (a: any, b: any) => {
+  const at = timestamp(a.ts) ?? -Infinity, bt = timestamp(b.ts) ?? -Infinity;
+  return at === bt ? (a.session.localeCompare(b.session) || a.id.localeCompare(b.id)) : at > bt ? -1 : 1;
+};
 export class MemoryEngine {
   memory: Memory;
   // Reservations are charged durably first. A crash retains that conservative charge.
@@ -638,6 +642,30 @@ export class MemoryEngine {
     const age = Math.max(0, Date.now() - (Date.parse(item.ts) || Date.now()));
     return Math.pow(0.5, age / (86400000 * halfLife));
   }
+  /** Rank candidate references before either bounded recall or inspection-page projection. */
+  private ranked(query: string, candidates: any[], halfLife: number, historical: boolean) {
+    const terms = words(query);
+    const indexed = candidates.map((item) => ({
+      item,
+      terms: words(item.text + " " + JSON.stringify(attribution(item))),
+    }));
+    const frequency = new Map<string, number>();
+    for (const entry of indexed)
+      for (const term of entry.terms)
+        frequency.set(term, (frequency.get(term) || 0) + 1);
+    const scored = indexed.map(({ item, terms: tokens }) => {
+      const hits = terms.filter((term) => tokens.includes(term));
+      const freshness = this.freshness(item, halfLife);
+      const relevance = hits.reduce((sum, term) => sum + Math.log(
+        1 + (indexed.length + 1) / ((frequency.get(term) || 0) + 0.5),
+      ), 0) / Math.sqrt(1 + tokens.length / 40);
+      const score = relevance * (historical ? 1 : 0.2 + 0.8 * freshness) * (item.pinned ? 1.3 : 1);
+      return { item, freshness, score, reason: hits.length
+        ? "命中：" + hits.join("、") + (historical ? "；历史查询" : "；按鲜活度排序")
+        : "无相关证据" };
+    }).filter(entry => terms.length && entry.score > 0);
+    return { terms, scored };
+  }
   async search(
     id: string,
     query: string,
@@ -652,9 +680,7 @@ export class MemoryEngine {
   ) {
     if (typeof query !== "string" || query.length > 16000)
       throw Error("检索文字无效");
-    const s = await this.state(id),
-      terms = words(query),
-      all = await this.visible(id);
+    const s = await this.state(id), all = await this.visible(id);
     if (!opts.manual && !s.settings.enabled)
       return {
         items: [],
@@ -681,48 +707,12 @@ export class MemoryEngine {
           x.persona_revision === opts.revision) &&
         !(opts.exclude || []).some((text) => text === x.text),
     );
-    const indexed = candidates.map((item) => ({
-      item,
-      terms: words(item.text + " " + JSON.stringify(attribution(item))),
-    }));
-    const frequency = new Map<string, number>();
-    for (const entry of indexed)
-      for (const term of entry.terms)
-        frequency.set(term, (frequency.get(term) || 0) + 1);
-    const scored = indexed
-      .map(({ item, terms: tokens }) => {
-        const hits = terms.filter((t) => tokens.includes(t));
-        const fresh = this.freshness(item, s.settings.half_life_days);
-        const relevance =
-          hits.reduce(
-            (sum, t) =>
-              sum +
-              Math.log(
-                1 + (indexed.length + 1) / ((frequency.get(t) || 0) + 0.5),
-              ),
-            0,
-          ) / Math.sqrt(1 + tokens.length / 40);
-        const score =
-          relevance *
-          (historical ? 1 : 0.2 + 0.8 * fresh) *
-          (item.pinned ? 1.3 : 1);
-        return {
-          ...item,
-          freshness: fresh,
-          score,
-          reason: hits.length
-            ? "命中：" +
-              hits.join("、") +
-              (historical ? "；历史查询" : "；按鲜活度排序")
-            : "无相关证据",
-        };
-      })
-      .filter((x) => terms.length && x.score > 0)
-      .sort((a, b) => b.score - a.score);
+    const { terms, scored } = this.ranked(query, candidates, s.settings.half_life_days, !!historical);
+    scored.sort((a, b) => b.score - a.score);
     let budget = Math.min(opts.budget ?? s.settings.recall_tokens, 4000),
       used = 0;
     const selected: any[] = [];
-    for (const item of scored) {
+    for (const { item, ...ranking } of scored) {
       if (selected.length >= 6) break;
       const positions = terms
         .map((term) => item.text.toLowerCase().indexOf(term))
@@ -744,7 +734,7 @@ export class MemoryEngine {
       };
       const size = estimateTokens(JSON.stringify(snippet));
       if (used + size > budget) continue;
-      selected.push({ ...item, text: snippet.text });
+      selected.push({ ...item, ...ranking, text: snippet.text });
       used += size;
     }
     const trace = {
@@ -764,24 +754,40 @@ export class MemoryEngine {
       });
     return { items: selected, trace };
   }
-  async inspect(id: string, query = "", archived = false) {
+  async inspect(id: string, query = "", archived = false, page?: { offset?: number; limit?: number }) {
+    let pagination: { total: number; offset: number; limit: number } | undefined;
+    if (page !== undefined) {
+      if (!page || typeof page !== "object" || Array.isArray(page)) throw Error("检索分页参数无效");
+      const offset = page.offset === undefined ? 0 : page.offset;
+      const limit = page.limit === undefined ? 25 : page.limit;
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+        throw Error("检索分页需要非负安全整数offset及1–100的整数limit");
+      if (typeof query !== "string" || query.length > 16000) throw Error("检索文字无效");
+      pagination = { total: 0, offset, limit };
+    }
     const s = await this.state(id);
-    const items = query
-      ? (await this.search(id, query, { manual: true, budget: 4000, archived }))
-          .items
-      : (await this.visible(id))
-          .filter((x) => archived || x.status === "active")
-          .sort((a, b) => {
-            const at = timestamp(a.ts) ?? -Infinity, bt = timestamp(b.ts) ?? -Infinity;
-            return at === bt ? (a.session.localeCompare(b.session) || a.id.localeCompare(b.id)) : at > bt ? -1 : 1;
-          })
-          .slice(0, 100)
-          .map((x) => ({
-            ...x,
-            freshness: this.freshness(x, s.settings.half_life_days),
-          }));
+    let items: any[];
+    if (pagination) {
+      const candidates = (await this.visible(id)).filter(item => archived || item.status === "active");
+      const ranked = query ? this.ranked(query, candidates, s.settings.half_life_days, true).scored
+        .sort((a, b) => b.score - a.score || newestFirst(a.item, b.item)) : undefined;
+      const ordered = ranked ?? candidates.sort(newestFirst);
+      pagination.total = ordered.length;
+      if (pagination.offset >= pagination.total)
+        pagination.offset = pagination.total ? Math.floor((pagination.total - 1) / pagination.limit) * pagination.limit : 0;
+      const selected = ordered.slice(pagination.offset, pagination.offset + pagination.limit);
+      items = ranked ? selected.map(({ item, ...ranking }) => ({ ...item, ...ranking }))
+        : selected.map(item => ({ ...item, freshness: this.freshness(item, s.settings.half_life_days) }));
+    } else {
+      items = query
+        ? (await this.search(id, query, { manual: true, budget: 4000, archived })).items
+        : (await this.visible(id)).filter(item => archived || item.status === "active")
+            .sort(newestFirst).slice(0, 100)
+            .map(item => ({ ...item, freshness: this.freshness(item, s.settings.half_life_days) }));
+    }
     return {
       items: items.map((x) => ({ ...x, text: cut(x.text, 1500) })),
+      ...pagination,
       trace: s.trace,
       usage: s.usage,
       settings: s.settings,

@@ -164,6 +164,10 @@ export async function startWeb(config: any, services: any, runtime: any) {
               memoryUrl.searchParams.get("id"),
               memoryUrl.searchParams.get("query") || "",
               memoryUrl.searchParams.get("archived") === "true",
+              {
+                offset: Number(memoryUrl.searchParams.get("offset") ?? "0"),
+                limit: Number(memoryUrl.searchParams.get("limit") ?? "25"),
+              },
             ),
           );
         if (req.method === "POST") {

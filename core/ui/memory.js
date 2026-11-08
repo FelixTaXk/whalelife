@@ -27,14 +27,32 @@ const tabs = [
   ["summaries", "日记与摘要"],
   ["backups", "备份与恢复"],
 ];
+const KNOWLEDGE_PAGE_SIZE = 25;
+const knowledgeKey = (state, session) => JSON.stringify([session, state.knowledgeQuery || "", !!state.knowledgeArchived]);
+function knowledgePage(data, requestedOffset = 0) {
+  const offset = Number.isSafeInteger(data?.offset) && data.offset >= 0 ? data.offset : requestedOffset;
+  const limit = Number.isSafeInteger(data?.limit) && data.limit > 0 ? data.limit : KNOWLEDGE_PAGE_SIZE;
+  const total = Number.isSafeInteger(data?.total) && data.total >= 0 ? data.total : offset + (data?.items?.length || 0);
+  return { offset, limit, total };
+}
+function disableKnowledgePaging(app) {
+  app.content?.querySelectorAll("[data-knowledge-page]").forEach(button => { button.disabled = true; });
+}
 
-export async function loadMemory(app) {
+export async function loadMemory(app, { knowledgeOnly = false } = {}) {
   const tab = app.state.memoryTab || "facts";
   const session = app.state.memorySession ||= app.state.session;
+  const key = knowledgeKey(app.state, session);
+  if (app.state.knowledgePageKey !== key) app.state.knowledgeOffset = 0;
+  app.state.knowledgePageKey = key;
+  const offset = app.state.knowledgeOffset || 0;
+  const pageOnly = knowledgeOnly && tab === "knowledge" &&
+    app.state.memoryLoadedTab === tab && app.state.memoryLoadedSession === session;
   const request = (app.state.memoryRequest =
     (app.state.memoryRequest || 0) + 1);
   app.state.memoryLoading = true;
   app.state.memoryError = "";
+  disableKnowledgePaging(app);
   try {
     const query = new URLSearchParams({
       search: app.state.memorySearch || "",
@@ -42,7 +60,7 @@ export async function loadMemory(app) {
       limit: "25",
     });
     const [catalog, details, context] = await Promise.all([
-      api("/api/memory?" + query),
+      pageOnly ? Promise.resolve(app.state.memoryCatalog) : api("/api/memory?" + query),
       tab === "sessions"
         ? Promise.resolve(null)
         : tab === "local-facts"
@@ -57,18 +75,22 @@ export async function loadMemory(app) {
                     archived: String(
                       tab === "knowledge" && !!app.state.knowledgeArchived,
                     ),
+                    offset: String(tab === "knowledge" ? offset : 0),
+                    limit: String(KNOWLEDGE_PAGE_SIZE),
                   }),
               )
             : api("/api/memory/" + tab),
-      api(
+      pageOnly ? Promise.resolve(app.state.memoryContext) : api(
         "/api/session/context?id=" + encodeURIComponent(session),
       ).catch((error) => ({ error: error.message })),
     ]);
-    if (request !== app.state.memoryRequest || session !== viewedSession(app.state))
+    if (request !== app.state.memoryRequest || session !== viewedSession(app.state) ||
+        tab !== (app.state.memoryTab || "facts") || (tab === "knowledge" && key !== knowledgeKey(app.state, session)))
       return;
     app.state.memoryCatalog = catalog;
     app.state.memoryContext = context;
-    app.state.memoryDetails = details;
+    app.state.memoryDetails = tab === "knowledge" ? { ...details, ...knowledgePage(details, offset) } : details;
+    if (tab === "knowledge") app.state.knowledgeOffset = app.state.memoryDetails.offset;
     app.state.memoryLoadedTab = tab;
     app.state.memoryLoadedSession = session;
     if (tab === "local-facts") {
@@ -87,7 +109,7 @@ export async function loadMemory(app) {
       app.state.memoryFactsRevision = details.revision;
     }
   } catch (error) {
-    if (request === app.state.memoryRequest)
+    if (request === app.state.memoryRequest && session === viewedSession(app.state) && tab === (app.state.memoryTab || "facts"))
       app.state.memoryError = error.message;
   } finally {
     if (request === app.state.memoryRequest) {
@@ -179,6 +201,11 @@ function sourceLabel(source) {
     ? source
     : source?.plugin || source?.type || "未记录";
 }
+function renderKnowledgePaging(s, data) {
+  const { total, offset, limit } = knowledgePage(data);
+  const pages = Math.ceil(total / limit), current = total ? Math.floor(offset / limit) + 1 : 0;
+  return `<div class="row memory-actions" aria-label="记忆分页"><small>第 ${current} / ${pages} 页 · 共 ${total} 条</small><div class="spacer"></div><button class="btn small" type="button" data-knowledge-page="prev" ${s.memoryLoading || offset === 0 ? "disabled" : ""}>上一页</button><button class="btn small" type="button" data-knowledge-page="next" ${s.memoryLoading || offset + limit >= total ? "disabled" : ""}>下一页</button></div>`;
+}
 function renderKnowledge(s, data) {
   const usage = data.usage || {},
     settings = data.settings || {};
@@ -197,7 +224,7 @@ function renderKnowledge(s, data) {
     review: "待复核",
     invalid: "已失效",
   };
-  return `<h2>所选档案的记忆</h2><p class="muted">检索本会话及已加入的共享空间。普通经历会随时间淡忘；归档后不再自动召回，原文仍保留。</p><form id="knowledge-search-form" class="row memory-knowledge-search"><input name="query" type="search" aria-label="搜索记忆" placeholder="输入关键词、名称或旧事" value="${e(s.knowledgeQuery || "")}"><label><input type="checkbox" name="archived" ${s.knowledgeArchived ? "checked" : ""}>包含已归档、已替代与待复核</label><button class="btn" type="submit">搜索</button></form><div class="memory-table">${
+  return `<h2>所选档案的记忆</h2><p class="muted">检索本会话及已加入的共享空间。普通经历会随时间淡忘；归档后不再自动召回，原文仍保留。</p><form id="knowledge-search-form" class="row memory-knowledge-search"><input name="query" type="search" aria-label="搜索记忆" placeholder="输入关键词、名称或旧事" value="${e(s.knowledgeQuery || "")}"><label><input type="checkbox" name="archived" ${s.knowledgeArchived ? "checked" : ""}>包含已归档、已替代与待复核</label><button class="btn" type="submit">搜索</button></form>${renderKnowledgePaging(s, data)}<div class="memory-table">${
     (data.items || [])
       .map((item) => {
         const archived = item.status === "archived";
@@ -222,7 +249,7 @@ function renderKnowledge(s, data) {
       })
       .join("") ||
     '<p class="empty">暂无匹配记忆。可以调整关键词；没有相关内容时不会强行带入。</p>'
-  }</div>${data.trace ? `<details class="memory-recall-trace"><summary>最近召回记录</summary><p class="muted">查询：${e(data.trace.query || "（无）")} · 选中 ${data.trace.selected?.length || 0} 条 · 估算 ${Number(data.trace.estimated_tokens || 0).toLocaleString()} tokens</p></details>` : ""}<details class="memory-settings"><summary>筛选、淡忘与用量</summary><form id="memory-settings-form"><div class="context-fields"><label>普通经历半衰期（天）<input type="number" name="half_life_days" required min="1" max="3650" value="${e(settings.half_life_days ?? 30)}"></label><label>自动召回预算（估算 token）<input type="number" name="recall_tokens" required min="0" max="4000" value="${e(settings.recall_tokens ?? 800)}"></label><label>每日记忆整理预算（估算 token）<input type="number" name="daily_memory_tokens" required min="0" max="10000000" step="1" value="${e(settings.daily_memory_tokens ?? 20000)}"><small>0 停止后续自动整理；已有有效日记和记忆仍可使用。大上下文日记的单次请求也计入此额度，可按估算输入与输出提高额度，保存后生效。</small></label></div><div class="row memory-actions"><label><input type="checkbox" name="enabled" ${settings.enabled !== false ? "checked" : ""}>启用自动记忆召回</label><div class="spacer"></div><button class="btn primary small" type="submit">保存记忆设置</button></div></form><div class="memory-usage"><p>聊天累计：${e(usageText(usage.chat))}</p><p>记忆整理累计：${e(usageText(usage.memory))}</p><small class="muted">累计从启用新版记忆系统后开始，按服务返回用量统计；与上方单次上下文占用分开，未报告用量的请求无法计入准确 token。</small></div></details>`;
+  }</div>${renderKnowledgePaging(s, data)}${data.trace ? `<details class="memory-recall-trace"><summary>最近召回记录</summary><p class="muted">查询：${e(data.trace.query || "（无）")} · 选中 ${data.trace.selected?.length || 0} 条 · 估算 ${Number(data.trace.estimated_tokens || 0).toLocaleString()} tokens</p></details>` : ""}<details class="memory-settings"><summary>筛选、淡忘与用量</summary><form id="memory-settings-form"><div class="context-fields"><label>普通经历半衰期（天）<input type="number" name="half_life_days" required min="1" max="3650" value="${e(settings.half_life_days ?? 30)}"></label><label>自动召回预算（估算 token）<input type="number" name="recall_tokens" required min="0" max="4000" value="${e(settings.recall_tokens ?? 800)}"></label><label>每日记忆整理预算（估算 token）<input type="number" name="daily_memory_tokens" required min="0" max="10000000" step="1" value="${e(settings.daily_memory_tokens ?? 20000)}"><small>0 停止后续自动整理；已有有效日记和记忆仍可使用。大上下文日记的单次请求也计入此额度，可按估算输入与输出提高额度，保存后生效。</small></label></div><div class="row memory-actions"><label><input type="checkbox" name="enabled" ${settings.enabled !== false ? "checked" : ""}>启用自动记忆召回</label><div class="spacer"></div><button class="btn primary small" type="submit">保存记忆设置</button></div></form><div class="memory-usage"><p>聊天累计：${e(usageText(usage.chat))}</p><p>记忆整理累计：${e(usageText(usage.memory))}</p><small class="muted">累计从启用新版记忆系统后开始，按服务返回用量统计；与上方单次上下文占用分开，未报告用量的请求无法计入准确 token。</small></div></details>`;
 }
 function renderSpaces(s, data) {
   const joined = new Set(joinedSpaces(data).map((space) => space.id));
@@ -293,14 +320,31 @@ export function bindMemory(app) {
     };
   }
   const knowledgeSearch = root.querySelector("#knowledge-search-form");
-  if (knowledgeSearch)
-    knowledgeSearch.onsubmit = (event) => {
-      event.preventDefault();
+  if (knowledgeSearch) {
+    const search = (event) => {
+      event?.preventDefault();
       const data = new FormData(knowledgeSearch);
       s.knowledgeQuery = data.get("query");
       s.knowledgeArchived = data.has("archived");
-      loadMemory(app);
+      s.knowledgeOffset = 0;
+      return loadMemory(app, { knowledgeOnly: true });
     };
+    knowledgeSearch.onsubmit = search;
+    const archived = knowledgeSearch.querySelector?.('[name="archived"]');
+    if (archived) archived.onchange = search;
+  }
+  const loadedKnowledge = s.memoryDetails;
+  root.querySelectorAll("[data-knowledge-page]").forEach(button => {
+    const { offset, limit, total } = knowledgePage(loadedKnowledge);
+    const next = button.dataset.knowledgePage === "next";
+    button.disabled = !!s.memoryLoading || (next ? offset + limit >= total : offset === 0);
+    button.onclick = () => {
+      if (button.disabled || s.memoryLoading || loadedSession !== viewedSession(s) ||
+          s.memoryDetails !== loadedKnowledge || (s.memoryTab || "facts") !== "knowledge") return;
+      s.knowledgeOffset = next ? offset + KNOWLEDGE_PAGE_SIZE : Math.max(0, offset - KNOWLEDGE_PAGE_SIZE);
+      return loadMemory(app, { knowledgeOnly: true });
+    };
+  });
   root.querySelectorAll("[data-knowledge-action]").forEach((button) => {
     button.onclick = async () => {
       button.disabled = true;
@@ -311,7 +355,8 @@ export function bindMemory(app) {
           record_id: button.dataset.recordId,
           action: button.dataset.knowledgeAction,
         });
-        await loadMemory(app);
+        if (loadedSession === viewedSession(s) && s.memoryTab === "knowledge")
+          await loadMemory(app, { knowledgeOnly: true });
         app.toast("记忆已更新");
       } catch (error) {
         app.toast(error.message, true);
