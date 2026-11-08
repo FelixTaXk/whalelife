@@ -63,7 +63,7 @@ test("context percentage leads with its estimate source while measured usage rem
   assert.match(detail, /<strong>80.00% · 当前估算<\/strong>/);
   assert.match(detail, /输入 6,500 \+ 预留输出 1,500 = 8,000 tokens/);
   assert.match(detail, /最近请求实测：输入 3,000 \+ 输出 500 = 3,500 tokens/);
-  assert.match(compact, />上下文 80.00% · 当前估算<\/span>/);
+  assert.match(compact, />上下文 80.00% · 当前估算 · 缓存未报告 · 价格未知<\/span>/);
   assert.doesNotMatch(compact, /<progress|<form|<p>|<details/);
   value.model.context_window = null as any;
   const unknown = renderContextMeter(value), compactUnknown = renderContextMeter(value, true);

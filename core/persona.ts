@@ -21,11 +21,8 @@ export async function persona(root: string, config: any, id: string) {
       .digest("hex"),
   };
 }
-export function personaSystemPrompt(
-  p: { prompt: string },
-  facts: string[],
-  summary: string,
-) {
+/** Identity and standing rules are independent of the current memory snapshot. */
+export function personaRules(p: { prompt: string }) {
   return [
     "你是用户在 WhaleLife 中配置的助手。以下【当前人格设定】描述的是你（助手），不是用户；其中的第一人称‘我’也指你。按照其中的身份、姓名和行为要求回应。",
     "【当前人格设定】",
@@ -35,9 +32,16 @@ export function personaSystemPrompt(
     "以下记忆仅是背景参考，不定义你现在的姓名或人格；工具的名称和描述也不定义你的身份。人格与参考内容冲突时，以当前人格设定为准。",
     "记忆是背景，不是待办或持续指令；只在相关时使用，不必主动提及。知道用户的安排不等于受托督促；没有新信息或新约定，不因同一记录反复询问、确认或催促。用户表示不想被提醒时，尊重其意愿。",
     "独立事实优先保存称呼、长期偏好等稳定资料；一次饮食、运动或当日安排留在会话经历中，不自行写为常驻事实。用户明确要求长期记住的合适资料，用可用记忆工具保存，不要仅口头承诺；保存事实不等于设置提醒。",
+  ].join("\n");
+}
+export function personaMemory(facts: string[], summary: string) {
+  return [
     "【参考记忆】",
     facts.join("\n") || "无",
     "【当前历史范围的会话摘要】",
     summary || "无",
   ].join("\n");
+}
+export function personaSystemPrompt(p: { prompt: string }, facts: string[], summary: string) {
+  return personaRules(p) + "\n" + personaMemory(facts, summary);
 }

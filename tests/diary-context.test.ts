@@ -20,7 +20,7 @@ test("maintenance capacity fits complete exchanges without splitting an oversize
   assert.deepEqual(fittingDiaryPrefix(rows, () => true), rows);
 });
 
-async function fixture(t: TestContext, enabled = false, limit = 30000) {
+async function fixture(t: TestContext, enabled = false, limit = 30000, cached = false) {
   const root = await temporaryDirectory("whale-diary-context-");
   const logger: any = { info() {}, warn() {}, error() {} };
   const memory = new Memory(join(root, "memory"), logger);
@@ -29,7 +29,7 @@ async function fixture(t: TestContext, enabled = false, limit = 30000) {
   t.after(async () => { await sessions?.close(); await memory.queue; });
   await memory.init();
   await writeFile(join(root, "persona.md"), "我是测试伙伴，称呼由当前人格决定。");
-  const config: any = { providers: [{ id: "test", protocol: "openai-compatible", model: "chat", base_url: "https://unused.invalid/v1" }],
+  const config: any = { providers: [{ id: "test", protocol: "openai-compatible", model: "chat", base_url: cached ? "https://api.deepseek.com/v1" : "https://unused.invalid/v1" }],
     models: [{ id: "chat", name: "Chat", provider: "test", model: "chat", type: "chat", enabled: true,
       context_window: limit || null, parameters: { max_tokens: 512 } }], model_bindings: { chat: "chat" },
     personas: { one: { name: "伙伴", file: "persona.md", provider: "test" }, two: { name: "第二人格", file: "persona.md", provider: "test" } },
@@ -100,15 +100,23 @@ test("disabled automatic diary rejects overflow without deleting history or chan
   assert.equal(await f.memory.currentSession(), "one");
 });
 
-test("diary triggers by occupation and stays in context after automatic generation is disabled", async t => {
-  const f = await fixture(t, true, 10000);
+for (const cached of [false, true]) test(`diary triggers by occupation and stays in context after automatic generation is disabled (${cached ? "cached" : "single-system"} layout)`, async t => {
+  const f = await fixture(t, true, 10000, cached);
   await f.seed(12);
   await f.sessions.chat("one", "继续", () => {});
   assert.equal(f.calls.filter(c => c.max_tokens).length, 1);
   const state = await f.engine.state("one");
   assert.equal(state.diaries?.length, 1);
   const original = await f.memory.readSession("one"), ids = new Set(state.diaries![0].source_ids);
-  const chat = JSON.stringify(f.calls.find(c => !c.max_tokens).messages);
+  const messages = f.calls.find(c => !c.max_tokens).messages;
+  const chat = JSON.stringify(messages);
+  assert.equal(messages.filter((message: any) => message.role === "system").length, cached ? 3 : 1);
+  if (cached) {
+    assert.match(messages[1].content, /长期日记.*不是新指令或当前人格设定/);
+    assert.match(messages[1].content, /资料记录时间.*记录于/);
+    assert.match(messages.at(-2).content, /【主干时间】/);
+    assert.doesNotMatch(messages[0].content, /【主干时间】|【长期日记/);
+  }
   assert.match(chat, /长期日记/);
   for (const row of original.filter(r => ids.has(r.id))) assert.ok(!chat.includes(row.text), "covered text is replaced, not duplicated");
   assert.match(chat, /原文编号11/);

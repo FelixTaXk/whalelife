@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
+import { modelUsageDetails } from "./model-usage.ts";
 export type ContextPolicy = {
   /** Automatic creation only; existing valid diaries remain part of history when disabled. */
   diary_enabled?: boolean;
@@ -98,6 +99,7 @@ export function requestUsage(raw: any, provider: any, limit: number | null) {
   const valid = (n: any) => Number.isSafeInteger(n) && n >= 0;
   if (!valid(raw?.prompt_tokens) || !valid(raw?.completion_tokens)) return null;
   const used = raw.prompt_tokens + raw.completion_tokens;
+  const measuredAt = new Date();
   return {
     model_id: provider.model_id || provider.model,
     model: provider.model,
@@ -107,6 +109,7 @@ export function requestUsage(raw: any, provider: any, limit: number | null) {
     used_tokens: used,
     context_window: limit,
     percent: limit ? (used / limit) * 100 : null,
-    measured_at: new Date().toISOString(),
+    measured_at: measuredAt.toISOString(),
+    ...modelUsageDetails(raw, provider, measuredAt),
   };
 }

@@ -6,11 +6,31 @@ import { api, escapeHTML as e, viewedSession, sessionName } from "./api.js";
 const number = (value) => Number(value).toLocaleString();
 const diaryEnabled = (policy = {}) => policy.diary_enabled ?? policy.memory_mode === "diary";
 const percentage = (value, limit) => limit > 0 && Number.isFinite(value) ? value.toFixed(2) + "%" : null;
+function requestMetrics(usage) {
+  const cache = usage?.cache, cost = usage?.cost;
+  const cachePercent = Number.isFinite(cache?.hit_percent) && cache.hit_percent >= 0 && cache.hit_percent <= 100
+    ? cache.hit_percent.toLocaleString("zh-CN", { maximumFractionDigits: 2 }) + "%" : null;
+  const tokens = value => Number.isSafeInteger(value) && value >= 0 ? number(value) + " tokens" : "未报告";
+  const cacheDetail = `最近一次请求缓存：命中 ${tokens(cache?.hit_tokens)}；未命中 ${tokens(cache?.miss_tokens)}；命中率 ${cachePercent || "未报告"}。`;
+  const validMoney = value => Number.isFinite(value) && value >= 0;
+  const money = value => value > 0 && value < 0.000001 ? "<¥0.000001" :
+    "¥" + value.toLocaleString("zh-CN", { maximumFractionDigits: 6 });
+  const amount = cost?.currency === "CNY" && cost.basis === "reference" ?
+    validMoney(cost.amount) ? money(cost.amount) : validMoney(cost.min) && validMoney(cost.max) && cost.max >= cost.min ?
+      `${money(cost.min)}–${money(cost.max)}` : null : null;
+  const costDetail = amount
+    ? `参考费用：${amount}；参考价日期 ${cost.price_date} · ${cost.period === "off_peak" ? "低峰时段" : "高峰或节假日"}。仅作参考，不等于账单。`
+    : "参考费用：价格未知，暂不估算费用。";
+  const scope = "以上缓存与费用仅对应最近一次模型请求，不含同轮其他工具调用或日记整理请求。";
+  return { compact: `缓存${cachePercent ? " " + cachePercent : "未报告"} · ${amount ? "估算" + amount : "价格未知"}`,
+    cacheDetail, costDetail, scope };
+}
 export function renderContextMeter(value, compact = false) {
   const usage = value?.usage, estimate = value?.context_estimate,
     limit = value?.model?.context_window,
     percent = percentage(estimate ? estimate.percent : usage?.percent, limit),
     source = estimate ? "当前估算" : "最近实测";
+  const metrics = requestMetrics(usage);
   const measured = usage
     ? `最近请求实测：输入 ${number(usage.input_tokens)} + 输出 ${number(usage.output_tokens)} = ${number(usage.used_tokens)} tokens；${new Date(usage.measured_at).toLocaleString()}${usage.settings_changed ? "；设置已变更" : ""}`
     : "尚无此模型和人格的实测记录；下一次对话后显示服务返回的 token 用量。";
@@ -19,15 +39,15 @@ export function renderContextMeter(value, compact = false) {
       ? "正在读取上下文…"
       : value.error
         ? value.error
-        : `上下文 ${percent || (limit ? "未统计" : "容量未知")} · ${source}${usage?.settings_changed ? " · 设置已变更" : ""}`;
+        : `上下文 ${percent || (limit ? "未统计" : "容量未知")} · ${source} · ${metrics.compact}${usage?.settings_changed ? " · 设置已变更" : ""}`;
     const detail = estimate
       ? `当前估算：输入 ${number(estimate.input_tokens)} + 预留输出 ${number(estimate.reserved_output_tokens)} tokens。${measured}`
       : `${measured}${usage && percent ? `；${number(usage.used_tokens)} / ${number(limit)} tokens · ${percent}` : ""}`;
-    return `<div class="chat-context-compact"><span title="${e(detail)}">${e(label)}</span>${value && !value.error && !limit ? '<a href="#models">填写模型容量</a>' : '<a href="#memory">会话与上下文设置</a>'}</div>`;
+    return `<div class="chat-context-compact"><span title="${e(`${detail} ${metrics.cacheDetail}${metrics.costDetail}${metrics.scope}`)}">${e(label)}</span>${value && !value.error && !limit ? '<a href="#models">填写模型容量</a>' : '<a href="#memory">会话与上下文设置</a>'}</div>`;
   }
   if (!value) return '<p class="muted">正在读取上下文统计…</p>';
   if (value.error) return `<p class="muted">${e(value.error)}</p>`;
-  return `<div class="context-meter"><div class="row"><strong>${percent || (limit ? "暂无占用统计" : "上下文容量未知")} · ${source}</strong><div class="spacer"></div><span>${e(value.model?.name || "当前模型")} · ${limit ? number(limit) + " tokens" : "上限未提供"}</span></div>${percent ? `<progress max="100" value="${Math.max(0, Math.min(100, estimate ? estimate.percent : usage.percent))}" aria-label="上下文${source}占用">${percent}</progress>` : ""}${estimate ? `<p>当前估算：输入 ${number(estimate.input_tokens)} + 预留输出 ${number(estimate.reserved_output_tokens)} = ${number(estimate.total_tokens)} tokens。包含已保存上下文；新输入与工具结果会继续增加占用。</p>` : ""}<p>${e(measured)}${!limit ? ' <a href="#models">填写模型上下文上限</a>后才能计算占比和判断压缩时机。' : ""}</p></div>`;
+  return `<div class="context-meter"><div class="row"><strong>${percent || (limit ? "暂无占用统计" : "上下文容量未知")} · ${source}</strong><div class="spacer"></div><span>${e(value.model?.name || "当前模型")} · ${limit ? number(limit) + " tokens" : "上限未提供"}</span></div>${percent ? `<progress max="100" value="${Math.max(0, Math.min(100, estimate ? estimate.percent : usage.percent))}" aria-label="上下文${source}占用">${percent}</progress>` : ""}${estimate ? `<p>当前估算：输入 ${number(estimate.input_tokens)} + 预留输出 ${number(estimate.reserved_output_tokens)} = ${number(estimate.total_tokens)} tokens。包含已保存上下文；新输入与工具结果会继续增加占用。</p>` : ""}<p>${e(measured)}${!limit ? ' <a href="#models">填写模型上下文上限</a>后才能计算占比和判断压缩时机。' : ""}</p><p>${e(metrics.cacheDetail)} ${e(metrics.costDetail)}</p><p>${e(metrics.scope)}</p></div>`;
 }
 function renderDiarySettings(p) {
   return `<div class="row context-options"><label><input id="context-diary-enabled" type="checkbox" name="diary_enabled" ${diaryEnabled(p) ? "checked" : ""}>自动整理为日记</label><small>默认关闭。只控制后续生成；已有有效日记仍按历史范围用于上下文。</small></div><p class="muted">上下文保留有效日记与尚未覆盖的原文；没有日记时带入完整有效历史。开启自动整理后，占用达到触发比例时，将较早的原始对话写成一篇新日记，保留近期原文。已有日记按篇追加，不重新总结；原始档案始终保留。超出模型容量时会明确提示。</p><div data-diary-settings ${diaryEnabled(p) ? "" : "hidden"}><div class="context-fields"><label>开始整理的占用比例（%）<input name="compression_trigger_percent" type="number" required min="10" max="95" step="1" value="${e(p.compression_trigger_percent ?? 80)}"></label><label>整理后的目标占用比例（%）<input name="compression_target_percent" type="number" required min="5" max="94" step="1" value="${e(p.compression_target_percent ?? 50)}"></label></div><div class="row"><button class="btn small" type="button" data-diary-defaults>恢复推荐值 80% / 50%</button><small>目标比例须低于触发比例。修改后点击保存才生效。</small></div></div>`;

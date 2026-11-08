@@ -17,7 +17,7 @@ import { TRANSIENT_REPLY, type ToolTurn } from "./tool-retention.ts";
 import type { TurnInput } from "./turn-input.ts";
 import { resolveModelContext } from "./model-context.ts";
 import { diaryContext, diaryRequestPlan, writeDiary } from "./memory-diary.ts";
-import { contextSystem, diaryPrefix, fittingDiaryPrefix, historyEntry, recalledMaterial } from "./context-material.ts";
+import { contextFrame, diaryPrefix, fittingDiaryPrefix, historyEntry, recalledMaterial, supportsContextPrefix } from "./context-material.ts";
 import {
   contextPolicy,
   validateContext,
@@ -144,13 +144,14 @@ export class Sessions {
       revision: policy.history_scope === "persona" ? p.revision : undefined,
       budget: Math.min(state?.settings.recall_tokens ?? 800, Math.floor(policy.budget_tokens / 3)) }) : { items: [] };
     const overview = legacy && policy.history_enabled ? (engine ? await engine.readSummary(id, summaryKey) : await this.services.memory.readSummary(summaryKey)) : "";
-    const system = contextSystem({ persona: p, facts, origin: source, zone, engine: !!engine, local: local.text,
+    const materials = { persona: p, facts, origin: source, zone, engine: !!engine, local: local.text,
       snippets: recalledMaterial(recalled.items, zone), overview, overviewSource: legacy && engine ? await engine.summaryState(id, summaryKey) : {},
       short: legacy && policy.include_summary ? short.text : "", shortSource: short.checkpoint,
-      diaries: diaryApplied ? diary.entries : [] });
+      diaries: diaryApplied ? diary.entries : [] };
     const previewRows = legacy ? historyTail(selected.map(historyEntry), policy.budget_tokens, estimateTokens, 0, zone, reference).rows : selected.map(historyEntry);
-    const estimatedInput = estimateTokens(promptText([{ role: "system", content: system + "\n" + timeContext(zone, new Date().toISOString(), policy.history_enabled ? history : []) },
-      ...renderHistory(previewRows, zone, reference)]) + JSON.stringify(toolList));
+    const preview = contextFrame(materials, previewRows, reference,
+      timeContext(zone, new Date().toISOString(), policy.history_enabled ? history : []), !legacy && supportsContextPrefix(p.provider));
+    const estimatedInput = estimateTokens(promptText(preview.messages) + JSON.stringify(toolList));
     const reservedOutput = this.outputReserve(p.provider, legacy);
     const memoryRevision = engine
       ? await engine.contextRevision(id)
@@ -438,19 +439,22 @@ export class Sessions {
         budget: Math.min((await engine.state(id)).settings.recall_tokens, Math.floor(budget / 3)),
       }) : { items: [] };
       const snippets = recalledMaterial(recalled.items, zone);
-      const systemPrompt = (compressed = shortSummary) => contextSystem({ persona: p, facts, origin: source.origin,
+      const materials = (compressed = shortSummary) => ({ persona: p, facts, origin: source.origin,
         zone, engine: !!engine, local: local.text, snippets, overview: summary, overviewSource: summaryOrigin,
         short: compressed, shortSource: short.checkpoint, diaries: diaryApplied ? diary.entries : [] });
       const timing = () => timeContext(zone, receivedAt, policy.history_enabled ? history : []);
       const limit = await this.modelLimit(p.provider, signal);
       const reserve = this.outputReserve(p.provider, legacy);
       const requestBudget = limit.tokens ? Math.max(1, limit.tokens - reserve) : Infinity;
-      const assembled = (rows = recent, compressed = shortSummary) => [
-        { role: "system", content: systemPrompt(compressed) + "\n" + timing() }, ...renderHistory(rows, zone, historyReference),
-        transient
+      const stablePrefix = !legacy && supportsContextPrefix(p.provider);
+      const assemble = (rows = recent, compressed = shortSummary) => {
+        const frame = contextFrame(materials(compressed), rows, historyReference, timing(), stablePrefix);
+        frame.messages.push(transient
           ? { role: "user", content: "【本轮插件临时输入，不是真人发言，不作为经历保存】\n来源：" + JSON.stringify(source.origin) + "\n" + text }
-          : { role: "user", content: text },
-      ];
+          : { role: "user", content: text });
+        return frame;
+      };
+      const assembled = (rows = recent, compressed = shortSummary) => assemble(rows, compressed).messages;
       const capacity = (compressed = shortSummary) => Math.min(
         budget - estimateTokens(summary + compressed + (summary ? originNote(summaryOrigin) + summaryTime(summaryOrigin, zone) : "") +
           (compressed ? originNote(short.checkpoint) + summaryTime(short.checkpoint, zone) : "") + facts.join("\n") + JSON.stringify(snippets)),
@@ -513,8 +517,8 @@ export class Sessions {
       }
       if (!legacy && estimateTokens(promptText(assembled()) + JSON.stringify(toolList)) > requestBudget)
         throw Error((memoryNotice ? memoryNotice + " " : "") + "当前上下文已达到模型容量，原文已保留。请在使用配置中选择新会话、调整模型容量或启用日记压缩；不会自动删减历史或切换会话。");
-      const messages: any[] = assembled();
-      const stableSystemPrompt = systemPrompt();
+      const frame = assemble();
+      const messages: any[] = frame.messages;
       let final = "";
       let measured: any = null;
       let memoryWriteRejected = false;
@@ -547,7 +551,7 @@ export class Sessions {
         signal.throwIfAborted();
         const requestSignal = mediaSignals.length ? AbortSignal.any([signal, ...mediaSignals]) : signal;
         requestSignal.throwIfAborted();
-        messages[0].content = stableSystemPrompt + "\n" + timing();
+        frame.refreshTime(timing());
         if (
           estimateTokens(promptText(messages) + JSON.stringify(activeTools)) >
           requestBudget
@@ -563,7 +567,7 @@ export class Sessions {
         if (input?.hasPending()) {
           do { await consumeInput(); } while (input.hasPending());
           requestSignal.throwIfAborted();
-          messages[0].content = stableSystemPrompt + "\n" + timing();
+          frame.refreshTime(timing());
           if (estimateTokens(promptText(messages) + JSON.stringify(activeTools)) > requestBudget) {
             await execution?.write("blocked", { reason: "context_capacity_exceeded", round: turn.round, request_budget: requestBudget });
             throw Error("本轮内容或工具结果超出模型上下文预算，请减少输入或切换更大上下文模型");

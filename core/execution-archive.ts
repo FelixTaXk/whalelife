@@ -12,6 +12,9 @@ import type { Logger } from "./logger.ts";
 
 const runPattern = /^\d{17}_[a-f0-9]{32}$/;
 const hidden = "[已隐藏]";
+const usageCount = /^(?:(?:prompt|completion|total|input|output|cached|reasoning|audio|accepted_prediction|rejected_prediction)_tokens|prompt_cache_(?:hit|miss)_tokens)$/;
+const usageDetails = /^(?:prompt|completion|input|output)_tokens_details$/;
+const validCount = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0;
 /** Private diagnostic snapshots, never prompts, reasoning, credentials or binary attachments. */
 export function diagnosticSnapshot(value: unknown, secrets: string[] = []): any {
   let remaining = 16000, nodes = 0;
@@ -27,7 +30,7 @@ export function diagnosticSnapshot(value: unknown, secrets: string[] = []): any 
     remaining -= Math.min(text.length, limit);
     return text.length > limit ? text.slice(0, limit) + "[截断]" : text;
   };
-  const visit = (item: any, depth: number): any => {
+  const visit = (item: any, depth: number, countsOnly = false): any => {
     if (++nodes > 500 || depth > 10 || remaining <= 0) return "[截断]";
     if (item === null || typeof item === "boolean") return item;
     if (typeof item === "string") return clean(item);
@@ -44,10 +47,13 @@ export function diagnosticSnapshot(value: unknown, secrets: string[] = []): any 
       result = {};
       for (const [key, child] of Object.entries(item).slice(0, 50)) {
         const label = clean(key);
+        const count = usageCount.test(key) && validCount(child);
+        const details = !countsOnly && usageDetails.test(key) && child !== null &&
+          typeof child === "object" && !Array.isArray(child);
         Object.defineProperty(result, label, { enumerable: true, value:
-          /(?:api.?key|secret|password|passwd|token|cookie|authorization|credential|base64|bytes|buffer|image_url|reasoning_content)/i.test(key)
-            && !/^(?:prompt|completion|total|input|output|cached|reasoning)_tokens$/.test(key)
-            ? hidden : visit(child, depth + 1) });
+          details ? visit(child, depth + 1, true) :
+          (countsOnly || /(?:api.?key|secret|password|passwd|token|cookie|authorization|credential|base64|bytes|buffer|image_url|reasoning_content)/i.test(key))
+            && !count ? hidden : visit(child, depth + 1) });
       }
     }
     seen.delete(item);
