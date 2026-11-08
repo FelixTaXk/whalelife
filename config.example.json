@@ -23,7 +23,7 @@
   "memory": {
     "root": "memory",
     "history_enabled": true,
-    "memory_mode": "full",
+    "diary_enabled": false,
     "compression_trigger_percent": 80,
     "compression_target_percent": 50,
     "facts_max_lines": 100

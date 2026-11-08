@@ -3,6 +3,8 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 export type ContextPolicy = {
+  /** Automatic creation only; existing valid diaries remain part of history when disabled. */
+  diary_enabled?: boolean;
   /** Omitted by old clients; explicit legacy settings keep their historical semantics. */
   memory_mode?: "full" | "diary" | "legacy";
   compression_trigger_percent?: number;
@@ -19,9 +21,14 @@ export type ContextPolicy = {
 export function contextPolicy(config: any, saved: any = {}): ContextPolicy {
   const legacy = (value: any) => ["recent_lines", "budget_tokens", "include_summary", "long_term_enabled",
     "short_term_days", "short_term_min_messages"].some(key => value[key] !== undefined);
-  const mode = saved.memory_mode ?? (legacy(saved) ? "legacy" : config.memory_mode ?? (legacy(config) ? "legacy" : "full"));
+  const selected = (value: any) => value.diary_enabled !== undefined
+    ? (value.diary_enabled ? "diary" : "full")
+    : value.memory_mode ?? (legacy(value) ? "legacy" : undefined);
+  const mode = selected(saved) ?? selected(config) ?? "full";
   return {
     memory_mode: mode,
+    // Omit the new switch for legacy round trips so old clients preserve their explicit contract.
+    ...(mode === "legacy" ? {} : { diary_enabled: mode === "diary" }),
     compression_trigger_percent: saved.compression_trigger_percent ?? config.compression_trigger_percent ?? 80,
     compression_target_percent: saved.compression_target_percent ?? config.compression_target_percent ?? 50,
     history_enabled: saved.history_enabled ?? config.history_enabled ??
@@ -37,6 +44,8 @@ export function contextPolicy(config: any, saved: any = {}): ContextPolicy {
 }
 export function validateContext(input: any): ContextPolicy {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw Error("上下文选项无效");
+  if (input.diary_enabled !== undefined && typeof input.diary_enabled !== "boolean")
+    throw Error("自动日记开关必须为布尔值");
   if (input.recent_lines !== undefined && (!Number.isInteger(input.recent_lines) ||
       input.recent_lines < 0 || input.recent_lines > 1000)) throw Error("旧历史条数无效");
   const policy = contextPolicy({}, input);

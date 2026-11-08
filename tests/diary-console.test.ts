@@ -20,7 +20,7 @@ const { renderMemory } = await import(new URL("../core/ui/memory.js", import.met
 
 function context(policy: Record<string, unknown> = {}) {
   return { model: { name: "合成模型", context_window: 10000 },
-    policy: { memory_mode: "full", history_enabled: true, include_facts: true,
+    policy: { diary_enabled: false, history_enabled: true, include_facts: true,
       history_scope: "session", compression_trigger_percent: 80, compression_target_percent: 50, ...policy },
     context_estimate: { input_tokens: 6500, reserved_output_tokens: 1500, total_tokens: 8000,
       percent: 80, source: "estimate" },
@@ -35,17 +35,20 @@ function ui(policy: Record<string, unknown> = {}): any {
     memoryContext: context(policy) } };
 }
 
-test("new context modes default to full history and expose recommended diary percentages without legacy limits", () => {
+test("unified context defaults automatic diaries off while keeping existing diary usage and recommended percentages", () => {
   const app = ui(), full = renderContextPanel(app);
-  assert.match(full, /value="full" selected/);
-  assert.match(full, /完整有效历史，不自动生成摘要或日记/);
-  assert.doesNotMatch(full, /name="(?:short_term_days|short_term_min_messages|budget_tokens|include_summary|long_term_enabled)"/);
+  assert.match(full, /name="diary_enabled" >自动整理为日记/);
+  assert.match(full, /默认关闭/);
+  assert.match(full, /已有有效日记仍按历史范围用于上下文/);
+  assert.match(full, /没有日记时带入完整有效历史/);
+  assert.doesNotMatch(full, /name="(?:memory_mode|short_term_days|short_term_min_messages|budget_tokens|include_summary|long_term_enabled)"|普通模式|日记模式|兼容模式|仅供查看/);
   assert.match(full, /name="compression_trigger_percent"[^>]*value="80"/);
   assert.match(full, /name="compression_target_percent"[^>]*value="50"/);
   assert.match(full, /恢复推荐值 80% \/ 50%/);
   app.state.memoryContext.policy = {};
-  assert.match(renderContextPanel(app), /value="full" selected/);
-  app.state.memoryContext = context({ memory_mode: "diary" });
+  assert.doesNotMatch(renderContextPanel(app), /name="diary_enabled" checked/);
+  app.state.memoryContext = context({ diary_enabled: true });
+  app.state.memoryContext.diary.enabled = true;
   app.state.memoryContext.diary.paused = { reason: "合成失败", at: "2026-11-08T00:00:00Z" };
   const diary = renderContextPanel(app);
   assert.match(diary, /已有日记按篇追加，不重新总结/);
@@ -70,30 +73,36 @@ test("context percentage leads with its estimate source while measured usage rem
   assert.match(compactUnknown, /href="#models">填写模型容量/);
 });
 
-test("mode selection and recommended reset are local; explicit save sends only new policy fields to the viewed archive", async t => {
+test("diary switch and recommended reset are local; explicit save sends the flag and percentages to the viewed archive", async t => {
   const app = ui(), error = { textContent: "" }, submit = { disabled: false };
-  const trigger = { value: "90" }, target = { value: "70" }, mode = { value: "diary", onchange: undefined as any };
-  const defaults = { onclick: undefined as any }, modeFields = { innerHTML: "" };
+  const trigger = { value: "90" }, target = { value: "70" }, diarySwitch = { checked: false, onchange: undefined as any };
+  const defaults = { onclick: undefined as any }, diarySettings = { hidden: true };
   const controls: Record<string, any> = { '#context-error': error, 'button[type=submit]': submit,
     '[name="compression_trigger_percent"]': trigger, '[name="compression_target_percent"]': target,
-    '#context-mode-fields': modeFields };
+    '[data-diary-settings]': diarySettings };
   const form: any = { querySelector: (key: string) => controls[key] ?? null };
-  app.content = { querySelector: (key: string) => ({ '#context-form': form, '#context-memory-mode': mode,
+  app.content = { querySelector: (key: string) => ({ '#context-form': form, '#context-diary-enabled': diarySwitch,
     '[data-diary-defaults]': defaults } as any)[key] ?? null };
   const posts: any[] = [], notices: any[] = [];
   let reloads = 0;
   app.toast = (...args: any[]) => notices.push(args);
   t.mock.method(globalThis, "FormData", function () {
-    const values: Record<string, string> = { memory_mode: mode.value, compression_trigger_percent: trigger.value,
+    const values: Record<string, string> = { ...(diarySwitch.checked ? { diary_enabled: "on" } : {}), compression_trigger_percent: trigger.value,
       compression_target_percent: target.value, history_enabled: "on", include_facts: "on", history_scope: "session" };
     return { get: (key: string) => values[key], has: (key: string) => Object.hasOwn(values, key) } as any;
   });
   t.mock.method(globalThis, "fetch", async (path: any, init: any) => {
     posts.push({ path, body: JSON.parse(init.body) });
-    return new Response(JSON.stringify(context({ memory_mode: "diary" })));
+    return new Response(JSON.stringify(context({ diary_enabled: diarySwitch.checked })));
   });
   bindContextSettings(app, async () => { reloads++; });
-  mode.onchange(); defaults.onclick();
+  diarySwitch.checked = true; diarySwitch.onchange();
+  assert.equal(diarySettings.hidden, false);
+  assert.equal(app.state.memoryContext.policy.diary_enabled, false, "the saved switch remains unchanged until submit");
+  diarySwitch.checked = false; diarySwitch.onchange();
+  assert.equal(diarySettings.hidden, true);
+  assert.deepEqual([trigger.value, target.value], ["90", "70"], "toggling preserves unsaved percentages");
+  diarySwitch.checked = true; diarySwitch.onchange(); defaults.onclick();
   assert.deepEqual([trigger.value, target.value], ["80", "50"]);
   assert.equal(posts.length, 0); assert.equal(notices.length, 0);
   assert.equal(app.state.session, "one");
@@ -110,11 +119,18 @@ test("mode selection and recommended reset are local; explicit save sends only n
   target.value = "50";
   await form.onsubmit({ preventDefault() {} });
   assert.deepEqual(posts, [{ path: "/api/session/context", body: { id: "two", context: {
-    memory_mode: "diary", history_enabled: true, include_facts: true, history_scope: "session",
+    diary_enabled: true, history_enabled: true, include_facts: true, history_scope: "session",
     compression_trigger_percent: 80, compression_target_percent: 50,
   } } }]);
   assert.equal(reloads, 1); assert.equal(notices.length, 1);
   assert.equal(app.state.session, "one"); assert.equal(app.state.sessionContext, undefined);
+  diarySwitch.checked = false; diarySwitch.onchange();
+  assert.equal(posts.length, 1, "turning automatic diaries off only edits the draft");
+  await form.onsubmit({ preventDefault() {} });
+  assert.equal(posts[1].body.context.diary_enabled, false);
+  assert.equal("memory_mode" in posts[1].body.context, false);
+  assert.equal(posts[1].body.context.compression_trigger_percent, 80);
+  assert.equal(posts[1].body.context.compression_target_percent, 50);
 });
 
 test("browse selection never changes the active session and explicit diary resume is guarded by the loaded archive", async t => {
@@ -145,7 +161,7 @@ async function archive(t: TestContext) {
   const memory = new Memory(join(root, "memory"), logger);
   t.after(async () => { await memory.queue; });
   await memory.init();
-  await memory.saveSessionMeta("one", { name: "合成会话", context: { memory_mode: "diary" } });
+  await memory.saveSessionMeta("one", { name: "合成会话", context: { diary_enabled: true } });
   for (let i = 0; i < 3; i++) await memory.appendEvent({ session: "one", type: "message", role: "user",
     text: "合成原文" + i, ts: `2026-10-0${i + 1}T00:00:00Z`, persona_revision: "old",
     channel: "plugin", account: "synthetic", origin: { plugin: "synthetic", action: "fixture" } });
@@ -175,15 +191,17 @@ test("diary admin exposes stable source metadata without a markdown projection o
   assert.equal(await readFile(stateFile, "utf8"), before);
   const html = renderMemory({ state: { session: "one", memoryLoadedSession: "one", memoryLoadedTab: "summaries",
     memoryTab: "summaries", memoryDetails: list } });
-  assert.match(html, /日记与旧版摘要/); assert.match(html, /覆盖 2 条原文/); assert.match(html, /原始记录时间/);
+  assert.match(html, /日记与摘要/); assert.match(html, /覆盖 2 条原文/); assert.match(html, /原始记录时间/);
+  assert.match(html, /关闭自动整理只停止新生成，已有有效日记仍用于上下文/);
+  assert.doesNotMatch(html, /普通模式|日记模式|兼容模式/);
 });
 
-test("excluded diary sources remain inspectable but cannot be reported as active; full mode archives valid diaries", async t => {
+test("disabling automatic diary generation keeps valid diaries available while excluded sources need rebuilding", async t => {
   const f = await archive(t), item = (await f.admin.summaries()).items[0];
-  await f.memory.saveSessionMeta("one", { context: { memory_mode: "full" } });
+  await f.memory.saveSessionMeta("one", { context: { diary_enabled: false } });
   let detail = await f.admin.summary(item.id);
-  assert.equal(detail.status, "archived"); assert.equal(detail.available, false); assert.equal(detail.text, f.entry.text);
-  await f.memory.saveSessionMeta("one", { context: { memory_mode: "diary" } });
+  assert.equal(detail.status, "ready"); assert.equal(detail.available, true); assert.equal(detail.text, f.entry.text);
+  assert.doesNotMatch(detail.status_message, /模式|仅供查看/);
   await f.engine.plugin("synthetic", () => {}).excludeInputs("one", [f.rows[0].id]);
   detail = await f.admin.summary(item.id);
   assert.equal(detail.status, "needs_rebuild"); assert.equal(detail.available, false);
@@ -201,12 +219,12 @@ test("other persona diaries are isolated and legacy summaries stay viewable with
   const old = await f.admin.summary(legacy);
   assert.equal(old.mode, "long"); assert.equal(old.text, "合成旧版概览");
   assert.equal(old.status, "legacy"); assert.equal(old.available, false);
-  assert.match(old.status_message, /普通模式和日记模式不带入/);
+  assert.match(old.status_message, /不带入/);
 });
 
 test("matching persisted diary IDs in separate sessions produce distinct admin identifiers", async t => {
   const f = await archive(t);
-  await f.memory.saveSessionMeta("two", { context: { memory_mode: "diary" } });
+  await f.memory.saveSessionMeta("two", { context: { diary_enabled: true } });
   await f.memory.appendEvent({ session: "two", type: "message", role: "user", text: "另一合成会话", ts: "2026-10-05T00:00:00Z" });
   const rows = await f.engine.contextRows("two");
   await f.engine.commitDiary("two", { ...f.entry, session: "two", text: "另一合成日记",

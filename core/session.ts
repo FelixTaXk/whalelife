@@ -128,9 +128,9 @@ export class Sessions {
       : { text: "", remaining: window.short, checkpoint: {} };
     const scope = policy.history_scope === "persona" ? "persona:" + p.revision : "session";
     const diary = await diaryContext(engine, id, scope, window.short);
-    const diaryEnabled = policy.memory_mode === "diary" && policy.history_enabled;
+    const diaryApplied = !legacy && policy.history_enabled;
     const state = engine ? await engine.state(id) : undefined;
-    const selected = policy.history_enabled ? (diaryEnabled ? diary.remaining : legacy ? short.remaining : window.short) : [];
+    const selected = policy.history_enabled ? (diaryApplied ? diary.remaining : short.remaining) : [];
     const source = route?.origin ?? { channel: route?.channel ?? "web" };
     const zone = route?.timezone ?? timezone(this.config.timezone);
     const toolList = (route?.permission ?? this.config.channels.web.permission ?? p.permission) === "off"
@@ -147,7 +147,7 @@ export class Sessions {
     const system = contextSystem({ persona: p, facts, origin: source, zone, engine: !!engine, local: local.text,
       snippets: recalledMaterial(recalled.items, zone), overview, overviewSource: legacy && engine ? await engine.summaryState(id, summaryKey) : {},
       short: legacy && policy.include_summary ? short.text : "", shortSource: short.checkpoint,
-      diaries: diaryEnabled ? diary.entries : [] });
+      diaries: diaryApplied ? diary.entries : [] });
     const previewRows = legacy ? historyTail(selected.map(historyEntry), policy.budget_tokens, estimateTokens, 0, zone, reference).rows : selected.map(historyEntry);
     const estimatedInput = estimateTokens(promptText([{ role: "system", content: system + "\n" + timeContext(zone, new Date().toISOString(), policy.history_enabled ? history : []) },
       ...renderHistory(previewRows, zone, reference)]) + JSON.stringify(toolList));
@@ -162,9 +162,9 @@ export class Sessions {
       context_estimate: { input_tokens: estimatedInput, reserved_output_tokens: reservedOutput,
         total_tokens: estimatedInput + reservedOutput, percent: limit.tokens ? (estimatedInput + reservedOutput) / limit.tokens * 100 : null,
         source: "estimate" as const },
-      diary: { count: diary.entries.length, covered_messages: diaryEnabled ? window.short.length - diary.remaining.length : 0,
-        remaining_messages: selected.length, chars: diary.entries.reduce((sum, entry) => sum + Array.from(entry.text).length, 0),
-        invalid: diary.invalid, enabled: !!diaryEnabled, ...(diary.paused ? { paused: diary.paused } : {}),
+      diary: { count: diaryApplied ? diary.entries.length : 0, covered_messages: diaryApplied ? window.short.length - diary.remaining.length : 0,
+        remaining_messages: selected.length, chars: diaryApplied ? diary.entries.reduce((sum, entry) => sum + Array.from(entry.text).length, 0) : 0,
+        invalid: diary.invalid, enabled: !!policy.diary_enabled, ...(diary.paused ? { paused: diary.paused } : {}),
         ...(typeof last?.memory_notice === "string" ? { notice: last.memory_notice } : {}),
         budget_remaining: Math.max(0, (state?.settings.daily_memory_tokens ?? 20000) -
           (state?.daily?.day === new Date().toISOString().slice(0, 10) ? state.daily.reserved : 0)) },
@@ -172,7 +172,7 @@ export class Sessions {
         short_term_messages: window.short.length,
         long_term_messages: window.long.length,
         short_summary_chars: Array.from(short.text).length,
-        long_summary_chars: legacy ? Array.from(overview).length : Array.from(diaryEnabled ? diary.entries.map(entry => entry.text).join("\n") : "").length,
+        long_summary_chars: legacy ? Array.from(overview).length : Array.from(diaryApplied ? diary.entries.map(entry => entry.text).join("\n") : "").length,
       },
       persona: p.name,
       model: {
@@ -231,7 +231,7 @@ export class Sessions {
       const meta = await this.services.memory.sessionMeta(id);
       if (!meta || meta.deleted) throw Error("会话不存在或已删除");
       const policy = contextPolicy(this.config.memory, meta.context);
-      if (policy.memory_mode !== "diary") throw Error("请先启用该会话的日记压缩模式");
+      if (!policy.diary_enabled) throw Error("请先启用该会话的自动日记整理");
       await this.services.memoryEngine.retryDiary(id, policy.history_scope === "persona" ? "persona:" + p.revision : "session");
     } finally { this.locks.delete(id); }
     return this.contextStatus(id);
@@ -421,8 +421,9 @@ export class Sessions {
       const scope = policy.history_scope === "persona" ? "persona:" + p.revision : "session";
       let diary = engine && !legacy ? await diaryContext(engine, id, scope, shortRows)
         : { entries: [], remaining: shortRows, invalid: 0, paused: undefined };
-      const diaryEnabled = policy.memory_mode === "diary" && policy.history_enabled;
-      let recent = (diaryEnabled ? diary.remaining : short.remaining).map(historyEntry);
+      const diaryApplied = !legacy && policy.history_enabled;
+      const diaryEnabled = !!policy.diary_enabled && policy.history_enabled;
+      let recent = (diaryApplied ? diary.remaining : short.remaining).map(historyEntry);
       const budget = cfg.budget_tokens ?? 6000;
       const toolList = session.permission === "off" ? [] : tools.list();
       const historyReference = thinkingToolHistory(p.provider, toolList) ||
@@ -439,7 +440,7 @@ export class Sessions {
       const snippets = recalledMaterial(recalled.items, zone);
       const systemPrompt = (compressed = shortSummary) => contextSystem({ persona: p, facts, origin: source.origin,
         zone, engine: !!engine, local: local.text, snippets, overview: summary, overviewSource: summaryOrigin,
-        short: compressed, shortSource: short.checkpoint, diaries: diaryEnabled ? diary.entries : [] });
+        short: compressed, shortSource: short.checkpoint, diaries: diaryApplied ? diary.entries : [] });
       const timing = () => timeContext(zone, receivedAt, policy.history_enabled ? history : []);
       const limit = await this.modelLimit(p.provider, signal);
       const reserve = this.outputReserve(p.provider, legacy);

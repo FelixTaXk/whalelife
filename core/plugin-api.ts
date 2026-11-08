@@ -138,6 +138,9 @@ export type SessionQueuedRun = SessionRun & {
 };
 export type SessionInfo = { id: string; name: string; updatedAt?: string };
 export interface ContextPolicy {
+  /** Enables future automatic diary generation; disabling keeps valid saved diaries in history. */
+  diary_enabled?: boolean;
+  /** Compatibility alias; new clients use diary_enabled. */
   memory_mode?: "full" | "diary" | "legacy";
   compression_trigger_percent?: number;
   compression_target_percent?: number;

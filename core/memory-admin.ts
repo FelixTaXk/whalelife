@@ -917,12 +917,12 @@ export class MemoryAdmin {
             matchingHistory(await engine.contextRows(owner!), selectedRevision ?? "", policy.history_scope)));
           const valid = diaries.get(owner!)!.entries.some(value => value.id === diary.id);
           status = valid ? "ready" : "needs_rebuild";
-          available = valid && policy.memory_mode === "diary" && policy.history_enabled;
+          available = valid && policy.memory_mode !== "legacy" && policy.history_enabled;
           statusMessage = !valid ? "来源已被排除或发生变化，当前不带入；旧日记保留供核对，需从有效原文重建。" :
-            available ? "日记来源有效，按当前范围带入上下文；后续整理只追加新日记。" :
-              policy.memory_mode === "diary" ? "日记来源有效；带入历史已关闭，当前不带入上下文。" :
-                "当前未启用日记模式，日记已存档供查看，不带入上下文。";
-          if (valid && policy.memory_mode !== "diary") status = "archived";
+            available ? "日记来源有效，按当前范围带入上下文；自动生成开关只控制后续新日记。" :
+              policy.memory_mode === "legacy" ? "旧版兼容设置不使用日记，已保存内容保留供查看。" :
+                "日记来源有效；带入历史已关闭，当前不带入上下文。";
+          if (valid && policy.memory_mode === "legacy") status = "archived";
         }
         views.push({ id, diary_id: diary.id, version: diary.version, text: diary.text,
           bytes: Buffer.byteLength(diary.text), chars: Array.from(diary.text).length,
@@ -963,7 +963,7 @@ export class MemoryAdmin {
       }
       if (policy.memory_mode !== "legacy") {
         available = false; status = "legacy";
-        statusMessage = "旧版摘要，保留供查看；普通模式和日记模式不带入此内容。";
+        statusMessage = "旧版摘要，保留供查看；当前记忆机制不带入此内容。";
       }
       views.push({ id, text, bytes: Buffer.byteLength(text), chars: Array.from(text).length,
         updated_at: checkpoint?.updated_at ?? file?.updated_at ?? stateFile?.updated_at ?? null,

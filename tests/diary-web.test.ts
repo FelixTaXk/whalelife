@@ -27,7 +27,7 @@ async function fixture(t: TestContext) {
     model_bindings: { chat: "synthetic-chat" },
     personas: { synthetic: { name: "合成人格", file: "memory/personas/synthetic.md", model: "synthetic-chat", permission: "off" } },
     channels: { web: { persona: "synthetic", permission: "off" } },
-    memory: { root: "memory", memory_mode: "diary", compression_trigger_percent: 80, compression_target_percent: 50 },
+    memory: { root: "memory", diary_enabled: true, compression_trigger_percent: 80, compression_target_percent: 50 },
   }));
   app = await boot(root);
   const requests: any[] = [];
@@ -36,7 +36,7 @@ async function fixture(t: TestContext) {
     return { text: "合成回复", toolCalls: [], finish_reason: "stop", usage: { prompt_tokens: 50, completion_tokens: 10 } };
   };
   app.modelConfig.listModels = async () => { throw Error("Configured capacity must not call model discovery"); };
-  await app.memory.saveSessionMeta("one", { name: "合成日记会话", context: { memory_mode: "diary" } });
+  await app.memory.saveSessionMeta("one", { name: "合成日记会话", context: { diary_enabled: true } });
   for (let i = 0; i < 3; i++) await app.memory.appendEvent({ session: "one", type: "message",
     role: i % 2 ? "assistant" : "user", text: `SYNTHETIC_RAW_${i}_ONLY`, ts: `2026-10-0${i + 1}T00:00:00Z` });
   const rows = await app.memory.readSession("one");
@@ -55,6 +55,15 @@ async function fixture(t: TestContext) {
     method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
   });
   return { root, app, requests, rows, entry, url, get, post };
+}
+
+async function setDiaryGeneration(f: Awaited<ReturnType<typeof fixture>>, enabled: boolean, historyEnabled = true) {
+  const response = await f.post("/api/session/context", { id: "one", context: {
+    diary_enabled: enabled, history_enabled: historyEnabled, include_facts: true, history_scope: "session",
+    compression_trigger_percent: 80, compression_target_percent: 50,
+  } });
+  assert.equal(response.status, 200, await response.clone().text());
+  return response.json();
 }
 
 test("explicit draft discovery refreshes context metadata without applying draft capacity", async t => {
@@ -100,11 +109,11 @@ test("diary HTTP views and explicit resume enforce authentication, origin, sessi
       else f.app.sessions[guard].delete("one");
     }
   }
-  await f.app.memory.saveSessionMeta("one", { context: { memory_mode: "full" } });
-  const wrongMode = await f.post("/api/memory/diary/retry", { id: "one" });
-  assert.equal(wrongMode.status, 400); assert.match((await wrongMode.json()).error, /先启用/);
+  await setDiaryGeneration(f, false);
+  const disabled = await f.post("/api/memory/diary/retry", { id: "one" });
+  assert.equal(disabled.status, 400); assert.match((await disabled.json()).error, /先启用/);
   assert.equal((await f.app.memoryEngine.state("one")).diary_failures.session.reason, "合成暂停原因");
-  await f.app.memory.saveSessionMeta("one", { context: { memory_mode: "diary" } });
+  await setDiaryGeneration(f, true);
   const resumed = await f.post("/api/memory/diary/retry", { id: "one", scope: "persona:other" });
   assert.equal(resumed.status, 200, await resumed.clone().text());
   const status = await resumed.json();
@@ -114,13 +123,46 @@ test("diary HTTP views and explicit resume enforce authentication, origin, sessi
   assert.equal(f.requests.length, 0, "viewing or resuming must not generate a diary");
 });
 
-test("HTTP backup restore retains diary source metadata and reuses existing diary context without new generation", async t => {
+test("HTTP generation switch leaves valid diaries available and replacing their source messages", async t => {
   const f = await fixture(t);
+  await f.app.memory.currentSession({ id: "one" });
+  const before = await f.app.memoryEngine.state("one");
+  const status = await setDiaryGeneration(f, false);
+  assert.equal(status.policy.diary_enabled, false);
+  assert.equal(status.diary.covered_messages, 2);
+  assert.equal(status.diary.remaining_messages, 1);
+  const listed = (await (await f.get("/api/memory/summaries")).json()).items[0];
+  assert.equal(listed.available, true); assert.equal(listed.status, "ready");
+  assert.match(listed.status_message, /自动生成开关只控制后续新日记/);
+  assert.doesNotMatch(listed.status_message, /普通模式|日记模式|已存档供查看/);
+  const detail = await (await f.get("/api/memory/summary?id=" + listed.id)).json();
+  assert.equal(detail.available, true); assert.equal(detail.text, f.entry.text);
+  assert.equal(detail.source_revision, f.entry.source_revision);
+  assert.equal(f.requests.length, 0, "changing generation must not make a model request");
+  await f.app.sessions.chat("one", "关闭生成后继续对话", () => {});
+  assert.equal(f.requests.length, 1);
+  const prompt = JSON.stringify(f.requests[0]);
+  assert.ok(prompt.includes(f.entry.text)); assert.match(prompt, /SYNTHETIC_RAW_2_ONLY/);
+  assert.doesNotMatch(prompt, /SYNTHETIC_RAW_[01]_ONLY/);
+  assert.deepEqual((await f.app.memoryEngine.state("one")).diaries, before.diaries);
+  assert.equal((await f.app.memoryEngine.state("one")).usage.memory.requests, 0);
+  assert.equal(await f.app.memory.currentSession(), "one");
+  await setDiaryGeneration(f, false, false);
+  const noHistory = (await (await f.get("/api/memory/summaries")).json()).items[0];
+  assert.equal(noHistory.available, false);
+  assert.match(noHistory.status_message, /带入历史已关闭/);
+  assert.deepEqual((await f.app.memoryEngine.state("one")).diaries, before.diaries);
+});
+
+test("HTTP backup restore retains the disabled generation switch and reuses existing diary context", async t => {
+  const f = await fixture(t);
+  await setDiaryGeneration(f, false);
   await f.app.memoryEngine.pauseDiary("one", "session", "合成暂停留档");
   const originalState = await f.app.memoryEngine.state("one");
   const backupResponse = await f.post("/api/memory/backup", {});
   assert.equal(backupResponse.status, 200);
   const backup = await backupResponse.json();
+  await setDiaryGeneration(f, true);
   await f.app.memory.appendEvent({ session: "one", type: "message", role: "user", text: "SYNTHETIC_AFTER_BACKUP" });
   const restore = await f.post("/api/memory/restore", { id: backup.id });
   assert.equal(restore.status, 200, await restore.clone().text());
@@ -131,8 +173,12 @@ test("HTTP backup restore retains diary source metadata and reuses existing diar
   const preview = await f.get("/api/session/context?id=one");
   assert.equal(preview.status, 200);
   const status = await preview.json();
+  assert.equal(status.policy.diary_enabled, false);
   assert.equal(status.diary.count, 1); assert.equal(status.diary.covered_messages, 2);
   assert.equal(status.diary.remaining_messages, 1); assert.equal(status.diary.invalid, 0);
+  const listed = (await (await f.get("/api/memory/summaries")).json()).items[0];
+  assert.equal(listed.available, true); assert.equal(listed.status, "ready");
+  assert.equal(listed.source_revision, f.entry.source_revision);
   assert.equal(f.requests.length, 0);
   await f.app.sessions.chat("one", "继续进行合成测试", () => {});
   assert.equal(f.requests.length, 1, "restored context needs only the ordinary chat request");
