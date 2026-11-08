@@ -10,7 +10,7 @@ import { safeId } from "./memory.ts";
 import { createHash } from "node:crypto";
 import { estimateTokens } from "./memory-engine.ts";
 import type { ChannelRoute } from "./channels.ts";
-import { shortSummaryKey, shortContext, compressShort, consolidateLong } from "./memory-lifecycle.ts";
+import { shortSummaryKey, shortContext, compressShort, consolidateLong, shouldDeferShortToLong } from "./memory-lifecycle.ts";
 import { attribution, historyTail, originNote, originOf, renderHistory } from "./provenance.ts";
 import { SessionQueue, type QueuePolicy } from "./session-queue.ts";
 import { TRANSIENT_REPLY, type ToolTurn } from "./tool-retention.ts";
@@ -435,7 +435,9 @@ export class Sessions {
       const overBudget = () => recentTokens > capacity();
       let shortAttempted = false;
       // Short-term classification never changes because its prompt representation is compressed.
-      if (engine && policy.include_summary && policy.history_enabled && overBudget() && recent.length > 1) {
+      if (engine && policy.include_summary && policy.history_enabled && overBudget() && recent.length > 1 &&
+          !(await shouldDeferShortToLong({ services: this.services, id, key: summaryId,
+            provider: p.provider, limit: limit.tokens, signal, timezone: zone, rows: history, policy, revision: p.revision }))) {
         const probe = tail(recent, capacity("摘".repeat(200)), 1);
         const overflow = short.remaining.slice(0, probe.omitted);
         shortAttempted = await compressShort({ services: this.services, id, key: shortKey,

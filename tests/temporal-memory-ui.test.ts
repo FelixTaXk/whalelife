@@ -46,7 +46,8 @@ test("context settings distinguish the short-term floor, time window and injecti
   assert.match(html, /摘要最多 200 字符，不生成认知/);
   assert.match(html, /至少 10 条未处理消息/);
   assert.match(html, /最多 2 条认知，每条最多 80 字符/);
-  assert.match(html, /每轮最多一次整理调用，短期压缩优先/);
+  assert.match(html, /每轮最多一次整理调用；两类都待处理且预算足够时轮流整理，第一次先压缩短期/);
+  assert.match(html, /按实际返回用量结算，未知用量保留预留额度/);
   const custom = renderContextPanel(fixture({ short_term_days: 14, short_term_min_messages: 1200 }));
   assert.match(custom, /早于 14 天”且“超出最近 1200 条/);
 });
@@ -169,7 +170,9 @@ test("summary archive distinguishes short summaries and compatible long overview
     ] },
   } });
   assert.match(html, /短期摘要与长期概览/);
-  assert.match(html, /s_example<\/strong><small>短期摘要/);
-  assert.match(html, /p_example<\/strong><small>长期概览/);
-  assert.match(html, /旧摘要保留至下次生成/);
+  assert.match(html, /<strong>短期摘要<\/strong>/);
+  assert.match(html, /<strong>长期概览<\/strong>/);
+  assert.match(html, /data-summary="s_example"/);
+  assert.match(html, /data-summary="p_example"/);
+  assert.match(html, /需要重建的旧正文不作为当前短期摘要使用/);
 });

@@ -35,6 +35,8 @@ import {
 } from "./memory.ts";
 import type { Logger } from "./logger.ts";
 import { MemoryEngine, validateMemoryState } from "./memory-engine.ts";
+import { contextPolicy, matchingHistory, memoryWindow } from "./session-context.ts";
+import { persona } from "./persona.ts";
 
 type SessionState = {
   root: string;
@@ -42,7 +44,8 @@ type SessionState = {
   memoryMaintenance?: boolean;
   blockedSessions?: Set<string>;
   channelOperations?: Map<string, number>;
-  config?: { personas?: Record<string, { file?: string }> };
+  config?: { personas?: Record<string, { file?: string }>; memory?: Record<string, any>;
+    channels?: { web?: { persona?: string } } };
 };
 type FileEntry = {
   path: string;
@@ -825,53 +828,90 @@ export class MemoryAdmin {
       };
     });
   }
+  private async summaryViews(wanted?: string) {
+    await this.ensureRoots();
+    const { files } = await inventory(this.root), { index } = await this.sessionIndex();
+    const engine = new MemoryEngine(this.memory);
+    const entries = new Map<string, { owner?: string; file?: FileEntry; checkpoint?: any; stateFile?: FileEntry }>();
+    for (const file of files) {
+      const id = basename(file.path, ".md"), owner = file.path.startsWith("sessions/")
+        ? file.path.split("/")[1] : index.summaryOwners?.[id];
+      if ((wanted && id !== wanted) || !file.bytes || !summaryFile(file.path) ||
+          (file.path.startsWith("summaries/") && owner) || (owner && indexSessionMeta(index, owner)?.deleted)) continue;
+      entries.set(id, { owner, file });
+    }
+    // Checkpoints are authoritative, including empty failures or a missing projection file.
+    for (const [owner, meta] of Object.entries<any>(index.sessions)) {
+      if (meta.deleted) continue;
+      const state = await engine.state(owner);
+      for (const id of Object.keys(state.summaries)) {
+        if (wanted && id !== wanted) continue;
+        const existing = entries.get(id);
+        if (existing?.owner && existing.owner !== owner) throw new MemoryAdminError("摘要归属冲突，请检查记忆索引");
+        entries.set(id, { ...existing, owner, checkpoint: await engine.summaryState(owner, id),
+          stateFile: files.find(file => file.path === `sessions/${owner}/knowledge/state.json`) });
+      }
+    }
+    const views = [];
+    const windows = new Map<string, any[]>();
+    let selectedRevision: string | undefined;
+    const personaId = this.sessions.config?.channels?.web?.persona;
+    if (personaId && [...entries.values()].some(entry => entry.owner &&
+        contextPolicy(this.sessions.config?.memory ?? {}, indexSessionMeta(index, entry.owner)?.context).history_scope === "persona")) {
+      // Match contextStatus without fetching model limits or making a provider request.
+      try { selectedRevision = (await persona(this.projectRoot, this.sessions.config, personaId)).revision; }
+      catch { /* Historical summaries remain inspectable when current configuration is incomplete. */ }
+    }
+    for (const [id, entry] of entries) {
+      const { owner, checkpoint, file, stateFile } = entry;
+      const meta = owner ? indexSessionMeta(index, owner) : null;
+      const mode = checkpoint?.mode ?? (id.startsWith("s_") ? "short" : "long");
+      const text = checkpoint !== undefined ? (typeof checkpoint.text === "string" ? checkpoint.text : "")
+        : (await boundedRead(await this.file(file!.path), MAX_TEXT_BYTES)).toString("utf8");
+      const failed = !!checkpoint && (typeof checkpoint.last_error === "string" || !!checkpoint.retry_at);
+      const policy = contextPolicy(this.sessions.config?.memory ?? {}, meta?.context);
+      const scope = policy.history_scope === "session" ? "session" : selectedRevision;
+      const sessionKey = owner && scope ? digest(owner + ":" + scope).slice(0, 40) : "";
+      const currentScope = !!owner && !!scope && id === (mode === "short" ? "s_" : "p_") + sessionKey;
+      let available = !!text, status = checkpoint === undefined ? "legacy" : "ready";
+      let statusMessage = checkpoint === undefined ? "旧版摘要，缺少范围检查点；保留供查看。" : "已有可用正文；是否带入对话仍受历史开关和上下文预算控制。";
+      if (checkpoint !== undefined && !currentScope) {
+        available = false; status = "other_scope";
+        statusMessage = "其他历史或人格范围的摘要，不代表当前会话范围正在使用的内容。";
+      } else if (checkpoint !== undefined) {
+        if (mode === "short") {
+          if (!windows.has(owner!)) windows.set(owner!, memoryWindow(
+            matchingHistory(await engine.contextRows(owner!), selectedRevision ?? "", policy.history_scope), policy).short);
+          const rows = windows.get(owner!)!;
+          available = !!text && checkpoint.mode === "short" && checkpoint.start_id === rows[0]?.id &&
+            rows.some(row => row.id === checkpoint.last_id);
+        }
+        if (failed) {
+          status = available ? "update_failed" : "failed";
+          statusMessage = available ? "上次更新失败，当前继续使用上次有效正文。" : "上次整理失败，当前没有可用摘要；保留的旧正文仅供查看。";
+        } else if (!available) {
+          status = text ? "needs_rebuild" : "pending";
+          statusMessage = text ? "覆盖范围已变化，需要重建；以下旧正文不会作为当前短期摘要带入。" : "尚无有效正文，等待满足条件后整理。";
+        }
+      }
+      views.push({ id, text, bytes: Buffer.byteLength(text), chars: Array.from(text).length,
+        updated_at: checkpoint?.updated_at ?? file?.updated_at ?? stateFile?.updated_at ?? null,
+        session_id: owner ?? null, session_name: meta?.name ?? owner ?? null, mode, status,
+        available, status_message: statusMessage,
+        ...(typeof checkpoint?.last_error === "string" ? { last_error: checkpoint.last_error.slice(0, 200) } : {}),
+        ...(Number.isFinite(checkpoint?.retry_at) ? { retry_at: checkpoint.retry_at } : {}),
+      });
+    }
+    return views.sort((a, b) => Date.parse(b.updated_at ?? "") - Date.parse(a.updated_at ?? ""));
+  }
   summaries() {
-    return this.memory.serial(async () => {
-      await this.ensureRoots();
-      const { files } = await inventory(this.root);
-      const { index } = await this.sessionIndex();
-      return {
-        items: files
-          .filter(
-            (f) =>
-              f.bytes > 0 &&
-              summaryFile(f.path) &&
-              !(
-                f.path.startsWith("summaries/") &&
-                index.summaryOwners?.[basename(f.path, ".md")]
-              ),
-          )
-          .sort((a, b) => b.mtime - a.mtime)
-          .map((f) => ({
-            id: basename(f.path, ".md"),
-            bytes: f.bytes,
-            updated_at: f.updated_at,
-          })),
-      };
-    });
+    return this.memory.serial(async () => ({ items: (await this.summaryViews()).map(({ text: _text, ...item }) => item) }));
   }
   summary(id: string) {
     return this.memory.serial(async () => {
-      await this.ensureRoots();
-      const target = await this.file(
-        relative(this.root, await this.memory.summaryPath(identifier(id)))
-          .split(sep)
-          .join("/"),
-      );
-      try {
-        const raw = await boundedRead(target, MAX_TEXT_BYTES),
-          info = await regularFile(target);
-        return {
-          id,
-          text: raw.toString("utf8"),
-          bytes: raw.length,
-          updated_at: info.mtime.toISOString(),
-        };
-      } catch (error: any) {
-        if (error.code === "ENOENT")
-          throw new MemoryAdminError("摘要不存在", 404);
-        throw error;
-      }
+      const item = (await this.summaryViews(identifier(id)))[0];
+      if (!item) throw new MemoryAdminError("摘要不存在", 404);
+      return item;
     });
   }
   private async copyTree(source: string, target: string) {

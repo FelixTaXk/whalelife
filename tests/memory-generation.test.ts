@@ -12,7 +12,7 @@ import { contextPolicy } from "../core/session-context.ts";
 type Mode = "short" | "long";
 async function fixture(t: TestContext, mode: Mode) {
   const root = await temporaryDirectory("whale-memory-generation-");
-  const logs: any[] = [], requests: any[] = [];
+  const logs: any[] = [], requests: any[] = [], reservedAtRequest: number[] = [];
   const logger: any = Object.fromEntries(["info", "warn", "error"].map(level => [level,
     (message: string, data: any) => logs.push({ level, message, ...data })]));
   const memory = new Memory(join(root, "memory"), logger);
@@ -29,6 +29,7 @@ async function fixture(t: TestContext, mode: Mode) {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     requests.push(JSON.parse(raw));
+    reservedAtRequest.push((await engine.state("one")).daily.reserved);
     const usage = { prompt_tokens: 77, completion_tokens: reply.output,
       completion_tokens_details: { reasoning_tokens: 30 } };
     const frames: any[] = [
@@ -58,7 +59,7 @@ async function fixture(t: TestContext, mode: Mode) {
     return consolidateLong({ ...base, policy: contextPolicy({ short_term_min_messages: 1, short_term_days: 7 }), revision: "test" });
   };
   const logText = () => JSON.stringify(logs, (_key, value) => value instanceof Error ? value.message : value);
-  return { provider, engine, memory, rows, llm, key, run, reply, requests, logText };
+  return { provider, engine, memory, rows, llm, key, run, reply, requests, reservedAtRequest, logText };
 }
 
 for (const mode of ["short", "long"] as const) {
@@ -74,7 +75,8 @@ for (const mode of ["short", "long"] as const) {
     const state = await f.engine.state("one"), summary = await f.engine.summaryState("one", f.key);
     assert.equal(summary.text, "已确认的简短摘要。");
     assert.ok(summary.covered > 0);
-    assert.equal(state.daily.reserved, estimateTokens(JSON.stringify(body.messages)) + cap);
+    assert.equal(f.reservedAtRequest[0], estimateTokens(JSON.stringify(body.messages)) + cap);
+    assert.equal(state.daily.reserved, 77 + 120, "completed requests release unused maximum-output reservations");
     assert.equal(state.usage.memory.input_tokens, 77);
     assert.equal(state.usage.memory.output_tokens, 120);
     assert.equal(state.usage.memory.requests, 1);
@@ -105,6 +107,7 @@ for (const mode of ["short", "long"] as const) {
       assert.equal(state.records.length, 0);
       assert.equal(state.usage.memory.requests, 1);
       assert.equal(state.usage.memory.output_tokens, f.reply.output);
+      assert.equal(state.daily.reserved, 77 + f.reply.output, "failed summaries still charge their measured model usage");
       assert.deepEqual(await f.memory.readSession("one"), f.rows);
       assert.match(f.logText(), failure.includes("truncated") ? /token 上限而被截断/ : failure === "invalid-json" ? /完整有效的 JSON/ : /未正常完成/);
       assert.doesNotMatch(f.logText(), /PRIVATE_PARTIAL|PRIVATE_INVALID|PRIVATE_THINKING/);

@@ -156,12 +156,12 @@ test("incremental consolidation catches up after restart without gaps, duplicate
   }
   const seededIds = (await f.memory.readSession("one")).map((x) => x.id);
   const batches: any[][] = [];
-  let reservedEstimate = 0;
   f.services.llm.chat = async (request: any) => {
     if (request.messages[0].content.includes("只返回JSON")) {
       assert.equal(request.max_tokens, 4096);
-      reservedEstimate +=
-        estimateTokens(JSON.stringify(request.messages)) + 4096;
+      const reservation = estimateTokens(JSON.stringify(request.messages)) + 4096;
+      assert.equal((await f.memoryEngine.state("one")).daily.reserved, batches.length * 40 + reservation,
+        "in-flight work holds its full estimate in addition to previously settled usage");
       const input = JSON.parse(request.messages[1].content);
       batches.push(input.episodes);
       return {
@@ -219,7 +219,7 @@ test("incremental consolidation catches up after restart without gaps, duplicate
   const records = (await services.memoryEngine.state("one")).records;
   assert.equal(
     (await services.memoryEngine.state("one")).daily.reserved,
-    reservedEstimate,
+    80,
   );
   assert.equal(records.filter((x: any) => x.kind === "cognition").length, 1,
     "identical cognition is consolidated instead of duplicated");
@@ -245,6 +245,7 @@ test("chat revises cognition inside the existing summary call and accounts for i
     if (request.messages[0].content.includes("只返回JSON")) {
       extractions++;
       budget += estimateTokens(JSON.stringify(request.messages)) + request.max_tokens;
+      assert.equal((await f.memoryEngine.state("one")).daily.reserved, budget);
       const input = JSON.parse(request.messages[1].content);
       assert.equal(input.candidates[0].id, old.id);
       assert.equal(input.candidates[0].revision, undefined, "internal concurrency tokens are not model input");
@@ -260,7 +261,7 @@ test("chat revises cognition inside the existing summary call and accounts for i
   assert.equal(chats, 1);
   assert.equal(extractions, 1, "maintenance must share the existing summary request");
   const state = await f.memoryEngine.state("one");
-  assert.equal(state.daily.reserved, budget);
+  assert.equal(state.daily.reserved, 130);
   assert.equal(state.usage.memory.input_tokens, 90);
   assert.equal(state.usage.chat.input_tokens, 200);
   assert.equal(state.records.find((x) => x.id === old.id).status, "superseded");

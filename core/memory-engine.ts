@@ -13,6 +13,7 @@ import type { DocumentWrite, SessionDocument } from "./plugin-api.ts";
 import { TRANSIENT_REPLY } from "./tool-retention.ts";
 
 export const charCount = (text: string) => Array.from(text).length;
+export type MemoryReservation = Readonly<{ id: string; day: string; reserved: number }>;
 export function estimateTokens(text: string) {
   const ascii = (text.match(/[\x00-\x7f]/g) || []).length;
   return Math.ceil(ascii / 3 + (charCount(text) - ascii) * 1.5);
@@ -146,6 +147,10 @@ export function validateMemoryState(s: any) {
       (value.last_id !== undefined && typeof value.last_id !== "string") ||
       (value.last_offset !== undefined && !count(value.last_offset)) ||
       (value.retry_at !== undefined && !count(value.retry_at)) ||
+      ["attempt_sequence", "failure_count", "last_attempt_at"].some(name => value[name] !== undefined && !count(value[name])) ||
+      (value.retry_start_id !== undefined && typeof value.retry_start_id !== "string") ||
+      (value.last_error !== undefined && (typeof value.last_error !== "string" || !value.last_error.trim() || charCount(value.last_error) > 200)) ||
+      (value.updated_at !== undefined && (typeof value.updated_at !== "string" || !Number.isFinite(Date.parse(value.updated_at)))) ||
       (value.text !== undefined &&
         (typeof value.text !== "string" || charCount(value.text) > 500))
     )
@@ -208,6 +213,10 @@ function words(text: string) {
 }
 export class MemoryEngine {
   memory: Memory;
+  // Reservations are charged durably first. A crash retains that conservative charge.
+  private memoryReservations = new Map<string, {
+    sessionId: string; ticket: MemoryReservation; settlement?: Promise<void>;
+  }>();
   types = new Map<string, { owner: string; version: number }>();
   maintenance: (id?: string) => boolean = () => false;
   inputEditGuard: (id: string) => (() => void) = () => () => {};
@@ -845,17 +854,46 @@ export class MemoryEngine {
       } else bucket.unknown_requests++;
     });
   }
-  async reserveConsolidation(id: string, tokens: number) {
+  async reserveConsolidation(id: string, tokens: number, onReserved?: (day: string) => void) {
     if (!Number.isSafeInteger(tokens) || tokens < 0)
       throw Error("整理预留预算必须是非负整数");
-    return this.update(id, (s) => {
+    let reservedDay = "";
+    const accepted = await this.update(id, (s) => {
       const day = new Date().toISOString().slice(0, 10);
       if (s.daily?.day !== day) s.daily = { day, reserved: 0 };
       const budget = s.settings.daily_memory_tokens ?? 20000;
       if (s.daily.reserved + tokens > budget) return false;
       s.daily.reserved += tokens;
+      reservedDay = day;
       return true;
     });
+    if (accepted) onReserved?.(reservedDay);
+    return accepted;
+  }
+  /** Core memory requests only; the legacy reservation API remains estimate-based. */
+  async reserveMemoryRequest(id: string, tokens: number): Promise<MemoryReservation | null> {
+    let day = new Date().toISOString().slice(0, 10);
+    if (!(await this.reserveConsolidation(id, tokens, value => { day = value; }))) return null;
+    const ticket = Object.freeze({ id: randomUUID(), day, reserved: tokens });
+    this.memoryReservations.set(ticket.id, { sessionId: id, ticket });
+    return ticket;
+  }
+  async settleMemoryRequest(id: string, ticket: MemoryReservation, usage?: any, options: { notSent?: boolean } = {}): Promise<void> {
+    const entry = this.memoryReservations.get(ticket.id);
+    if (!entry) return; // Settled, foreign, or from a prior process: never refund again.
+    if (entry.sessionId !== id || entry.ticket.day !== ticket.day || entry.ticket.reserved !== ticket.reserved)
+      throw Error("整理预算凭据不匹配");
+    if (entry.settlement) return entry.settlement;
+    const valid = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0;
+    const actual = options.notSent ? 0
+      : valid(usage?.prompt_tokens) && valid(usage?.completion_tokens) && valid(usage.prompt_tokens + usage.completion_tokens)
+        ? usage.prompt_tokens + usage.completion_tokens : ticket.reserved;
+    entry.settlement = this.update(id, s => {
+      // A request crossing midnight must never subtract from the new day's work.
+      if (s.daily.day !== ticket.day || ticket.day !== new Date().toISOString().slice(0, 10)) return;
+      s.daily.reserved = Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, s.daily.reserved + actual - ticket.reserved));
+    }).finally(() => { this.memoryReservations.delete(ticket.id); });
+    return entry.settlement;
   }
   async summaryState(id: string, key: string, value?: any) {
     safeId(key);

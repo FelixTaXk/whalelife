@@ -12,6 +12,11 @@ const bytes = (n) =>
       ? `${(n / 1024).toFixed(1)} KB`
       : `${(n / 1048576).toFixed(1)} MB`;
 const time = (value) => (value ? new Date(value).toLocaleString() : "—");
+const summaryStatus = {
+  ready: "可用", pending: "等待生成", needs_rebuild: "需要重建", failed: "整理失败",
+  update_failed: "更新失败，沿用有效正文", other_scope: "其他历史范围", legacy: "旧版摘要",
+};
+const summaryNote = (item) => `<p class="muted">${e(item.status_message || "")}</p>${item.last_error ? `<p class="form-error">${e(item.last_error)}</p>` : ""}${item.retry_at ? `<small>下次可重试时间：${time(item.retry_at)}；将在后续对话满足整理条件时尝试。</small>` : ""}`;
 const tabs = [
   ["local-facts", "独立事实"],
   ["facts", "共享事实"],
@@ -160,7 +165,7 @@ function renderTab(app, tab) {
     return `<form id="memory-search-form" class="row"><input name="search" type="search" aria-label="搜索会话" placeholder="搜索名称、会话 ID 或内容" value="${e(s.memorySearch || "")}"><button class="btn" type="submit">搜索</button></form><div class="memory-table">${list.items.map((item) => `<div class="memory-item"><div><strong>${e(item.name || item.id)} ${item.id === s.session ? '<span class="badge green">当前会话</span>' : ""}</strong><small>${item.name ? e(item.id) + " · " : ""}${time(item.updated_at)} · ${bytes(item.bytes)}</small><small title="${e(item.last_persona?.id || "")}">最后使用人格：${e(item.last_persona?.name || "未记录")}</small></div><div class="row session-actions"><button class="btn small" data-session="${e(item.id)}">查看</button><button class="btn small tonal" data-memory-session="${e(item.id)}">查看记忆</button><button class="btn small" data-session-rename="${e(item.id)}">改名</button><button class="btn small danger" data-session-delete="${e(item.id)}">删除</button></div></div>`).join("") || '<p class="empty">暂无匹配的会话。</p>'}</div><div class="row memory-actions"><small>共 ${list.total} 个匹配会话</small><div class="spacer"></div><button class="btn small" data-memory-prev ${list.offset === 0 ? "disabled" : ""}>上一页</button><button class="btn small" data-memory-next ${list.offset + list.limit >= list.total ? "disabled" : ""}>下一页</button></div>`;
   }
   if (tab === "summaries")
-    return `<h2>短期摘要与长期概览</h2><p class="muted">短期摘要仅在历史预算不足时压缩上下文；长期概览随过期且超出保底范围的消息整理，认知单独保存在记忆检索中。新生成的摘要或概览各最多 200 字符，旧摘要保留至下次生成。默认同一会话跨人格共用，按人格隔离时另行保存。</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${item.id.startsWith("s_") ? "短期摘要" : "长期概览"} · ${time(item.updated_at)} · ${bytes(item.bytes)}</small></div><button class="btn small" data-summary="${e(item.id)}">查看内容</button></div>`).join("") || '<p class="empty">尚未生成摘要或概览；仅在满足压缩或长期整理条件时生成。</p>'}</div>`;
+    return `<h2>短期摘要与长期概览</h2><p class="muted">短期摘要仅在历史预算不足时压缩上下文；长期概览随过期且超出保底范围的消息整理，认知单独保存在记忆检索中。新生成的摘要或概览各最多 200 字符。这里显示实际保存状态；需要重建的旧正文不作为当前短期摘要使用。默认同一会话跨人格共用，按人格隔离时另行保存。</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${item.mode === "short" || item.id.startsWith("s_") ? "短期摘要" : "长期概览"}${item.session_name ? ` · ${e(item.session_name)}` : ""}</strong><small>${e(summaryStatus[item.status] || "旧版摘要")} · ${time(item.updated_at)} · ${bytes(item.bytes)}</small>${summaryNote(item)}<small>${e(item.id)}</small></div><button class="btn small" data-summary="${e(item.id)}">${item.bytes ? "查看内容" : "查看状态"}</button></div>`).join("") || '<p class="empty">尚未生成摘要或概览；仅在满足压缩或长期整理条件时生成。</p>'}</div>`;
   return `<h2>本机备份</h2><p class="muted">完整保存记忆目录，包含目录内的人格文件。恢复前自动备份当前数据；不覆盖模型配置和密钥。</p><p class="memory-location">备份位置：${e(data.directory)}</p><div class="memory-table">${data.items.map((item) => `<div class="memory-item"><div><strong>${e(item.id)}</strong><small>${time(item.created_at)} · ${item.files || 0} 个文件 · ${bytes(item.bytes || 0)} · ${item.kind === "before-restore" ? "恢复前自动备份" : "手动备份"}</small>${item.error ? `<p class="form-error">${e(item.error)}</p>` : ""}</div><button class="btn small" data-restore="${e(item.id)}" ${!item.valid || s.chatBusy || s.memoryCatalog.busy ? "disabled" : ""}>恢复此备份</button></div>`).join("") || '<p class="empty">暂无备份，点击右上方“创建备份”。</p>'}</div>`;
 }
 function joinedSpaces(data) {
@@ -556,8 +561,8 @@ export function bindMemory(app) {
             "/api/memory/summary?id=" + encodeURIComponent(b.dataset.summary),
           );
           app.dialog(
-            "滚动摘要",
-            `<pre class="memory-preview">${e(value.text)}</pre>`,
+            value.mode === "short" || value.id.startsWith("s_") ? "短期摘要" : "长期概览",
+            `${value.session_name ? `<p>${e(value.session_name)}</p>` : ""}${summaryNote(value)}${value.text ? `<pre class="memory-preview">${e(value.text)}</pre>` : '<p class="empty">当前没有可用正文。</p>'}`,
             null,
           );
         } catch (error) {
