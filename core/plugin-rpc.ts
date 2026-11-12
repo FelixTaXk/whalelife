@@ -6,6 +6,7 @@ import { receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 
 type Packet = Record<string, any>;
 type Transport = { send(message: Packet): void };
+type Pending = { resolve(value: any): void; reject(reason: any): void; timer?: NodeJS.Timeout; boxed?: boolean };
 const reference = Symbol("plugin-rpc-reference");
 const forwarded = new WeakMap<Function, { peer: PluginRPC; id: string }>();
 const mirroredSources = new WeakMap<object, { peer: PluginRPC; id: string }>();
@@ -22,8 +23,8 @@ export class PluginRPC {
   private ids = new WeakMap<object, string>();
   private remotes = new Map<string, Remote>();
   private remoteIds = new WeakMap<object, Packet>();
-  private pending = new Map<string, { resolve(value: any): void; reject(reason: any): void; timer?: NodeJS.Timeout; boxed?: boolean }>();
-  private syncResults = new Map<string, Packet>();
+  private pending = new Map<string, Pending>();
+  private syncResults = new Map<string, { ok: boolean; value: any }>();
   private signals = new Map<string, WeakRef<AbortSignal>>();
   private signalControllers = new WeakMap<AbortSignal, AbortController>();
   private signalCleanup = new Map<string, () => void>();
@@ -174,6 +175,38 @@ export class PluginRPC {
     return { kind: "reference", side: this.side, id, generation: this.lease(id), callable: typeof value === "function", label };
   }
   decode(wire: any): any {
+    // Decoding an already-known AbortSignal can synchronously invoke a listener
+    // that calls back through RPC. Register every promise in this packet first,
+    // and retain its value until decoding finishes even if a nested wait receives
+    // its settlement and removes the normal remote-reference cache entry.
+    const promises = new Map<string, Promise<any>>(), created = new Map<string, Pending>();
+    const prepare = (value: any) => {
+      if (!value || (value.side === this.side && value.id)) return;
+      if (value.kind === "promise" && !promises.has(value.id)) {
+        let promise = this.cached(value.id) as Promise<any> | undefined;
+        if (!promise) {
+          promise = this.waiting(value.id);
+          created.set(value.id, this.pending.get(value.id)!);
+          this.retainRemote(value, promise);
+        }
+        promises.set(value.id, promise);
+      } else if (value.kind === "array" || value.kind === "data") {
+        for (const [, item] of value.entries) prepare(item);
+      } else if (value.kind === "signal") prepare(value.reason);
+    };
+    try {
+      prepare(wire);
+      return this.decodePrepared(wire, promises);
+    } catch (error) {
+      // A malformed packet must not leave newly registered promises timing out
+      // later and faulting an unrelated call. Existing shared waits stay intact.
+      for (const [id, pending] of created) if (this.pending.get(id) === pending) {
+        clearTimeout(pending.timer); this.pending.delete(id); this.forgetRemote(id); pending.reject(error);
+      }
+      throw error;
+    }
+  }
+  private decodePrepared(wire: any, promises: Map<string, Promise<any>>): any {
     if (!wire) throw Error("Invalid plugin RPC value");
     if (wire.side === this.side && wire.id) {
       if (!this.objects.has(wire.id)) throw Error("Expired plugin RPC reference");
@@ -192,7 +225,7 @@ export class PluginRPC {
       }
       const keys = new Set(wire.entries.map(([key]: any) => key));
       for (const key of Object.keys(value)) if (!keys.has(key)) delete value[key];
-      for (const [key, item] of wire.entries) Object.defineProperty(value, key, { value: this.decode(item), configurable: true, writable: true, enumerable: true });
+      for (const [key, item] of wire.entries) Object.defineProperty(value, key, { value: this.decodePrepared(item, promises), configurable: true, writable: true, enumerable: true });
       if (wire.kind === "array") value.length = wire.length;
       return value;
     }
@@ -201,15 +234,10 @@ export class PluginRPC {
       const controller = existing ? this.signalControllers.get(existing)! : new AbortController();
       if (!existing) { this.signals.set(wire.id, new WeakRef(controller.signal)); this.signalControllers.set(controller.signal, controller); }
       this.retainRemote(wire, controller.signal);
-      if (wire.aborted) controller.abort(this.decode(wire.reason));
+      if (wire.aborted) controller.abort(this.decodePrepared(wire.reason, promises));
       return controller.signal;
     }
-    if (wire.kind === "promise") {
-      const existing = this.cached(wire.id); if (existing) return existing;
-      const promise = this.waiting(wire.id);
-      this.retainRemote(wire, promise);
-      return promise;
-    }
+    if (wire.kind === "promise") return promises.get(wire.id);
     if (wire.kind === "reference") {
       const existing = this.cached(wire.id); if (existing) { this.retainRemote(wire, existing); return existing; }
       let proxy: any;
@@ -280,7 +308,7 @@ export class PluginRPC {
       const count = Atomics.load(this.wake!, 0); Atomics.wait(this.wake!, 0, count, 10);
     }
     const reply = this.syncResults.get(id)!; this.syncResults.delete(id);
-    const value = this.decode(reply.value); if (!reply.ok) throw value; return value;
+    if (!reply.ok) throw reply.value; return reply.value;
   }
   receive(message: Packet) {
     if (this.ended) return;
@@ -296,7 +324,17 @@ export class PluginRPC {
       return;
     }
     if (message.type === "reply" || message.type === "settled") {
-      if (message.sync) { this.syncResults.set(message.id, message); return; }
+      if (message.sync) {
+        // A nested synchronous call may pump this reply before its caller resumes.
+        // Decode now so a following settlement already has a registered waiter.
+        try {
+          const value = this.decode(message.value);
+          if (!this.ended) this.syncResults.set(message.id, { ok: message.ok, value });
+        } catch (error) {
+          if (!this.ended) this.syncResults.set(message.id, { ok: false, value: error });
+        }
+        return;
+      }
       const pending = this.pending.get(message.id);
       try {
         if (pending) {
