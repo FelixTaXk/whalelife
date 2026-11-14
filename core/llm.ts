@@ -8,6 +8,7 @@ import {
   validateModelParameters,
 } from "./model-config.ts";
 import { withModelResponse, modelErrorMessage } from "./model-http.ts";
+import type { Diagnostics } from "./diagnostics.ts";
 /** Completed transcript rows have no protocol reasoning. Quote them as history for these APIs. */
 export function thinkingToolHistory(provider: any, tools: unknown[]) {
   if (!tools.length || provider.parameters?.thinking?.type === "disabled") return false;
@@ -20,6 +21,7 @@ export class LLM {
   logger: Logger;
   providers: any[];
   resolver?: (model: string) => any;
+  diagnostics?: Diagnostics;
   constructor(
     logger: Logger,
     providers: any[] = [],
@@ -76,7 +78,7 @@ export class LLM {
           ...(opts.tools?.length ? { tools: opts.tools } : {}),
           ...(opts.tool_choice === "none" ? { tool_choice: "none" } : {}),
         },
-        async (response) => {
+        async (response, trace) => {
           if (!response.body) throw Error("模型返回空响应");
           let buffer = "",
             text = "",
@@ -90,6 +92,7 @@ export class LLM {
             if (!line.startsWith("data:")) return;
             const data = line.slice(5).trim();
             if (data === "[DONE]") {
+              trace?.emit("response.chunk", { phase: "sse", raw: data });
               done = true;
               return;
             }
@@ -98,12 +101,21 @@ export class LLM {
             try {
               obj = JSON.parse(data);
             } catch {
+              trace?.emit("response.chunk", { phase: "sse", raw: data, parse_error: true });
               throw Error("模型服务返回了无效的流式数据");
             }
+            const observed = obj?.choices?.[0]?.delta;
+            trace?.emit("response.chunk", { phase: "sse", raw: obj,
+              ...(observed?.content === undefined ? {} : { text: observed.content }),
+              ...(observed?.reasoning_content === undefined ? {} : { reasoning: observed.reasoning_content }),
+              ...(observed?.tool_calls === undefined ? {} : { tool_calls: observed.tool_calls }) });
+            if (obj?.usage !== undefined && obj?.usage !== null)
+              trace?.emit("request.usage", { usage: obj.usage, mode: "snapshot", stage: "interim" });
             if (obj.error) throw Error(modelErrorMessage(undefined, obj, opts.provider.api_key));
             usage = obj.usage ?? usage;
             const choice = obj.choices?.[0];
             if (typeof choice?.finish_reason === "string") {
+              trace?.finish({ finish_reason: choice.finish_reason });
               // Only log known protocol labels; an arbitrary value may contain private text.
               finishReason = ["stop", "length", "content_filter", "tool_calls", "insufficient_system_resource", "aborted"]
                 .includes(choice.finish_reason) ? choice.finish_reason : "unknown";
@@ -111,8 +123,10 @@ export class LLM {
             const delta = choice?.delta;
             if (typeof delta?.reasoning_content === "string")
               reasoning = (reasoning ?? "") + delta.reasoning_content;
+            trace?.finish({ ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) });
             if (delta?.content) {
               text += delta.content;
+              trace?.finish({ text });
               opts.onChunk?.(delta.content);
             }
             for (const c of delta?.tool_calls ?? []) {
@@ -125,6 +139,7 @@ export class LLM {
               if (c.function?.name) item.name += c.function.name;
               if (c.function?.arguments) item.arguments += c.function.arguments;
             }
+            trace?.finish({ text, tool_calls: calls.filter(Boolean) });
           };
           for await (const bytes of response.body) {
             buffer += decoder.decode(bytes, { stream: true });
@@ -143,11 +158,15 @@ export class LLM {
             usage,
             ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
           });
+          if (usage !== undefined) trace?.emit("request.usage", { usage, mode: "snapshot", stage: "final" });
+          trace?.finish({ text, tool_calls: calls.filter(Boolean),
+            ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) });
           return { text, toolCalls: calls.filter(Boolean), usage,
             ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
             ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) };
         },
         opts.signal,
+        this.diagnostics,
       );
     } catch (error) {
       this.logger.error("LLM 请求失败", { error, ms: Date.now() - start });

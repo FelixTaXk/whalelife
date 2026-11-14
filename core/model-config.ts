@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
+import type { Diagnostics } from "./diagnostics.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { timezone } from "./time.ts";
 import { readFileSync } from "node:fs";
@@ -429,6 +430,7 @@ export function resolveModel(config: any, selected: string) {
 }
 
 export class ModelConfig {
+  diagnostics?: Diagnostics;
   file: string;
   config: any;
   logger: Logger;
@@ -816,27 +818,39 @@ export class ModelConfig {
     payload?: unknown,
     signal?: AbortSignal,
   ) {
-    return withModelResponse(provider, endpoint, payload, async (response) => {
+    const run = () => withModelResponse(provider, endpoint, payload, async (response, trace) => {
+      const chunks: Uint8Array[] = [];
+      const limit = 2 * 1024 * 1024;
+      let size = 0, complete = false, truncated = false;
       try {
         const reader = response.body?.getReader();
         if (!reader) throw Error();
-        const chunks: Uint8Array[] = [];
-        let size = 0;
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) { complete = true; break; }
           size += value.length;
-          if (size > 2 * 1024 * 1024) {
+          if (size > limit) {
+            truncated = true;
+            if (trace) chunks.push(value.subarray(0, Math.max(0, limit - (size - value.length))));
             await reader.cancel();
             throw Error();
           }
           chunks.push(value);
         }
-        return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        trace?.emit("response.chunk", { raw: data });
+        if (data?.usage) trace?.emit("request.usage", { usage: data.usage, mode: "snapshot", stage: "final" });
+        trace?.finish({ response: data });
+        return data;
       } catch {
+        trace?.emit("response.chunk", { phase: "json_error", raw: Buffer.concat(chunks).toString("utf8"),
+          observed_bytes: size, limit_bytes: limit, complete, truncated });
+        trace?.finish({ response_complete: complete, response_truncated: truncated });
         throw new ModelConfigError("模型服务返回了无效或过大的 JSON 响应", 502);
       }
-    }, signal);
+    }, signal, this.diagnostics);
+    return this.diagnostics?.enabled ? this.diagnostics.run({ purpose: endpoint.includes("/models") ? "model_metadata"
+      : endpoint.includes("embeddings") || endpoint.includes("embedding") ? "embedding_test" : "model_test" }, run) : run();
   }
   async listModels(providerId: string, signal?: AbortSignal) {
     const provider = this.provider(providerId);

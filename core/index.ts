@@ -5,6 +5,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Diagnostics } from "./diagnostics.ts";
 import { Logger } from "./logger.ts";
 import { Memory } from "./memory.ts";
 import { MemoryAdmin } from "./memory-admin.ts";
@@ -39,7 +40,17 @@ export async function boot(
   logger.info("配置加载与校验", {
     providers: config.providers.map((p: any) => p.id),
   });
+  const diagnostics = new Diagnostics(root, { ...config.diagnostics,
+    excluded_directories: [resolve(root, config.memory.root), resolve(root, "logs")],
+  }, logger, () => config.providers.map((p: any) => p.api_key).filter(Boolean));
+  await diagnostics.initialize();
+  diagnostics.event("coverage", {
+    supported: ["core_session_chat", "core_tools", "memory_diary", "legacy_memory_maintenance", "plugin_llm_chat", "model_config_http"],
+    unverified: ["plugin_direct_http_after_models_connection", "provider_internal_usage", "provider_billing"],
+    note: "只记录主干实际观察的请求和用量；插件自行使用 SDK/HTTP 的调用不在覆盖范围，不推断缺失用量或任务关系。",
+  });
   const modelConfig = new ModelConfig(root, config, logger);
+  modelConfig.diagnostics = diagnostics;
   const memory = new Memory(resolve(root, config.memory.root), logger);
   await memory.init();
   const memoryEngine = new MemoryEngine(memory);
@@ -65,8 +76,11 @@ export async function boot(
     tools = new Tools(logger, config.permissions?.tools);
   const executionArchive = new ExecutionArchive(resolve(root, "logs/executions"), logger);
   tools.executionArchive = executionArchive;
+  llm.diagnostics = diagnostics;
+  tools.diagnostics = diagnostics;
   const runtime = new Runtime(root, logger, config.plugin_runtime);
   const services: any = {
+    diagnostics,
     logger,
     memory,
     memoryEngine,
@@ -136,6 +150,7 @@ export async function boot(
     await Promise.all([web.close(), sessions.close(), services.channels.close(), runtime.bus.stop()]);
     await runtime.events.drain();
     await memory.queue;
+    await diagnostics.close();
   })();
   return { config, ...services, runtime, close };
 }

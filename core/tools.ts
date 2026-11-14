@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
+import type { Diagnostics } from "./diagnostics.ts";
 import { decision } from "./permission.ts";
 import type { Logger } from "./logger.ts";
 import { randomUUID, createHash } from "node:crypto";
@@ -16,6 +17,7 @@ export class Tools {
   overrides: any;
   observe?: (event: any) => Promise<void>;
   executionArchive?: ExecutionArchive;
+  diagnostics?: Diagnostics;
   private persisted = new WeakMap<object, { ok: boolean; result: unknown; transient: true }>();
   private media = new WeakMap<object, { content: ToolContentPart[]; signal: AbortSignal }>();
   constructor(logger: Logger, overrides: any = {}) {
@@ -67,6 +69,29 @@ export class Tools {
   stored(result: any) { return this.persisted.get(result) ?? result; }
   multimodal(result: object) { return this.media.get(result); }
   async call(name: string, args: any, session: any, callId = randomUUID(), turn: ToolTurn = { transient: false }) {
+    const diagnostics = this.diagnostics;
+    if (!diagnostics?.enabled) return this.invoke(name, args, session, callId, turn);
+    const parent = diagnostics.current(), tool = this.entries.get(name);
+    const own = !parent.execution_id;
+    return diagnostics.run({ execution_id: parent.execution_id ?? turn.execution?.id ?? randomUUID(),
+      ...(session.id ? { session_id: session.id } : {}), tool_call_id: callId,
+      ...(tool?.owner ? { plugin_id: tool.owner } : {}), relation_verified: true }, async () => {
+      if (own) diagnostics.event("execution.start", { title: "direct_tool", trigger: "tool_call", origin: tool?.origin });
+      diagnostics.event("tool.start", { tool_call_id: callId, name, arguments: args, origin: tool?.origin });
+      let status = "failed";
+      try {
+        const result = await this.invoke(name, args, session, callId, turn);
+        status = result.ok ? "completed" : session.signal?.aborted ? "cancelled" : "failed";
+        diagnostics.event("tool.end", { tool_call_id: callId, name, status, result,
+          ...(this.media.has(result) ? { content: this.media.get(result)!.content } : {}) });
+        return result;
+      } catch (error) {
+        diagnostics.event("tool.end", { tool_call_id: callId, name, status, error });
+        throw error;
+      } finally { if (own) diagnostics.event("execution.end", { status }); }
+    });
+  }
+  private async invoke(name: string, args: any, session: any, callId: string, turn: ToolTurn) {
     const tool = this.entries.get(name);
     if (tool?.transientResult || session.transientContext) turn.transient = true;
     const storedName = turn.transient && !tool ? "[未注册工具]" : name;
@@ -148,6 +173,7 @@ export class Tools {
       }
       return report(true, result);
     } catch (error: any) {
+      this.diagnostics?.event("tool.error", { tool_call_id: callId, name, error });
       const message = error instanceof ToolContentError ? error.message : turn.transient ? "临时工具调用失败，未保存原始错误；外部动作结果请通过插件回执核对，不要自动重试。" : error?.message ?? String(error);
       this.logger.error("工具调用失败", { name: storedName, error: turn.transient ? message : error });
       return report(false, message);

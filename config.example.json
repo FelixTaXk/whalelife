@@ -1,6 +1,7 @@
 {
   "web": { "host": "127.0.0.1", "port": 9270 },
   "log": { "level": "info", "keep_days": 14, "max_web_lines": 1000 },
+  "diagnostics": { "enabled": false, "directory": "" },
   "providers": [],
   "models": [],
   "model_bindings": {

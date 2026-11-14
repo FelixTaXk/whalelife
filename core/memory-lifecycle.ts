@@ -131,7 +131,9 @@ async function request(options: Options, messages: any[], mode: "short" | "long"
     await engine.summaryState(id, options.key, { ...own, ...attempt });
     signal?.throwIfAborted();
     sent = true;
-    const result = await services.llm.chat({ provider: maintenanceProvider(provider, mode), messages, max_tokens: maxTokens, signal });
+    const run = () => services.llm.chat({ provider: maintenanceProvider(provider, mode), messages, max_tokens: maxTokens, signal });
+    const result = await (services.diagnostics?.enabled
+      ? services.diagnostics.run({ session_id: id, purpose: "memory_" + mode }, run) : run());
     usage = result.usage;
     await engine.usage(id, "memory", usage);
     signal?.throwIfAborted();

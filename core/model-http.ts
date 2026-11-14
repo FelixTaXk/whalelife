@@ -3,6 +3,83 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import { ProxyAgent } from "undici";
+import { randomUUID } from "node:crypto";
+import type { Diagnostics } from "./diagnostics.ts";
+
+export type ModelResponseTrace = {
+  emit(kind: string, data: any): void;
+  /** Accumulate observed result fields; request.end is emitted by the transport. */
+  finish(data: any): void;
+};
+
+function requestCapture(diagnostics: Diagnostics | undefined, provider: ModelTransport, endpoint: string) {
+  try { if (!diagnostics?.enabled) return; } catch { return; }
+  const sink = diagnostics!;
+  const safe = (fn: () => void) => { try { fn(); } catch { /* Diagnostics must not change a model call. */ } };
+  const errorText = (error: unknown) => {
+    try { return error instanceof Error ? error.message : String(error); } catch { return "模型请求失败，异常内容不可读取"; }
+  };
+  safe(() => sink.registerSecret(provider.api_key ?? ""));
+  let parent: any = {};
+  safe(() => { parent = sink.current() ?? {}; });
+  const independent = !parent.execution_id;
+  const context = { ...parent, execution_id: parent.execution_id ?? "model_" + randomUUID(), request_id: "request_" + randomUUID() };
+  const identity = { provider: (provider as any).id, model: (provider as any).model,
+    protocol: (provider as any).protocol ?? "openai-compatible",
+    purpose: parent.purpose ?? (endpoint === "/chat/completions" ? "chat" : endpoint === "/models" ? "model_list" : "model_request") };
+  let started = false, result: any = { phase: "preparing", transport_started: false, response_received: false };
+  const emit = (kind: string, data: any) => safe(() => sink.event(kind, data, context));
+  const trace: ModelResponseTrace = {
+    emit: (kind, data) => {
+      safe(() => { if (kind === "request.usage") result = { ...result, usage: data.usage, mode: data.mode, stage: data.stage }; });
+      emit(kind, data);
+    },
+    finish: data => safe(() => { result = { ...result, ...data }; }),
+  };
+  return {
+    trace,
+    prepared(url: string, init: RequestInit) {
+      safe(() => {
+        const body = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
+        started = true;
+        emit("request.start", { ...identity, model: body?.model ?? identity.model, phase: "prepared", method: init.method, url,
+          headers: init.headers, ...(body === undefined ? {} : { body }) });
+      });
+    },
+    transport() { trace.finish({ phase: "transport_started", transport_started: true, transport_started_at: new Date().toISOString() }); },
+    received(response: Response) {
+      safe(() => {
+        const data = { phase: "received", http_status: response.status, status_text: response.statusText,
+          headers: Object.fromEntries(response.headers), response_received_at: new Date().toISOString() };
+        trace.finish({ ...data, response_received: true });
+        emit("response.chunk", data);
+      });
+    },
+    async run<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+      const execute = async () => {
+        if (independent) emit("execution.start", { title: "模型请求", trigger: "program" });
+        let status = "completed", failure: unknown;
+        try { return await fn(); }
+        catch (error) {
+          status = signal?.aborted ? "cancelled" : error instanceof ModelRequestError && error.status === 504 ? "timeout" : "failed";
+          failure = error;
+          throw error;
+        } finally {
+          if (!started) emit("request.start", { ...identity, phase: "preparation_failed", body_unavailable: true });
+          emit("request.end", { ...result, status,
+            ...(failure === undefined ? {} : { error: errorText(failure) }) });
+          if (independent) emit("execution.end", { status });
+        }
+      };
+      // A broken observer may throw before invoking its callback. Never rerun an
+      // operation which already began, even when the observer itself throws.
+      let operation: Promise<T> | undefined;
+      try { sink.run(context, () => (operation = execute())); }
+      catch { /* Await an already-started operation, never replay it. */ }
+      return operation ?? execute();
+    },
+  };
+}
 
 export interface ModelTransport {
   base_url: string;
@@ -44,25 +121,36 @@ export function modelErrorMessage(status: number | undefined, body: any, secret 
   return (status === undefined ? "模型服务返回错误" : `模型服务返回 HTTP ${status}`) + (details ? "：" + details : "");
 }
 
-async function boundedErrorBody(response: Response) {
+async function boundedErrorBody(response: Response, trace?: ModelResponseTrace) {
   const reader = response.body?.getReader();
-  if (!reader) return undefined;
+  if (!reader) { trace?.emit("response.chunk", { phase: "error_body", raw: "", complete: true, boundary: "no_body" }); return undefined; }
   const limit = 16 * 1024, decoder = new TextDecoder();
   let size = 0, raw = "";
-  const timer = setTimeout(() => { void reader.cancel().catch(() => {}); }, 1000);
+  let complete = false, truncated = false, timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; void reader.cancel().catch(() => {}); }, 1000);
   timer.unref();
   try {
     while (size < limit) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) { complete = !timedOut; break; }
       const chunk = value.subarray(0, limit - size);
+      if (chunk.length < value.length) truncated = true;
       size += chunk.length;
       raw += decoder.decode(chunk, { stream: true });
     }
     raw += decoder.decode();
-    try { return JSON.parse(raw); } catch { return undefined; }
+    try {
+      const body = JSON.parse(raw);
+      if (body?.usage !== undefined && body?.usage !== null)
+        trace?.emit("request.usage", { usage: body.usage, mode: "snapshot", stage: "interim" });
+      return body;
+    } catch { return undefined; }
   } finally {
     clearTimeout(timer);
+    trace?.emit("response.chunk", { phase: "error_body", raw, observed_bytes: size, limit_bytes: limit,
+      complete, truncated, boundary: complete ? "end" : truncated ? "truncated" : timedOut ? "timeout" : size >= limit ? "limit_unknown" : "interrupted" });
+    trace?.finish({ response: raw, response_complete: complete, response_truncated: truncated,
+      response_boundary: complete ? "end" : truncated ? "truncated" : timedOut ? "timeout" : size >= limit ? "limit_unknown" : "interrupted" });
     await reader.cancel().catch(() => {});
   }
 }
@@ -109,9 +197,13 @@ export async function withModelResponse<T>(
   provider: ModelTransport,
   endpoint: string,
   payload: unknown | undefined,
-  consume: (response: Response) => Promise<T>,
+  consume: (response: Response, trace?: ModelResponseTrace) => Promise<T>,
   externalSignal?: AbortSignal,
+  diagnostics?: Diagnostics,
 ): Promise<T> {
+  let capture: ReturnType<typeof requestCapture>;
+  try { capture = requestCapture(diagnostics, provider, endpoint); } catch { /* Optional observer setup is best effort. */ }
+  const execute = async (): Promise<T> => {
   externalSignal?.throwIfAborted();
   const seconds = timeoutSeconds(provider.timeout_seconds);
   const proxy = proxyURL(provider.proxy_url);
@@ -163,10 +255,13 @@ export async function withModelResponse<T>(
         signal,
         ...(dispatcher ? { dispatcher } : {}),
       };
+      capture?.prepared(provider.base_url.replace(/\/+$/, "") + endpoint, init);
+      capture?.transport();
       response = await fetch(
         provider.base_url.replace(/\/+$/, "") + endpoint,
         init,
       );
+      capture?.received(response);
     } catch {
       checkAbort();
       throw new ModelRequestError(
@@ -176,13 +271,13 @@ export async function withModelResponse<T>(
     }
     if (!response.ok) {
       let body: unknown;
-      try { body = await boundedErrorBody(response); } catch { /* retain the HTTP status on truncated/erroring bodies */ }
+      try { body = await boundedErrorBody(response, capture?.trace); } catch { /* retain the HTTP status on truncated/erroring bodies */ }
       checkAbort();
       throw new ModelRequestError(modelErrorMessage(response.status, body, provider.api_key,
         response.headers.get("x-request-id") ?? response.headers.get("request-id")), 502);
     }
     try {
-      return await consume(response);
+      return await consume(response, capture?.trace);
     } catch (error) {
       checkAbort();
       throw error;
@@ -190,4 +285,6 @@ export async function withModelResponse<T>(
   } finally {
     if (dispatcher) await dispatcher.destroy();
   }
+  };
+  return capture ? capture.run(execute, externalSignal) : execute();
 }

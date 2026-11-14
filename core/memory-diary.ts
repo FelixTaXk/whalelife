@@ -131,8 +131,10 @@ export async function writeDiary(options: WriteDiaryOptions): Promise<WriteDiary
     signal?.throwIfAborted();
     sent = true;
     const requestProvider = diaryProvider(provider, outputTokens);
-    const result = await services.llm.chat({ provider: requestProvider, messages,
+    const run = () => services.llm.chat({ provider: requestProvider, messages,
       ...(Object.hasOwn(requestProvider.parameters, "max_completion_tokens") ? {} : { max_tokens: outputTokens }), signal });
+    const result = await (services.diagnostics?.enabled
+      ? services.diagnostics.run({ session_id: id, purpose: "memory_diary" }, run) : run());
     usage = result.usage;
     await engine.usage(id, "memory", usage);
     reported = true;

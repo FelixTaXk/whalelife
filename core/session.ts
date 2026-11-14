@@ -8,7 +8,7 @@ import { thinkingToolHistory } from "./llm.ts";
 import { promptText, toolContentMessage, TOOL_CONTENT_LIMITS } from "./tool-content.ts";
 import { timezone, timeContext, timeLabel, messageTime, summaryTime, TIME_GUIDANCE } from "./time.ts";
 import { safeId } from "./memory.ts";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { estimateTokens } from "./memory-engine.ts";
 import type { ChannelRoute } from "./channels.ts";
 import { shortSummaryKey, shortContext, compressShort, consolidateLong, shouldDeferShortToLong } from "./memory-lifecycle.ts";
@@ -309,6 +309,10 @@ export class Sessions {
       ...(transient ? {} : { trigger: text.slice(0, 160) }),
     });
     turn.execution = execution;
+    const diagnostics = this.services.diagnostics;
+    const observed = async () => {
+    diagnostics?.event("execution.start", { title: transient ? "technical_task" : "conversation",
+      trigger: transient ? "program" : "conversation_input", origin: route?.origin ?? { channel: "web" } });
     let executionStatus: "completed" | "failed" | "cancelled" = "failed";
     try {
       const channel = route ?? this.config.channels.web;
@@ -531,6 +535,10 @@ export class Sessions {
         throw Error((memoryNotice ? memoryNotice + " " : "") + "当前上下文已达到模型容量，原文已保留。请在使用配置中选择新会话、调整模型容量或启用日记压缩；不会自动删减历史或切换会话。");
       const frame = assemble();
       const messages: any[] = frame.messages;
+      if (diagnostics?.enabled) diagnostics.event("context.change", { operation: "assemble", source: "session",
+        description: "人格、事实、有效日记、召回与历史经当前策略组装；实际发送内容以 request.start.body 为准",
+        after: { materials: materials(), history: recent, input: text, transient,
+          history_scope: policy.history_scope, context_limit: limit.tokens, request_budget: Number.isFinite(requestBudget) ? requestBudget : null } });
       let final = "";
       let measured: any = null;
       let memoryWriteRejected = false;
@@ -551,6 +559,7 @@ export class Sessions {
           await memory.appendEvent(row);
           messages.push({ role: "user", content: "【本轮用户补充；消息时间 " + messageTime(row, zone) +
             "；来源 " + JSON.stringify(source.origin) + "】\n" + message.text });
+          diagnostics?.event("context.change", { operation: "append", source: "user_input", after: messages.at(-1) });
           await execution?.write("input_appended", { message_id: message.messageId,
             received_at: message.receivedAt, timezone: message.timezone });
         }
@@ -563,7 +572,8 @@ export class Sessions {
         signal.throwIfAborted();
         const requestSignal = mediaSignals.length ? AbortSignal.any([signal, ...mediaSignals]) : signal;
         requestSignal.throwIfAborted();
-        frame.refreshTime(timing());
+        let requestTime = timing();
+        frame.refreshTime(requestTime);
         if (
           estimateTokens(promptText(messages) + JSON.stringify(activeTools)) >
           requestBudget
@@ -579,12 +589,14 @@ export class Sessions {
         if (input?.hasPending()) {
           do { await consumeInput(); } while (input.hasPending());
           requestSignal.throwIfAborted();
-          frame.refreshTime(timing());
+          requestTime = timing();
+          frame.refreshTime(requestTime);
           if (estimateTokens(promptText(messages) + JSON.stringify(activeTools)) > requestBudget) {
             await execution?.write("blocked", { reason: "context_capacity_exceeded", round: turn.round, request_budget: requestBudget });
             throw Error("本轮内容或工具结果超出模型上下文预算，请减少输入或切换更大上下文模型");
           }
         }
+        diagnostics?.event("context.change", { operation: "refresh", source: "clock", after: requestTime, round: turn.round });
         const reply = await llm.chat({
           provider: p.provider,
           messages,
@@ -615,6 +627,7 @@ export class Sessions {
             function: { name: c.name, arguments: c.arguments },
           })),
         });
+        diagnostics?.event("context.change", { operation: "append", source: "model_tool_calls", after: messages.at(-1) });
         // Protect the entire batch before any call can log parameters or fail.
         if (reply.toolCalls.some((call: any) => tools.entries?.get(call.name)?.transientResult)) turn.transient = true;
         const attachments = [];
@@ -628,6 +641,8 @@ export class Sessions {
           if (superseded) {
             result = { ok: false, executed: false, reason: "user_input_appended",
               result: "未执行：用户补充了消息，请结合补充内容重新判断是否仍需调用此工具。" };
+            diagnostics?.event("tool.end", { tool_call_id: call.id, name: call.name, arguments: call.arguments,
+              status: "skipped", result });
             await execution?.write("tool_skipped", { round: turn.round, tool_call_id: call.id,
               tool: turn.transient && !toolOrigin ? "[未注册工具]" : call.name, reason: "user_input_appended" });
           } else try {
@@ -640,6 +655,8 @@ export class Sessions {
             );
           } catch (error: any) {
             result = { ok: false, result: turn.transient ? "临时调用参数或执行失败；原始错误不保存" : error.message };
+            diagnostics?.event("tool.end", { tool_call_id: call.id, name: call.name, arguments: call.arguments,
+              status: "rejected", error });
             await execution?.write("tool_rejected", { round: turn.round,
               tool: turn.transient && !toolOrigin ? "[未注册工具]" : call.name, error: result.result,
               ...(turn.transient ? {} : { arguments: call.arguments }) });
@@ -673,8 +690,10 @@ export class Sessions {
             tool_call_id: call.id,
             content: JSON.stringify(media ? { ok: true, result: "临时内容块见本批工具结果后的附件；仅供当前轮读取" } : result),
           });
+          diagnostics?.event("context.change", { operation: "append", source: "tool_result", after: messages.at(-1) });
         }
         messages.push(...attachments);
+        if (attachments.length) diagnostics?.event("context.change", { operation: "append", source: "tool_attachments", after: attachments });
       }
       if (!final) throw Error("模型未返回最终回复，请重试");
       await memory.appendEvent({
@@ -700,13 +719,18 @@ export class Sessions {
       executionStatus = "completed";
       return final;
     } catch (error: any) {
+      diagnostics?.event("execution.error", { error });
       await execution?.write("error", { round: turn.round,
         error: turn.transient ? "含临时资料的执行失败，原始错误不落盘；请核对前序步骤和插件回执" : error });
       throw error;
     } finally {
       this.identities.delete(id);
       input?.closeInput();
+      diagnostics?.event("execution.end", { status: signal.aborted ? "cancelled" : executionStatus });
       await execution?.end(signal.aborted ? "cancelled" : executionStatus);
     }
+    };
+    return diagnostics?.enabled ? diagnostics.run({ execution_id: execution?.id ?? randomUUID(), session_id: id,
+      purpose: "chat", relation_verified: true, ...(route?.origin?.plugin ? { plugin_id: route.origin.plugin } : {}) }, observed) : observed();
   }
 }

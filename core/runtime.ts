@@ -272,7 +272,11 @@ export class Runtime {
             list: () => { alive(); return structuredClone(value.list()); },
             call: (name: string, args: any, session: any, ...rest: any[]) => { alive(); return value.call(name, args, { ...session, signal: AbortSignal.any([controller.signal, ...(session?.signal ? [session.signal] : [])]) }, ...rest); },
           };
-          if (name === "llm") facade = { chat: (options: any) => { alive(); return value.chat({ ...options, signal: AbortSignal.any([controller.signal, ...(options.signal ? [options.signal] : [])]) }); } };
+          if (name === "llm") facade = { chat: (options: any) => {
+            alive();
+            const run = () => value.chat({ ...options, signal: AbortSignal.any([controller.signal, ...(options.signal ? [options.signal] : [])]) });
+            return value.diagnostics?.enabled ? value.diagnostics.run({ plugin_id: id, purpose: "plugin_chat" }, run) : run();
+          } };
           if (name === "models" || name === "personas") facade = { list: (...args: any[]) => { alive(); return value.list(...args); },
             ...(name === "models" ? { connection: (selected: string) => { alive(); return value.connection(selected); } } : {}) };
           if (name === "sessions") facade = value.plugin(id, controller.signal);

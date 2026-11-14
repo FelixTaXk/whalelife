@@ -352,6 +352,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
           memory: await memory.status(),
           plugins: runtime.list(),
           pluginPages: routes.pages(),
+          diagnostics: services.diagnostics?.status(),
         });
       if (req.method === "GET" && req.url === "/api/logs")
         return send(200, logger.lines);
