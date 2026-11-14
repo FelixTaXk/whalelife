@@ -1,53 +1,49 @@
-# WhaleLife / whalecore
+# WhaleLife
 
-本地机器人主干：模型 API 配置、LLM 人格与记忆、插件运行与调用、日志与权限、统一配置和管理入口。平台与业务能力由插件实现。
+WhaleLife 是一个在本机运行、通过插件扩展能力的 AI 伙伴框架。你可以选择模型、编辑人格，在网页里与它聊天，再按需接入 QQ、网页浏览、B 站和视听理解等能力。
 
-**了解目前做到了哪里，先读[主干现状与开发说明](architecture/STATUS.md)。** 该文档统一记录能力清单、实际调用链、代码分工、数据归属、验证证据与现存问题；本页只负责启动和导航，不另维护一份状态清单。
+主干负责模型配置、人格与记忆、插件运行、日志和权限；具体能力由各自独立的插件提供。
 
-## 启动
+- **延续交流**：网页与渠道插件使用同一会话时，可以接着之前的内容聊；切换人格不会自动新建会话。
+- **自己决定何时整理记忆**：自动整理为日记默认关闭，需要时可按上下文占用比例开启。有效日记替代对应原文进入上下文，原始记录仍保留。
+- **按需添加能力**：先完成本地聊天，再安装需要的插件；在控制台管理插件设置与启停。
 
-1. 安装Node.js 24或更新版本，确认 `node --version`。仓库不包含运行时和个人配置。
-2. 用Node 24环境执行 npm ci 安装依赖；已安装时无需重复。
-3. 首次运行将 config.example.json 复制为 config/config.json；已有配置不可覆盖。
-4. 运行 start.bat，或在Node 24终端执行 npm start，打开本地控制台 http://127.0.0.1:9270 。
-5. 在模型服务中配置自己的连接和模型，到使用配置/人格页明确选择对话模型和人格。公开模板不预选真实服务。
+## 开始使用
 
-默认仅监听本机；局域网访问需配置web.lan_enabled与密码。Ctrl+C触发退出。控制台保存的模型和人格选择供后续请求读取；端口等启动参数变更需重启。安装插件独立执行，清理超时后主干终止其进程。
+1. 下载本仓库源码，安装 **Node.js 24 或更新版本**，用 `node --version` 确认版本。
+2. 在项目目录打开终端，执行 `npm ci` 安装依赖。
+3. 首次使用时创建 `config` 文件夹，将根目录的 `config.example.json` 复制为 `config/config.json`。升级已有安装时保留原配置。
+4. 执行 `npm start`；Windows 也可以双击 `start.bat`。打开 [本地控制台](http://127.0.0.1:9270)。
+5. 在“模型服务”添加服务连接和聊天模型，在“使用配置”选择模型与人格，然后到“对话”页开始聊天。已提供默认人格“鲸鲸”，可以在“人格”页编辑或新建。
 
-上下文由有效日记和尚未覆盖的原文组成，没有日记时保留完整有效历史。“自动整理为日记”默认关闭，可按模型容量比例开启；关闭后停止新整理，已有日记继续使用。模型容量可自动获取，未知时手动填写。原文始终保留，修改开关不切换会话；详见[记忆系统](architecture/MEMORY.md)。
+模型服务可配置云端或本地的 OpenAI 兼容接口，具体模型需支持所用的对话及工具调用能力。首次启动会初始化记忆目录和缺失的默认人格文件，无需提前准备聊天记录。
 
-## 文档分工
+默认仅供本机访问。需要局域网访问时，在配置中开启 `web.lan_enabled` 并设置密码。模型与人格选择保存后供后续对话使用；端口等启动参数变更后需重启。终端中按 `Ctrl+C` 退出。
 
-| 入口 | 负责的内容 |
+## 插件
+
+各插件独立维护，安装和配置方法见对应仓库。按插件说明使用发行包或构建产物，无需把整个源码仓库放进 `plugins`。
+
+| 插件 | 能力 |
 | --- | --- |
-| [主干现状与开发说明](architecture/STATUS.md) | 整体能力、当前架构、源码地图、统一问题表及验证范围 |
-| [开发硬约束](AGENTS.md) | 主干/插件职责、独立升级、兼容和故障切割要求 |
-| [插件扩展契约](architecture/PLUGINS.md) | 插件可用接口、生命周期、页面、事件与调用语义 |
-| [记忆系统](architecture/MEMORY.md) | 完整上下文、逐篇日记、容量占比、原文追溯与旧数据兼容 |
-| [现有渠道接口](architecture/CHANNELS.md) | 已实现的绑定、收发、回执和来源约定 |
-| [插件开发规则](plugins/AGENTS.md) | 插件会话的修改范围和约束 |
+| [QQ](https://github.com/iinukami/whalelife-plugin-qq) | 在 QQ 收发消息，与当前会话衔接 |
+| [QQ 空间](https://github.com/iinukami/whalelife-plugin-qzone) | QQ 空间浏览与互动，作为 QQ 的子插件安装 |
+| [自主性](https://github.com/iinukami/whalelife-plugin-autonomy) | 管理意图与主动行动，按配置调用已有能力 |
+| [图库](https://github.com/iinukami/whalelife-plugin-gallery) | 管理图片，供模型查看和其他插件使用 |
+| [网上冲浪](https://github.com/iinukami/whalelife-plugin-surf) | 搜索网页、阅读正文、沿链接继续浏览 |
+| [B 站](https://github.com/iinukami/whalelife-plugin-bilibili) | 搜索与浏览视频、按配置互动，作为网上冲浪的子插件安装 |
+| [视听理解](https://github.com/iinukami/whalelife-plugin-vision) | 准备图片、视频片段和声音证据，供当前模型理解 |
 
-插件独立维护：
+QQ 空间依赖 QQ，B 站依赖网上冲浪；媒体处理等可选能力和资源要求以各插件说明为准。
 
-- [QQ](https://github.com/iinukami/whalelife-plugin-qq)
-- [QQ 空间](https://github.com/iinukami/whalelife-plugin-qzone)
-- [图库](https://github.com/iinukami/whalelife-plugin-gallery)
-- [自主性](https://github.com/iinukami/whalelife-plugin-autonomy)
+## 进一步了解
 
-主仓库不携带这些插件的源码或运行数据；`examples/` 和 `tests/fixtures/` 仅为开发示例及兼容测试样本。
+| 文档 | 内容 |
+| --- | --- |
+| [主干现状与开发说明](architecture/STATUS.md) | 当前能力、架构、代码分工及已知限制 |
+| [记忆系统](architecture/MEMORY.md) | 完整上下文、日记、上下文容量与原文追溯 |
+| [插件扩展契约](architecture/PLUGINS.md) | 插件接口、生命周期、页面与调用方式 |
+| [渠道接口](architecture/CHANNELS.md) | 会话绑定、消息收发与来源记录 |
+| [开发规则](AGENTS.md) · [插件开发规则](plugins/AGENTS.md) | 开发范围、兼容要求与验证方式 |
 
-## 开发与验证
-
-- 核心与插件分别维护，禁止通过修改对方内部实现完成自己的功能。
-- 使用Node 24执行 npm run check。契约/生命周期改动执行 npm run test:compat，其他按影响范围选择测试；npm test运行自动化测试文件。
-- [冻结旧插件样本](tests/fixtures/plugin-contract/2026-10-29/README.md)不得为了迁就主干升级而修改；可维护演示位于 examples/plugins/，不会默认安装。
-- tests/acceptance.ts及真实模型验收脚本不是日常回归入口，不要用正式记忆或真实模型跑普通测试。
-- 发布前在独立副本检查类型并运行自动化及兼容测试；不连接真实模型或个人账号。远端 CI 尚未启用。
-
-## 许可证
-
-本仓库原创代码采用 [GNU AGPL v3，仅限第 3 版（AGPL-3.0-only）](LICENSE)。带有相应文件声明的源码另适用 [第 7(b)、7(c) 条允许的合理署名及禁止歪曲来源条款](LICENSE-ADDITIONAL)。作者与来源见 [NOTICE.md](NOTICE.md)。
-
-允许商业使用和收费。分发受许可覆盖的版本时，须按 AGPL 向接收者提供完整对应源码；修改版供用户通过网络交互时，须向这些用户显著提供免费获取该版本对应源码的入口。仅个人本机自用修改无需公开，也不要求向原作者提交 PR。具体权利义务以许可正文为准。
-
-第三方依赖、模型与平台组件仍遵守各自许可，见 [第三方说明](THIRD_PARTY_NOTICES.md)；本许可不授予它们的额外使用权。独立仓库或进程隔离是工程边界，并不自动决定插件在著作权上是否属于独立作品。
+开发时使用 Node.js 24 执行 `npm run check`；`npm test` 运行自动化测试，`npm run test:compat` 验证插件兼容性。测试与验证范围统一记录在[主干现状](architecture/STATUS.md#6-现有验证与证据边界)中。
