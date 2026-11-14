@@ -45,7 +45,8 @@ export async function shortContext(engine: any, id: string, key: string, rows: a
   const saved = engine ? await engine.summaryState(id, key) : { covered: 0 };
   const index = rows.findIndex((x) => x.id === saved.last_id);
   const valid = saved.mode === "short" && saved.start_id === rows[0]?.id && index >= 0 &&
-    typeof saved.text === "string" && !!saved.text.trim();
+    typeof saved.text === "string" && !!saved.text.trim() &&
+    rows.slice(0, index + 1).filter(row => row.delivery_id).every(row => saved.outgoing_ids?.includes(row.id));
   // A shifted window cannot reuse prose, but must retain source revision, backoff and scheduling.
   // The last successful checkpoint stays on disk until its replacement commits.
   const checkpoint = valid ? saved : { covered: 0,
@@ -174,6 +175,8 @@ export async function compressShort(options: Options & { rows: any[]; overflow: 
       ...(checkpoint.input_revision ? { input_revision: checkpoint.input_revision } : {}),
       ...work.checkpoint, ...collectOrigins(checkpoint, work.batch), ...collectTimes(checkpoint, work.batch), ...result.attempt,
       text, mode: "short", start_id: rows[0].id, updated_at: new Date().toISOString(),
+      outgoing_ids: rows.slice(0, rows.findIndex(row => row.id === work.checkpoint.last_id) + 1)
+        .filter(row => row.delivery_id).map(row => row.id),
     });
     await projection(services, id, key, text);
   } catch (error) {

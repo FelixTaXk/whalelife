@@ -502,8 +502,19 @@ export class Memory {
     }
     return result.slice(-limit);
   }
-  appendEvent(line: any) {
+  appendEvent(line: any, options: { once?: boolean } = {}) {
     return this.serial(async () => {
+      // Check under the same write queue: a previous append may have committed
+      // before a later metadata write failed. Never repeat that message/event.
+      if (options.once) {
+        if (typeof line.id !== "string" || !line.id) throw Error("幂等记录需要固定ID");
+        const previous = (await this.readSession(line.session)).find(row => row.id === line.id);
+        if (previous) {
+          if (previous.type !== line.type || previous.text !== line.text || previous.delivery_id !== line.delivery_id)
+            throw Error("相同记忆ID的内容不一致");
+          return;
+        }
+      }
       const file = join(
         this.sessionDir(line.session),
         "episodes",

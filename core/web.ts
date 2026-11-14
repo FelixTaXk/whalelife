@@ -8,6 +8,7 @@ import { readFile } from "node:fs/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { Channels } from "./channels.ts";
+import { conversationRows } from "./channel-history.ts";
 import { PluginWebRegistry } from "./plugin-web.ts";
 export async function startWeb(config: any, services: any, runtime: any) {
   const { logger, memory, sessions } = services;
@@ -333,7 +334,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
       if (req.method === "GET" && req.url?.startsWith("/api/session?")) {
         const id = new URL(req.url, origin).searchParams.get("id");
         if (!id) return send(400, { error: "请提供会话 ID" });
-        return send(200, await memory.readSession(id, 100));
+        return send(200, conversationRows(await memory.readSession(id)).slice(-100));
       }
       if (req.method === "GET" && req.url === "/api/status")
         return send(200, {

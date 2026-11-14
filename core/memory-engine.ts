@@ -11,6 +11,7 @@ import { applyCognitions, cognitionRevision, undoCognition, type CognitionMainte
 import { attribution, collectOrigins, originOf, pluginOrigin, validateAttribution, validateOrigin } from "./provenance.ts";
 import type { DocumentWrite, SessionDocument } from "./plugin-api.ts";
 import { TRANSIENT_REPLY } from "./tool-retention.ts";
+import { conversationRows } from "./channel-history.ts";
 import { diaryRowInScope, validateDiaryEntry, validateDiaryScope, validateDiaryState, validDiarySources,
   type DiaryEntry, type DiaryFailure } from "./memory-diary-state.ts";
 
@@ -371,7 +372,7 @@ export class MemoryEngine {
   }
   async contextRows(id: string, rows?: any[]) {
     const excluded = excludedInputs(await this.state(id));
-    return (rows ?? await this.memory.readSession(id)).filter((row: any) => !excluded.has(row.id) && !temporaryPlaceholder(row));
+    return conversationRows(rows ?? await this.memory.readSession(id)).filter((row: any) => !excluded.has(row.id) && !temporaryPlaceholder(row));
   }
   private async excludeInputs(id: string, owner: string, messageIds: string[], check: () => void) {
     if (!Array.isArray(messageIds) || !messageIds.length || messageIds.length > 100 ||
@@ -524,7 +525,7 @@ export class MemoryEngine {
     )
       throw Error("认知必须引用已有经历");
     const known = new Set(
-      (await this.memory.readSession(id)).map((x: any) => x.id).filter(Boolean),
+      conversationRows(await this.memory.readSession(id)).map((x: any) => x.id).filter(Boolean),
     );
     const evidence = Array.isArray(input.evidence)
       ? input.evidence
@@ -577,7 +578,13 @@ export class MemoryEngine {
   }
   private async candidates(id: string) {
     const s = await this.state(id),
-      rows = await this.memory.readSession(id);
+      rows = conversationRows(await this.memory.readSession(id));
+    // Keep legacy experience records on disk, but do not recall the shortened
+    // delivery summary again when the same communication has complete history.
+    const outgoing = rows.filter(row => row.type === "message" && row.delivery_id);
+    const deliverySources = new Set(s.records.filter(item => item.source?.startsWith("channel:")).map(item => item.source));
+    const delivered = new Set(outgoing.flatMap(row => [...deliverySources]
+      .map(source => hash(source + ":" + row.delivery_id + ":succeeded").slice(0, 32))));
     // Match legacy automatic projections against actual archived tool events, not loose text patterns.
     // Preserve the files for audit; only change their eligibility for conversational recall.
     const traceKey = (source: unknown, origin: any, outcome: unknown, text: string) => JSON.stringify([
@@ -586,7 +593,7 @@ export class MemoryEngine {
     const legacyTraces = new Set(rows.filter((row: any) => row.type === "tool" && row.origin?.plugin).map((row: any) =>
       traceKey(row.origin.plugin, row.origin, row.ok ? "succeeded" : "failed",
         `工具 ${row.name} ${row.ok ? "调用完成" : "调用失败"}：${String(JSON.stringify(row.result)).slice(0, 350)}`)));
-    const items = s.records.filter((item: any) => !item.tool_trace && !(item.kind === "episode" && item.tool_trace === undefined &&
+    const items = s.records.filter((item: any) => !delivered.has(item.id) && !item.tool_trace && !(item.kind === "episode" && item.tool_trace === undefined &&
       legacyTraces.has(traceKey(item.source, item.origin, item.outcome, item.text))));
     const muted = new Map(
       s.records.filter((x) => x.kind === "event-state").map((x) => [x.id, x]),
@@ -606,6 +613,7 @@ export class MemoryEngine {
         pinned: muted.get(rid)?.pinned || false,
         evidence: [rid],
         persona_revision: row.persona_revision,
+        ...(row.delivery_id ? { delivery_id: row.delivery_id } : {}),
         session: id,
       });
     }
@@ -703,7 +711,7 @@ export class MemoryEngine {
           (opts.manual && opts.archived)) &&
         (!opts.revision ||
           x.shared_space ||
-          !x.persona_revision ||
+          (!x.persona_revision && !x.delivery_id) ||
           x.persona_revision === opts.revision) &&
         !(opts.exclude || []).some((text) => text === x.text),
     );
@@ -917,7 +925,7 @@ export class MemoryEngine {
     return this.update(id, async s => {
       signal?.throwIfAborted();
       const excluded = excludedInputs(s);
-      const rows = (await this.memory.readSession(id)).filter(row =>
+      const rows = conversationRows(await this.memory.readSession(id)).filter(row =>
         !excluded.has(row.id) && !temporaryPlaceholder(row) && diaryRowInScope(row, id, entry.scope));
       if (!validDiarySources(entry, id, entry.scope, rows)) throw Error("日记来源已变更，请重新读取原文");
       const sources = new Set(entry.source_ids);
@@ -1009,7 +1017,7 @@ export class MemoryEngine {
       throw Error("短期压缩不能产生或修订长期认知");
     if (value.mode === "long" && cognitions.some((x) => typeof x?.text !== "string" || charCount(x.text) > 80))
       throw Error("长期认知每条不能超过80字符");
-    const evidenceRows = await this.memory.readSession(id);
+    const evidenceRows = conversationRows(await this.memory.readSession(id));
     const byEvidence = new Map(evidenceRows.map((x: any) => [x.id, x]));
     const known = new Set(evidenceRows.map((x: any) => x.id));
     if (

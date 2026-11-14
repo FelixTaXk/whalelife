@@ -6,6 +6,14 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { resolveChatModel } from "./model-config.ts";
 import { createHash } from "node:crypto";
+const revision = (id: string, prompt: string) => createHash("sha256").update(JSON.stringify([id, prompt])).digest("hex");
+/** Attribution of a direct send must not require an available model connection. */
+export async function personaIdentity(root: string, config: any, id: string) {
+  const item = config.personas[id];
+  if (!item) throw Error("人格不存在");
+  const prompt = await readFile(resolve(root, item.file), "utf8");
+  return { persona_id: id, persona_name: item.name, persona_revision: revision(id, prompt) };
+}
 export async function persona(root: string, config: any, id: string) {
   const item = config.personas[id];
   if (!item) throw Error("人格不存在");
@@ -16,9 +24,7 @@ export async function persona(root: string, config: any, id: string) {
     id,
     provider,
     prompt,
-    revision: createHash("sha256")
-      .update(JSON.stringify([id, prompt]))
-      .digest("hex"),
+    revision: revision(id, prompt),
   };
 }
 /** Identity and standing rules are independent of the current memory snapshot. */

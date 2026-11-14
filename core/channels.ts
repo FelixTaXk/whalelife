@@ -10,6 +10,7 @@ import type { Permission } from "./permission.ts";
 import { validateOrigin, type Origin } from "./provenance.ts";
 import type { ToolTurn } from "./tool-retention.ts";
 import { TurnInput } from "./turn-input.ts";
+import { outgoingMessage } from "./channel-history.ts";
 import type { ChannelTurn, TurnAppendResult } from "./plugin-api.ts";
 
 export type ChannelRoute = {
@@ -108,6 +109,9 @@ type Receipt = {
   input_text?: string;
   input_sender?: string;
   received_at?: string;
+  /** Captured before the first attempt; retries never substitute today's persona. */
+  conversation?: Record<string, any>;
+  sent_at?: string;
 };
 type StoredReceipt = { sessionId: string; receipt: Receipt };
 type RouteState = {
@@ -285,6 +289,19 @@ export class Channels {
       ...(duplicate ? { duplicate: true } : {}),
     };
   }
+  private async recordSent(id: string, receipt: Receipt) {
+    const message = outgoingMessage(id, receipt);
+    if (!message) return;
+    try { await this.memory.appendEvent(message, { once: true }); }
+    catch {
+      // Sending already happened. Never turn a memory failure into a resend.
+      this.sessions.services.logger.warn("渠道发送已确认，聊天记录保存失败；保留回执供恢复", { deliveryId: receipt.delivery_id });
+    }
+  }
+  private async duplicate(receipt: StoredReceipt) {
+    await this.recordSent(receipt.sessionId, receipt.receipt);
+    return this.result(receipt.sessionId, receipt.receipt, true);
+  }
   private receipt(key: string, messageId: string, direction: "in" | "out"): Promise<StoredReceipt | undefined> {
     return this.memory.channelRoute(key, async (route: RouteState) => {
       const own = route?.receipts[this.receiptKey(messageId, direction)];
@@ -368,7 +385,7 @@ export class Channels {
       if (meta?.deleted) throw Error("会话已删除");
       this.alive(reg, signal);
       const claimed = await this.save(id, route, { ...receipt, status: "delivering" }, "delivery");
-      if (claimed) return this.result(claimed.sessionId, claimed.receipt, true);
+      if (claimed) return this.duplicate(claimed);
       this.alive(reg, signal);
       called = true;
       await reg.adapter.send({
@@ -378,7 +395,7 @@ export class Channels {
         ...(receipt.direction === "in" ? { replyTo: receipt.external_message_id } : {}),
       }, { signal });
       // A confirmed transport completion is recorded even if disposal happened meanwhile.
-      const sent: Receipt = { ...receipt, status: "sent", error: undefined };
+      const sent: Receipt = { ...receipt, status: "sent", error: undefined, sent_at: new Date().toISOString() };
       try {
         await this.save(id, route, sent);
       } catch (error: any) {
@@ -387,6 +404,7 @@ export class Channels {
         this.sessions.services.logger.warn("渠道发送已确认，回执保存失败", { error: privateErrors ? sent.error : error });
       }
       if (receipt.direction === "out") {
+        await this.recordSent(id, sent);
         try {
           await this.sessions.services.memoryEngine?.experience(id, "channel:" + reg.owner, {
             event_id: receipt.delivery_id, outcome: "succeeded",
@@ -431,7 +449,7 @@ export class Channels {
       const previous = await this.receipt(key, messageId, direction);
       if (previous) {
         if (previous.receipt.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
-        return this.result(previous.sessionId, previous.receipt, true);
+        return this.duplicate(previous);
       }
       this.alive(reg, signal);
       if (this.sessions.blockedSessions.has(id))
@@ -439,11 +457,13 @@ export class Channels {
       let receipt: Receipt = {
         type: "channel_receipt", channel_key: key, external_message_id: messageId, direction,
         fingerprint, delivery_id: "delivery_" + hash([key, messageId, direction]), status: "pending",
+        ...(direction === "out" ? { conversation: { ...await this.sessions.outgoingIdentity(id, route),
+          channel: route.channel, account: route.account, peer: route.peer, origin: route.origin } } : {}),
       };
       const reserved = await this.save(id, route, receipt, "reserve");
       if (reserved) {
         if (reserved.receipt.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
-        return this.result(reserved.sessionId, reserved.receipt, true);
+        return this.duplicate(reserved);
       }
       let response = text;
       if (direction === "in") {
@@ -649,7 +669,7 @@ export class Channels {
             ? await this.receipt(this.key(reg, peer), previous.receipt.group_message_id, "in") : previous;
           if (!canonical) throw Error("组回复回执缺失，不能重放");
           const { receipt } = canonical;
-          if (receipt.status === "sent") return { ...this.result(previous.sessionId, receipt, true), messageId: requested.receipt.external_message_id };
+          if (receipt.status === "sent") return { ...await this.duplicate(canonical), messageId: requested.receipt.external_message_id };
           if (previous.sessionId !== id) throw Error("消息属于重绑前的会话，不能跨会话重试发送");
           if (!["generated", "delivery_failed"].includes(receipt.status) || typeof receipt.text !== "string")
             throw Error("没有已保存的最终回复；不能重放模型或工具");

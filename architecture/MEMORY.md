@@ -1,6 +1,6 @@
 # WhaleLife 记忆系统
 
-核对日期：2026-11-09。
+核对日期：2026-11-14。
 
 本文说明完整上下文、逐篇日记、原文存储与插件边界。示例均为虚构数据，不包含本机配置或真实记忆。当前机制已完成集成验证；证据与未验证范围见[STATUS.md第6节](STATUS.md#6-现有验证与证据边界)。渠道接入见 [CHANNELS.md](CHANNELS.md)。
 
@@ -9,6 +9,10 @@
 统一会话队列只保存内存中的待执行请求，不属于记忆。等待、去重和执行前取消不会生成对话/经历或消耗模型token；真正执行时读取最新有效上下文，普通消息保留入队前的主干接收时间及来源。enqueueTransient沿用临时输入不落盘规则，工具结果与最终回复默认照常记录，显式临时工具按下述规则处理；等待项也阻止会话删除/记忆恢复等冲突操作。接口和容量/取消语义见[插件规范](PLUGINS.md#统一会话队列)。
 
 聊天是主要记忆，工具执行过程是工作记录。普通Web/渠道聊天及sessions.run/ enqueue保留用户输入和最终助手正文，包括提问、约定和实际讲给用户的引用；调用临时工具不再把整条回复替换成占位文字。工具原始资料仍只供本轮执行，registerTransient的content不自动落盘，后续工具参数和检索query继续隔离，独立事实写入仍受保护。渠道保存最终聊天正文，显式重试只重投递，不重跑模型或工具。
+
+通过渠道直接发送且已确认sent的完整正文，同样属于原会话的助手历史，按稳定deliveryId去重；下一轮可直接使用，不依赖额外经历召回，关闭自动召回也不会抹去这段会话原文。发送确认后的历史保存失败不改变发送结果、不触发重发，重复调用只补记缺失历史。直接发送和补记均不调用模型或新增模型用量，来源、发送时间及已确认的人格版本随正文保留。普通入站回复已有助手历史，不重复追加。
+
+旧档案中的非transient、带正文sent出站回执通过只读投影参与历史、日记来源及记忆查询，不改写旧文件、不重发消息；同一deliveryId的实体消息优先，读取结果保持稳定且不重复。缺少可信人格版本的旧记录只进入session范围，不混入persona范围或截断其连续历史。旧legacy摘要不会把新增投影原文误当作已覆盖内容。原channel experience短预览仍留档，同一通信已有完整历史时不重复召回。该规则不恢复缺失的临时正文，也不改变runTransient/enqueueTransient及临时工具的隔离契约；明确发送并已确认的对外正文按实际交流保存。
 
 工具自动投影标记为tool_trace，仅供审计，不进入日常记忆列表、检索、共享空间召回或后续上下文。真实业务结果继续通过已有recordExperience保存短经历；工具调用返回不代表业务成功，主干不解释插件的私有回执字段。已在聊天中表达的结果不再自动复制成一份可召回的工具过程。后台动作没有对应聊天时，插件仍应记录有依据的结果、来源及outcome。
 
@@ -230,6 +234,7 @@ key 为1–64个小写字母、数字、下划线或连字符，以字母开头�
 | `core/provenance.ts` | 通用来源校验、来源汇总与精简的历史标注 |
 | `core/session.ts` | 上下文组装、模型调用与用量记录 |
 | `core/session-context.ts` | 当前机制策略、容量比例及旧字段兼容 |
+| `core/channel-history.ts` | 已确认直接出站的助手历史及旧回执只读投影、稳定ID与去重 |
 | `core/context-material.ts` | 完整历史/日记材料组装与完整旧交流选材 |
 | `core/model-context.ts` | 服务容量解析、手动优先及连接配置缓存隔离 |
 | `core/memory-diary.ts`、`core/memory-diary-state.ts` | 逐篇日记、固定来源版本、原子提交校验及失败暂停 |
@@ -238,9 +243,10 @@ key 为1–64个小写字母、数字、下划线或连字符，以字母开头�
 | `core/memory-admin.ts` | 备份、恢复、档案管理 |
 | `core/ui/memory.js` | 记忆控制台 |
 
-自动日记开关校正已通过44项相关专项及类型检查；本轮未重跑全量测试。此前逐篇日记实现的509项全量测试和两次真实模型隔离合成验收保留为历史证据，不能冒充本轮检查。最新兼容检查与部署边界统一维护在[STATUS.md第6节](STATUS.md#6-现有验证与证据边界)。仓库回归使用临时目录和模拟模型，不调用真实供应商、不写正式记忆，不将本机凭据或私人资料加入仓库。Node.js 24 环境下，相关专项可执行：
+2026-11-14直接出站历史修复已通过14项专项回归和7项QQ→Web模拟链路验证；本条不代表全量、独立兼容或正式部署已完成。此前自动日记开关校正的44项相关专项及类型检查、逐篇日记实现的509项全量测试和两次真实模型隔离合成验收保留为历史证据，不能冒充本轮检查。最新兼容检查与部署边界统一维护在[STATUS.md第6节](STATUS.md#6-现有验证与证据边界)。仓库回归使用临时目录和模拟模型，不调用真实供应商、不写正式记忆，不将本机凭据或私人资料加入仓库。Node.js 24 环境下，相关专项可执行：
 
 ```sh
+node --test tests/channel-outgoing-memory.test.ts
 node --test tests/diary-context.test.ts tests/diary-engine.test.ts tests/diary-console.test.ts tests/diary-web.test.ts tests/model-capacity.test.ts
 node --test tests/cognition.test.ts tests/memory-engine.test.ts tests/memory-lifecycle.test.ts tests/memory-v2-integration.test.ts tests/memory-v2-resilience.test.ts tests/memory-v2-ui.test.ts tests/memory-v2-web.test.ts tests/temporal-memory-ui.test.ts
 node --test tests/memory-summary-recovery.test.ts tests/memory-summary-status.test.ts tests/memory-budget-settlement.test.ts tests/memory-generation.test.ts

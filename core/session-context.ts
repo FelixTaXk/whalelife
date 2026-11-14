@@ -90,6 +90,9 @@ export function memoryWindow(rows: any[], policy: ContextPolicy, now = Date.now(
 }
 export function matchingHistory(rows: any[], revision: string, scope: string) {
   if (scope === "session") return rows;
+  // Legacy sent receipts have no trustworthy persona version. They belong to
+  // session history, and must not cut off a known persona's contiguous history.
+  rows = rows.filter(row => !(row.delivery_id && !row.persona_revision));
   let boundary = rows.length - 1;
   while (boundary >= 0 && rows[boundary].persona_revision === revision)
     boundary--;

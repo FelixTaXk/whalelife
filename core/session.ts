@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
-import { persona } from "./persona.ts";
+import { persona, personaIdentity } from "./persona.ts";
+import { conversationRows } from "./channel-history.ts";
 import { thinkingToolHistory } from "./llm.ts";
 import { promptText, toolContentMessage, TOOL_CONTENT_LIMITS } from "./tool-content.ts";
 import { timezone, timeContext, timeLabel, messageTime, summaryTime, TIME_GUIDANCE } from "./time.ts";
@@ -34,6 +35,7 @@ export class Sessions {
   channelOperations = new Map<string, number>();
   private controller = new AbortController();
   private flights = new Set<Promise<unknown>>();
+  private identities = new Map<string, Record<string, any>>();
   root: string;
   config: any;
   services: any;
@@ -103,14 +105,14 @@ export class Sessions {
     );
     const limit = await this.modelLimit(p.provider, signal);
     const policy = contextPolicy(this.config.memory, meta?.context);
-    const storedRows = (await this.services.memory.readSession(id)).filter(
+    const storedRows = conversationRows(await this.services.memory.readSession(id)).filter(
       (row: any) => row.type !== "channel_receipt",
     );
     const engine = this.services.memoryEngine;
     const rows = engine ? await engine.contextRows(id, storedRows) : storedRows;
     signal.throwIfAborted();
     const history = matchingHistory(rows, p.revision, policy.history_scope);
-    const last = rows.findLast((row: any) => row.role === "assistant");
+    const last = rows.findLast((row: any) => row.role === "assistant" && !row.delivery_id);
     const usage = last?.request_usage;
     const matches =
       usage &&
@@ -251,6 +253,15 @@ export class Sessions {
     return this.dispatch(id, captured.signal, () => this.runChat(id, text, onChunk, captured.signal!, onContext, expectedPersona, captured, transient), queue);
   }
   /** Capture arrival metadata before any asynchronous routing or queue wait. */
+  async outgoingIdentity(id: string, route: ChannelRoute) {
+    const active = this.identities.get(id);
+    if (active) return { ...active };
+    try { return { ...await personaIdentity(this.root, this.config, route.persona), timezone: route.timezone }; }
+    catch {
+      this.services.logger.warn("发送消息的人格版本不可读取，仅保留会话归属");
+      return { timezone: route.timezone };
+    }
+  }
   captureRoute(id: string, route?: ChannelRoute): ChannelRoute {
     const initial = route ?? { ...this.config.channels.web, channel: "web", account: "local", peer: id };
     return { ...initial, origin: initial.origin ? { ...initial.origin } : undefined,
@@ -312,6 +323,7 @@ export class Sessions {
       };
       signal.throwIfAborted();
       const p = await persona(this.root, this.config, channel.persona);
+      this.identities.set(id, { persona_id: p.id, persona_name: p.name, persona_revision: p.revision, timezone: zone });
       await execution?.write("context", { persona: p.id, provider: p.provider.id, model: p.provider.model });
       if (expectedPersona && expectedPersona !== p.id)
         throw Error("当前人格已在其他窗口切换，请刷新后重试");
@@ -341,7 +353,7 @@ export class Sessions {
         permission: channel.permission ?? p.permission,
         signal,
       };
-      const storedHistory = (engine ? await engine.contextRows(id) : await memory.readSession(id)).filter(
+      const storedHistory = (engine ? await engine.contextRows(id) : conversationRows(await memory.readSession(id))).filter(
         (row: any) => row.type !== "channel_receipt",
       );
       // Adopt the newest previous all-persona checkpoint once; it must not be
@@ -692,6 +704,7 @@ export class Sessions {
         error: turn.transient ? "含临时资料的执行失败，原始错误不落盘；请核对前序步骤和插件回执" : error });
       throw error;
     } finally {
+      this.identities.delete(id);
       input?.closeInput();
       await execution?.end(signal.aborted ? "cancelled" : executionStatus);
     }
