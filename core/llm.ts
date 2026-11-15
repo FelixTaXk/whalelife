@@ -83,6 +83,7 @@ export class LLM {
           let buffer = "",
             text = "",
             reasoning: string | undefined,
+            alternateReasoning: string | undefined,
             finishReason: string | undefined,
             usage: any;
           const calls: any[] = [];
@@ -105,9 +106,11 @@ export class LLM {
               throw Error("模型服务返回了无效的流式数据");
             }
             const observed = obj?.choices?.[0]?.delta;
+            const observedReasoning = typeof observed?.reasoning_content === "string" ? observed.reasoning_content
+              : typeof observed?.reasoning === "string" ? observed.reasoning : undefined;
             trace?.emit("response.chunk", { phase: "sse", raw: obj,
               ...(observed?.content === undefined ? {} : { text: observed.content }),
-              ...(observed?.reasoning_content === undefined ? {} : { reasoning: observed.reasoning_content }),
+              ...(observedReasoning === undefined ? {} : { reasoning: observedReasoning }),
               ...(observed?.tool_calls === undefined ? {} : { tool_calls: observed.tool_calls }) });
             if (obj?.usage !== undefined && obj?.usage !== null)
               trace?.emit("request.usage", { usage: obj.usage, mode: "snapshot", stage: "interim" });
@@ -121,9 +124,14 @@ export class LLM {
                 .includes(choice.finish_reason) ? choice.finish_reason : "unknown";
             }
             const delta = choice?.delta;
+            // Some compatible APIs use `reasoning`. Keep both streams separate: the
+            // standard field wins, including an explicit empty string, without duplication.
+            if (typeof delta?.reasoning === "string")
+              alternateReasoning = (alternateReasoning ?? "") + delta.reasoning;
             if (typeof delta?.reasoning_content === "string")
               reasoning = (reasoning ?? "") + delta.reasoning_content;
-            trace?.finish({ ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) });
+            const currentReasoning = reasoning ?? alternateReasoning;
+            trace?.finish({ ...(currentReasoning === undefined ? {} : { reasoning_content: currentReasoning }) });
             if (delta?.content) {
               text += delta.content;
               trace?.finish({ text });
@@ -159,11 +167,12 @@ export class LLM {
             ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
           });
           if (usage !== undefined) trace?.emit("request.usage", { usage, mode: "snapshot", stage: "final" });
+          const protocolReasoning = reasoning ?? alternateReasoning;
           trace?.finish({ text, tool_calls: calls.filter(Boolean),
-            ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) });
+            ...(protocolReasoning === undefined ? {} : { reasoning_content: protocolReasoning }) });
           return { text, toolCalls: calls.filter(Boolean), usage,
             ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
-            ...(reasoning === undefined ? {} : { reasoning_content: reasoning }) };
+            ...(protocolReasoning === undefined ? {} : { reasoning_content: protocolReasoning }) };
         },
         opts.signal,
         this.diagnostics,
