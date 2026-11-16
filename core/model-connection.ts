@@ -3,6 +3,7 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import type { ModelType } from "./model-config.ts";
+import type { ReasoningCompatibility } from "./reasoning-compatibility.ts";
 
 /** Public metadata; never contains a credential or connection address. */
 export type ModelChoice = {
@@ -32,6 +33,7 @@ export type ModelConnection = {
   readonly parameters: Record<string, unknown>;
   readonly dimensions: number | null;
   readonly context_window: number | null;
+  readonly reasoning_compatibility?: ReasoningCompatibility;
 };
 
 export interface ModelsAPI {

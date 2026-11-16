@@ -13,6 +13,7 @@ import type { Logger } from "./logger.ts";
 import { proxyURL, timeoutSeconds, withModelResponse } from "./model-http.ts";
 import type { ModelConnection } from "./model-connection.ts";
 import { modelContextMetadata } from "./model-context.ts";
+import { validateReasoningCompatibility, type ReasoningCompatibility } from "./reasoning-compatibility.ts";
 
 export const MODEL_TYPES = [
   "chat",
@@ -53,6 +54,7 @@ export interface ModelDefinition {
   parameters: Record<string, unknown>;
   dimensions: number | null;
   context_window?: number | null;
+  reasoning_compatibility?: ReasoningCompatibility;
 }
 export class ModelConfigError extends Error {
   status: number;
@@ -135,6 +137,7 @@ const RESERVED = new Set([
   "secret",
   "token",
   "context_window",
+  "reasoning_compatibility",
 ]);
 export function validateModelParameters(
   value: unknown,
@@ -245,11 +248,17 @@ function readModel(
   m: any,
   draft = false,
   detectDimensions = false,
+  old?: ModelDefinition,
 ): ModelDefinition {
   if (!object(m)) throw new ModelConfigError("模型配置格式无效");
   if (!MODEL_TYPES.includes(m.type)) throw new ModelConfigError("模型用途无效");
   if (typeof m.enabled !== "boolean")
     throw new ModelConfigError("模型 enabled 必须是布尔值");
+  const compatibility = validateReasoningCompatibility(
+    m.reasoning_compatibility === undefined ? old?.reasoning_compatibility : m.reasoning_compatibility,
+  );
+  if (compatibility && m.type !== "chat")
+    throw new ModelConfigError("思考字段兼容设置仅适用于对话模型");
   return {
     id: draft && !m.id ? "draft-model" : id(m.id, "模型 ID"),
     name: text(m.name ?? (draft ? m.model : undefined), "模型显示名称"),
@@ -262,16 +271,19 @@ function readModel(
       ? null
       : expectedDimensions(m.dimensions, m.type),
     context_window: contextWindow(m.context_window, m.type),
+    ...(compatibility ? { reasoning_compatibility: compatibility } : {}),
   };
 }
 
 /** Validation is descriptive: old invalid records remain visible, never silently moved. */
 export function modelConfigurationError(
-  model: Pick<ModelDefinition, "type">,
+  model: Pick<ModelDefinition, "type" | "reasoning_compatibility">,
   provider?: Pick<ProviderConfig, "protocol" | "base_url">,
 ): string | null {
   if (!provider) return "模型引用的提供商不存在";
   if (!validProtocol(provider.protocol)) return "提供商协议标识无效";
+  if (model.reasoning_compatibility && (model.type !== "chat" || provider.protocol !== "openai-compatible"))
+    return "思考字段兼容设置仅适用于 OpenAI 兼容协议的对话模型";
   let host: string;
   try {
     host = new URL(provider.base_url).hostname.toLowerCase();
@@ -299,6 +311,7 @@ function modelRecord(model: ModelDefinition) {
     parameters: model.parameters ?? {},
     dimensions: model.dimensions ?? null,
     context_window: model.context_window ?? null,
+    ...(model.reasoning_compatibility ? { reasoning_compatibility: model.reasoning_compatibility } : {}),
   };
 }
 
@@ -382,6 +395,7 @@ export function resolveChatModel(
   parameters: Record<string, unknown>;
   model_id?: string;
   context_window: number | null;
+  reasoning_compatibility?: ReasoningCompatibility;
 } {
   if (!Array.isArray(config.models)) {
     const item = personaId ? config.personas?.[personaId] : undefined;
@@ -426,6 +440,8 @@ export function resolveModel(config: any, selected: string) {
     model_id: model.id,
     parameters: validateModelParameters(model.parameters),
     context_window: contextWindow(model.context_window, model.type),
+    ...(validateReasoningCompatibility(model.reasoning_compatibility)
+      ? { reasoning_compatibility: validateReasoningCompatibility(model.reasoning_compatibility) } : {}),
   };
 }
 
@@ -437,6 +453,7 @@ export class ModelConfig {
   revision: string;
   source: any;
   queue: Promise<unknown> = Promise.resolve();
+  private compatibilityRunning = false;
   constructor(root: string, config: any, logger: Logger) {
     this.file = join(root, "config", "config.json");
     this.config = config;
@@ -492,6 +509,8 @@ export class ModelConfig {
         parameters: validateModelParameters(m.parameters),
         dimensions: m.dimensions ?? null,
         context_window: m.context_window ?? null,
+        ...(validateReasoningCompatibility(m.reasoning_compatibility)
+          ? { reasoning_compatibility: validateReasoningCompatibility(m.reasoning_compatibility) } : {}),
         configuration_error: modelConfigurationError(
           m,
           this.source.providers.find(
@@ -529,6 +548,7 @@ export class ModelConfig {
       timeout_seconds: provider.timeout_seconds, proxy_url: provider.proxy_url,
       parameters: model.parameters, dimensions: model.dimensions,
       context_window: model.context_window ?? null,
+      ...(model.reasoning_compatibility ? { reasoning_compatibility: model.reasoning_compatibility } : {}),
     });
   }
   save(input: any) {
@@ -689,7 +709,7 @@ export class ModelConfig {
     });
     const modelIds = new Set<string>();
     const models: ModelDefinition[] = input.models.map((m: any) => {
-      const model = readModel(m);
+      const model = readModel(m, false, false, previous.models.find((old) => old.id === m?.id));
       if (modelIds.has(model.id))
         throw new ModelConfigError("模型 ID 不能重复");
       modelIds.add(model.id);
@@ -962,6 +982,33 @@ export class ModelConfig {
       model,
       input.detectDimensions === true,
     );
+  }
+  async probeCompatibility(input: any, signal?: AbortSignal) {
+    if (!object(input) || !object(input.provider) || !object(input.model))
+      throw new ModelConfigError("请提供当前表单的提供商与模型配置");
+    if (this.compatibilityRunning)
+      throw new ModelConfigError("已有兼容检测正在运行，请等待完成后再试", 409);
+    if (input.assistantModelId !== undefined && typeof input.assistantModelId !== "string")
+      throw new ModelConfigError("辅助模型需选择已配置的对话模型，或使用被测模型自身");
+    this.protectKeys([input.provider]);
+    this.snapshot();
+    const old = this.source.providers.find((p: ProviderConfig) => p.id === input.provider.id);
+    const provider = readProvider(input.provider, old, true);
+    this.protectKeys([provider]);
+    const model = readModel({ ...input.model, provider: provider.id }, true);
+    if (!provider.enabled || !model.enabled || model.type !== "chat" || provider.protocol !== "openai-compatible")
+      throw new ModelConfigError("兼容检测仅支持已启用的 OpenAI 兼容对话模型");
+    const error = modelConfigurationError(model, provider);
+    if (error) throw new ModelConfigError(error);
+    // Diagnostic requests must prove the mapping works without the empty-field fallback.
+    const target = { ...provider, model: model.model, parameters: model.parameters };
+    const assistant = input.assistantModelId
+      ? resolveModel(this.config, input.assistantModelId) : target;
+    this.compatibilityRunning = true;
+    try {
+      const { probeModelCompatibility } = await import("./model-compatibility-probe.ts");
+      return await probeModelCompatibility({ target, assistant, logger: this.logger, diagnostics: this.diagnostics, signal });
+    } finally { this.compatibilityRunning = false; }
   }
   private async testDefinition(
     provider: ProviderConfig,

@@ -142,6 +142,9 @@ function draftFor(app, model, repair = false) {
     dimensions: String(model.dimensions ?? ""),
     context_window: String(model.context_window ?? ""),
     parametersText: JSON.stringify(model.parameters || {}, null, 2),
+    reasoningCompatibility: structuredClone(model.reasoning_compatibility || null),
+    compatibilityOriginallyConfigured: !!model.reasoning_compatibility,
+    compatibilityAssistant: "",
     use: app.state.config.bindings[model.type] === model.id,
     repair,
     dirty: repair,
@@ -164,6 +167,9 @@ function selectedDraft(app, models) {
   return (app.state.modelDraft = draftFor(app, selected));
 }
 export function renderModels(app) {
+  // A full render replaces the request's form. Stop its diagnostic work as well
+  // as rejecting late results; normal diagnostic updates only touch the DOM.
+  app.state.modelDraft?.compatibilityRun?.abort();
   const config = app.state.config;
   const type = types.some(([id]) => id === app.state.modelFilter)
     ? app.state.modelFilter
@@ -213,6 +219,26 @@ function contextCapacityMessage(d) {
   else if (!configured) parts.push("服务上限尚未读取；未知时不会显示占用百分比。");
   return parts.join(" ");
 }
+function compatibilityMappingText(d) {
+  const mapping = d.reasoningCompatibility;
+  return mapping?.response_field || mapping?.request_field
+    ? `读取：${mapping.response_field || "现有字段识别"}；回传：${mapping.request_field || "reasoning_content"}`
+    : "未设置专用映射，使用现有字段识别规则。";
+}
+function renderCompatibility(app, d) {
+  if (d.type !== "chat" || d.protocol !== "openai-compatible") return "";
+  const assistants = visibleModels(app.state.config, "chat").filter((m) => {
+    const provider = app.state.config.providers.find((p) => p.id === m.provider);
+    return m.enabled && provider?.enabled && provider.protocol === "openai-compatible";
+  });
+  return `<details class="request-parameters model-compatibility"><summary>接口兼容${d.reasoningCompatibility ? " · 已配置" : ""}</summary>
+    <p>仅用于当前模型的思考字段差异，不改变其他模型。</p>
+    <label for="compatibility-assistant">辅助分析模型</label><div class="compatibility-actions"><select id="compatibility-assistant" name="compatibilityAssistant"><option value="">使用当前模型</option>${assistants.map((m) => `<option value="${e(m.id)}" ${d.compatibilityAssistant === m.id ? "selected" : ""}>${e(m.name)}</option>`).join("")}</select><button type="button" class="btn tonal" data-ai-compatibility ${d.compatibilityLoading || app.state.modelSaving ? "disabled" : ""}>${d.compatibilityLoading ? "分析并验证中…" : "AI 辅助兼容配置"}</button><button type="button" class="btn small" data-cancel-compatibility ${d.compatibilityLoading ? "" : "hidden"}>取消检测</button></div>
+    <p class="hint">最多调用模型 4 次，会产生用量；只用合成测试，不写入聊天。验证通过后填入草稿，保存后生效。</p>
+    <div class="compatibility-mapping"><span id="compatibility-mapping">${e(compatibilityMappingText(d))}</span><button type="button" class="btn small link" data-clear-compatibility ${d.reasoningCompatibility?.response_field || d.reasoningCompatibility?.request_field ? "" : "disabled"}>清除映射</button></div>
+    <label class="setting-toggle"><input name="compatibilityFill" type="checkbox" ${d.reasoningCompatibility?.fill_missing === true ? "checked" : ""}><span>缺失思考字段补空（实验性）</span></label><p class="hint">已有思考正文保持原样；接口仍可能拒绝空值。AI 辅助配置不会自动开启此项。</p>
+    <div id="compatibility-result" class="connection-result ${d.compatibilityError ? "error" : ""}" role="status">${e(d.compatibilityLoading ? "正在分析并验证工具续轮…" : d.compatibilityMessage || "")}</div></details>`;
+}
 function renderEditor(app, d) {
   const embedding = d.type === "embedding";
   const supported = d.type === "chat" ? d.protocol === "openai-compatible"
@@ -256,6 +282,7 @@ function renderEditor(app, d) {
     ${embedding ? row("dimensions", "嵌入维度", "记录模型实际返回的向量长度，用于检查结果是否一致。留空后点击自动检测。", `<div class="dimension-input">${input(d, "dimensions", 'type="number" min="1" max="65536" step="1" placeholder="尚未检测"')}<button type="button" class="btn tonal" data-detect ${supported ? "" : "disabled"}>自动检测</button></div>`) : ""}
     ${supported ? row("use", embedding ? "选为嵌入模型" : "选为对话模型", embedding ? "保存后记录此选择。记忆向量检索尚未接入。" : "保存后用于新的对话请求；人格单独指定的模型仍优先。", `<label class="setting-toggle"><input id="setting-use" name="use" type="checkbox" ${d.use ? "checked" : ""}><span>使用此配置</span></label>`) : ""}
     <details class="request-parameters"><summary>高级请求参数（可选）</summary><p>仅在服务文档要求时填写 JSON。${embedding ? `如模型支持缩减维度，可通过 ${d.protocol === "dashscope" ? "dimension" : "dimensions"} 指定请求维度，然后重新检测实际结果。` : "例如 temperature。"}</p><textarea name="parametersText" aria-label="高级请求参数" rows="5" spellcheck="false">${e(d.parametersText)}</textarea></details>
+    ${renderCompatibility(app, d)}
     ${shared.length ? `<details class="shared-connection-note"><summary>共用此连接的其他模型（${shared.length}）</summary>${shared.map((m) => `<p><strong>${e(m.name)}</strong> · ${e(m.model)} · ${e(typeNames[m.type])}${issueFor(app.state.config, m) ? `<br><span class="form-error">${e(issueFor(app.state.config, m))}</span>` : ""}</p>`).join("")}</details>` : ""}
     <div id="connection-result" class="connection-result ${d.probeError ? "error" : ""}" role="status">${e(d.probeMessage || "")}</div><div id="connection-error" class="form-error" role="alert"></div>
     <footer class="connection-footer"><button type="button" class="btn small" data-discard>放弃修改</button>${existing ? `<button type="button" class="btn small danger" data-delete>${icon("trash")}删除此配置</button>` : ""}</footer>
@@ -276,9 +303,16 @@ function capture(form, d) {
     "dimensions",
     "context_window",
     "parametersText",
+    "compatibilityAssistant",
   ])
     if (data.has(name)) d[name] = String(data.get(name));
   for (const name of ["enabled", "clear_key", "use"]) d[name] = data.has(name);
+  if (d.type === "chat" && d.protocol === "openai-compatible") {
+    const compatibility = { ...d.reasoningCompatibility };
+    if (data.has("compatibilityFill")) compatibility.fill_missing = true;
+    else delete compatibility.fill_missing;
+    d.reasoningCompatibility = Object.keys(compatibility).length ? compatibility : null;
+  }
 }
 function renderConnectionModels(app, d) {
   const models = visibleModels(app.state.config, d.type).filter(
@@ -320,6 +354,7 @@ export function configWithModels(next, d, choices) {
 async function addModels(app, d, choices) {
   if (!choices.length) throw Error("请至少选择一个模型");
   if (app.state.modelSaving) throw Error("配置正在保存，请稍后重试");
+  d.compatibilityRun?.abort();
   app.state.modelSaving = true;
   try {
     const next = configWithModels(app.configDraft(), d, choices);
@@ -335,6 +370,7 @@ async function addModels(app, d, choices) {
     app.render();
   } finally {
     app.state.modelSaving = false;
+    refreshCompatibilityButton(app);
   }
 }
 async function fetchModels(app, form, d) {
@@ -403,6 +439,11 @@ function customModel(app, form, d) {
 }
 function markDirty(app, form, d) {
   capture(form, d);
+  d.compatibilityRun?.abort();
+  d.compatibilityMessage = "";
+  d.compatibilityError = false;
+  const compatibilityOutput = form.querySelector("#compatibility-result");
+  if (compatibilityOutput) compatibilityOutput.textContent = "";
   d.dirty = true;
   d.version++;
   d.probeMessage = "";
@@ -416,14 +457,19 @@ function markDirty(app, form, d) {
   form.querySelector("#connection-result").textContent = "";
   form.querySelector("#connection-error").textContent = "";
 }
+function refreshCompatibilityButton(app) {
+  const button = app.content.querySelector("#connection-form")?.querySelector("[data-ai-compatibility]");
+  if (button) button.disabled = !!app.state.modelSaving || !!app.state.modelDraft?.compatibilityLoading;
+}
 function leaveDraft(app, action) {
   if (app.state.modelSaving) return;
-  if (!app.state.modelDraft?.dirty) return action();
+  const leave = () => { app.state.modelDraft?.compatibilityRun?.abort(); action(); };
+  if (!app.state.modelDraft?.dirty) return leave();
   app.dialog(
     "放弃未保存的修改？",
     "<p>当前配置尚未保存。放弃后再切换。</p>",
     async () => {
-      setTimeout(action, 0);
+      setTimeout(leave, 0);
     },
     "放弃并继续",
   );
@@ -481,11 +527,34 @@ export function bindModels(app) {
   form
     .querySelector("[data-fetch-context]")
     ?.addEventListener("click", () => fetchContextCapacity(app, form, d));
-  form.oninput = () => markDirty(app, form, d);
+  form.oninput = (event) => {
+    if (event?.target?.name === "compatibilityAssistant") {
+      capture(form, d);
+      d.compatibilityRun?.abort();
+      d.version++;
+      d.compatibilityMessage = "";
+      d.compatibilityError = false;
+      const output = form.querySelector("#compatibility-result");
+      if (output) output.textContent = "";
+      return;
+    }
+    markDirty(app, form, d);
+  };
+  if (d.type === "chat" && d.protocol === "openai-compatible") {
+    form.querySelector("[data-ai-compatibility]")?.addEventListener("click", () => assistCompatibility(app, form, d));
+    form.querySelector("[data-cancel-compatibility]")?.addEventListener("click", () => d.compatibilityRun?.abort());
+    form.querySelector("[data-clear-compatibility]")?.addEventListener("click", () => {
+      markDirty(app, form, d);
+      d.reasoningCompatibility = d.reasoningCompatibility?.fill_missing ? { fill_missing: true } : null;
+      form.querySelector("#compatibility-mapping").textContent = compatibilityMappingText(d);
+      form.querySelector("[data-clear-compatibility]").disabled = true;
+    });
+  }
   form.querySelector("[name=template]").onchange = () => {
     const t = templates.find((t) => t.id === form.elements.template.value);
     if (!t) return;
     capture(form, d);
+    d.compatibilityRun?.abort();
     d.protocol = t.protocol;
     d.base_url = t.base_url;
     d.api_key = "";
@@ -495,6 +564,8 @@ export function bindModels(app) {
     d.probeMessage = "";
     d.capacityResult = null;
     d.capacityError = "";
+    d.compatibilityMessage = "";
+    if (d.protocol !== "openai-compatible") d.reasoningCompatibility = null;
     app.render();
   };
   const protocolInput = form.querySelector("[name=protocol]");
@@ -502,10 +573,13 @@ export function bindModels(app) {
   form.onsubmit = async (event) => {
     event.preventDefault();
     if (app.state.modelSaving) return;
+    d.compatibilityRun?.abort();
     capture(form, d);
     const button = form.querySelector("#connection-save");
     button.disabled = true;
     app.state.modelSaving = true;
+    const compatibilityButton = form.querySelector("[data-ai-compatibility]");
+    if (compatibilityButton) compatibilityButton.disabled = true;
     try {
       const next = configWithDraft(app.configDraft(), d);
       await app.saveConfig(next);
@@ -517,6 +591,7 @@ export function bindModels(app) {
       button.disabled = false;
     } finally {
       app.state.modelSaving = false;
+      refreshCompatibilityButton(app);
     }
   };
   form
@@ -624,8 +699,103 @@ function payloadFor(d) {
       dimensions: d.dimensions === "" ? null : Number(d.dimensions),
       context_window:
         d.type === "chat" && d.context_window ? Number(d.context_window) : null,
+      ...(d.type === "chat" && d.protocol === "openai-compatible" && d.reasoningCompatibility
+        ? { reasoning_compatibility: { ...d.reasoningCompatibility } }
+        : d.compatibilityOriginallyConfigured ? { reasoning_compatibility: null } : {}),
     },
   };
+}
+async function assistCompatibility(app, form, d) {
+  if (app.state.modelSaving || d.compatibilityLoading || !form.reportValidity()) return;
+  capture(form, d);
+  const output = form.querySelector("#compatibility-result");
+  const button = form.querySelector("[data-ai-compatibility]");
+  const cancel = form.querySelector("[data-cancel-compatibility]");
+  let payload;
+  try { payload = payloadFor(d); }
+  catch (error) { output.textContent = error.message; output.classList.add("error"); return; }
+  const assistantModelId = d.compatibilityAssistant || "";
+  const fingerprint = JSON.stringify({ payload, assistantModelId });
+  const version = d.version, revision = app.state.config.revision;
+  const controller = new AbortController();
+  const current = () => {
+    if (app.state.modelDraft !== d || d.compatibilityRun !== controller || d.version !== version ||
+        app.state.config.revision !== revision || form.isConnected === false || app.content.querySelector("#connection-form") !== form) return false;
+    try {
+      const now = { ...d, reasoningCompatibility: d.reasoningCompatibility && { ...d.reasoningCompatibility } };
+      capture(form, now);
+      return JSON.stringify({ payload: payloadFor(now), assistantModelId: now.compatibilityAssistant || "" }) === fingerprint;
+    } catch { return false; }
+  };
+  d.compatibilityRun = controller;
+  d.compatibilityLoading = true;
+  d.compatibilityMessage = "";
+  d.compatibilityError = false;
+  button.disabled = true;
+  button.textContent = "分析并验证中…";
+  cancel.hidden = false;
+  output.classList.remove("error");
+  output.textContent = "正在分析并验证工具续轮…";
+  const onNavigate = () => controller.abort();
+  globalThis.addEventListener?.("hashchange", onNavigate, { once: true });
+  try {
+    // Keep this diagnostic request cancellable without changing other API callers.
+    payload.provider.enabled = true;
+    payload.model.enabled = true;
+    const response = await fetch("/api/model-config/compatibility", {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+      body: JSON.stringify({ ...payload, ...(assistantModelId ? { assistantModelId } : {}) }),
+    });
+    const result = await response.json();
+    if (controller.signal.aborted) throw Error("检测已取消");
+    if (!current()) return;
+    if (!response.ok) throw Error(result.error || "兼容检测请求失败");
+    const usage = result.usage;
+    const count = Number.isSafeInteger(result.requests) ? ` · ${result.requests} 次请求` : "";
+    const tokens = Number.isSafeInteger(usage?.input_tokens) && Number.isSafeInteger(usage?.output_tokens)
+      ? ` · ${usage.input_tokens.toLocaleString()} 输入 / ${usage.output_tokens.toLocaleString()} 输出 token` : "";
+    if (result.verified !== true) {
+      d.compatibilityMessage = `${result.message || "未能验证兼容映射，当前设置未改变。"}${count}${tokens}`;
+      d.compatibilityError = true;
+      return;
+    }
+    const mapping = result.compatibility;
+    if (typeof mapping?.response_field !== "string" || !mapping.response_field ||
+        typeof mapping?.request_field !== "string" || !mapping.request_field)
+      throw Error("检测返回的映射不完整，当前设置未改变。");
+    d.reasoningCompatibility = { response_field: mapping.response_field, request_field: mapping.request_field,
+      ...(d.reasoningCompatibility?.fill_missing === true ? { fill_missing: true } : {}) };
+    d.dirty = true;
+    d.version++;
+    d.compatibilityMessage = `${result.message || "工具续轮验证通过"}${count}${tokens}。映射已填入草稿，请保存后使用。`;
+    d.compatibilityError = false;
+    form.querySelector("#compatibility-mapping").textContent = compatibilityMappingText(d);
+    form.querySelector("[data-clear-compatibility]").disabled = false;
+    form.querySelector("#connection-save").disabled = false;
+    form.querySelector("#draft-state").textContent = "兼容映射尚未保存";
+  } catch (error) {
+    if (!current()) return;
+    d.compatibilityMessage = controller.signal.aborted ? "检测已取消，当前映射未改变。" : error.message;
+    d.compatibilityError = !controller.signal.aborted;
+  } finally {
+    globalThis.removeEventListener?.("hashchange", onNavigate);
+    if (d.compatibilityRun === controller) {
+      delete d.compatibilityRun;
+      d.compatibilityLoading = false;
+      if (app.state.modelDraft === d) {
+        const activeForm = app.content.querySelector("#connection-form");
+        const activeButton = activeForm?.querySelector("[data-ai-compatibility]");
+        const activeCancel = activeForm?.querySelector("[data-cancel-compatibility]");
+        if (activeButton) { activeButton.disabled = !!app.state.modelSaving; activeButton.textContent = "AI 辅助兼容配置"; }
+        if (activeCancel) activeCancel.hidden = true;
+        const activeOutput = activeForm?.querySelector("#compatibility-result");
+        if (activeOutput && activeForm.isConnected !== false) {
+          activeOutput.textContent = d.compatibilityMessage || "设置或页面已更改，请重新检测。";
+          activeOutput.classList.toggle("error", !!d.compatibilityError);
+        }
+      }
+    }
+  }
 }
 export function configWithDraft(next, d) {
   const { provider, model } = payloadFor(d);
@@ -769,6 +939,7 @@ function deleteConnection(app, d) {
     "删除模型配置",
     `<p>删除「${e(d.name)}」？已选用的模型需要先在使用设置中取消选择。</p>`,
     async () => {
+      d.compatibilityRun?.abort();
       const next = app.configDraft();
       next.revision = d.revision;
       const original = next.models.find((m) => m.id === d.id);

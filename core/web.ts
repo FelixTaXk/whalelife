@@ -331,6 +331,17 @@ export async function startWeb(config: any, services: any, runtime: any) {
           await services.modelConfig.probeDraft(await body(req)),
         );
       }
+      if (req.url === "/api/model-config/compatibility" && req.method === "POST") {
+        const value = await body(req), cancellation = new AbortController();
+        const cancel = () => { if (!res.writableEnded) cancellation.abort(); };
+        res.once("close", cancel);
+        try {
+          const result = await services.modelConfig.probeCompatibility(value,
+            AbortSignal.any([lifetime.signal, cancellation.signal]));
+          if (!res.destroyed) return send(200, result);
+          return;
+        } finally { res.off("close", cancel); }
+      }
       if (req.method === "GET" && req.url?.startsWith("/api/session?")) {
         const id = new URL(req.url, origin).searchParams.get("id");
         if (!id) return send(400, { error: "请提供会话 ID" });

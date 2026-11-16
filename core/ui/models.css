@@ -825,3 +825,26 @@
 #persona-prompt-text {
   margin-top: 12px;
 }
+.compatibility-actions,
+.compatibility-mapping {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0;
+}
+.compatibility-actions select {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.compatibility-mapping {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.model-compatibility .hint {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.model-compatibility .connection-result:empty {
+  display: none;
+}

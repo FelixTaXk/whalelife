@@ -9,6 +9,9 @@ import {
 } from "./model-config.ts";
 import { withModelResponse, modelErrorMessage } from "./model-http.ts";
 import type { Diagnostics } from "./diagnostics.ts";
+import {
+  validateReasoningCompatibility, readReasoningDelta, ReasoningAccumulator, encodeReasoningMessages,
+} from "./reasoning-compatibility.ts";
 /** Completed transcript rows have no protocol reasoning. Quote them as history for these APIs. */
 export function thinkingToolHistory(provider: any, tools: unknown[]) {
   if (!tools.length || provider.parameters?.thinking?.type === "disabled") return false;
@@ -60,6 +63,7 @@ export class LLM {
     if ((opts.provider.protocol ?? "openai-compatible") !== "openai-compatible")
       throw Error("此模型协议由插件调用，不能用于主干对话");
     const parameters = validateModelParameters(opts.provider.parameters);
+    const compatibility = validateReasoningCompatibility(opts.provider.reasoning_compatibility);
     const start = Date.now();
     this.logger.info("LLM 请求", { model: opts.provider.model });
     try {
@@ -72,7 +76,7 @@ export class LLM {
             ? { max_tokens: opts.max_tokens }
             : {}),
           model: opts.provider.model,
-          messages: opts.messages,
+          messages: encodeReasoningMessages(opts.messages, compatibility),
           stream: true,
           stream_options: { include_usage: true },
           ...(opts.tools?.length ? { tools: opts.tools } : {}),
@@ -82,10 +86,9 @@ export class LLM {
           if (!response.body) throw Error("模型返回空响应");
           let buffer = "",
             text = "",
-            reasoning: string | undefined,
-            alternateReasoning: string | undefined,
             finishReason: string | undefined,
             usage: any;
+          const reasoning = new ReasoningAccumulator(compatibility);
           const calls: any[] = [];
           const decoder = new TextDecoder();
           let done = false;
@@ -106,8 +109,7 @@ export class LLM {
               throw Error("模型服务返回了无效的流式数据");
             }
             const observed = obj?.choices?.[0]?.delta;
-            const observedReasoning = typeof observed?.reasoning_content === "string" ? observed.reasoning_content
-              : typeof observed?.reasoning === "string" ? observed.reasoning : undefined;
+            const observedReasoning = readReasoningDelta(observed, compatibility);
             trace?.emit("response.chunk", { phase: "sse", raw: obj,
               ...(observed?.content === undefined ? {} : { text: observed.content }),
               ...(observedReasoning === undefined ? {} : { reasoning: observedReasoning }),
@@ -124,13 +126,10 @@ export class LLM {
                 .includes(choice.finish_reason) ? choice.finish_reason : "unknown";
             }
             const delta = choice?.delta;
-            // Some compatible APIs use `reasoning`. Keep both streams separate: the
-            // standard field wins, including an explicit empty string, without duplication.
-            if (typeof delta?.reasoning === "string")
-              alternateReasoning = (alternateReasoning ?? "") + delta.reasoning;
-            if (typeof delta?.reasoning_content === "string")
-              reasoning = (reasoning ?? "") + delta.reasoning_content;
-            const currentReasoning = reasoning ?? alternateReasoning;
+            if (opts.onProtocolDelta && delta && typeof delta === "object")
+              opts.onProtocolDelta(structuredClone(delta));
+            reasoning.push(delta);
+            const currentReasoning = reasoning.value();
             trace?.finish({ ...(currentReasoning === undefined ? {} : { reasoning_content: currentReasoning }) });
             if (delta?.content) {
               text += delta.content;
@@ -167,7 +166,7 @@ export class LLM {
             ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
           });
           if (usage !== undefined) trace?.emit("request.usage", { usage, mode: "snapshot", stage: "final" });
-          const protocolReasoning = reasoning ?? alternateReasoning;
+          const protocolReasoning = reasoning.value(Boolean(opts.tools?.length && calls.some(Boolean)));
           trace?.finish({ text, tool_calls: calls.filter(Boolean),
             ...(protocolReasoning === undefined ? {} : { reasoning_content: protocolReasoning }) });
           return { text, toolCalls: calls.filter(Boolean), usage,
