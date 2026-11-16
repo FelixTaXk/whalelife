@@ -22,6 +22,7 @@ import { MemoryEngine } from "./memory-engine.ts";
 import { registerMemoryTools } from "./memory-tools.ts";
 import { pluginServices } from "./plugin-services.ts";
 import { ExecutionArchive, registerExecutionTools } from "./execution-archive.ts";
+import { runMain } from "./process-lifecycle.ts";
 export async function boot(
   root = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
 ) {
@@ -139,39 +140,31 @@ export async function boot(
   runtime.events.emit("whalelife/ready", { at: new Date().toISOString() });
   logger.info("核心就绪");
   let closing: Promise<void> | undefined;
-  const close = () => closing ??= (async () => {
-    logger.info("WhaleLife 关闭");
-    runtime.events.emit("whalelife/shutdown", { at: new Date().toISOString() });
-    // Let shutdown listeners receive the notification before their subscriptions are removed.
-    await new Promise<void>((r) => setImmediate(r));
-    sessions.beginClose();
-    services.channels.beginClose();
-    runtime.beginClose();
-    await Promise.all([web.close(), sessions.close(), services.channels.close(), runtime.bus.stop()]);
-    await runtime.events.drain();
-    await memory.queue;
-    await diagnostics.close();
-  })();
+  const close = () => {
+    if (closing) return closing;
+    let resolveClose!: () => void, rejectClose!: (error: unknown) => void;
+    // Publish the promise before a synchronous log/shutdown listener can re-enter close().
+    closing = new Promise<void>((resolve, reject) => { resolveClose = resolve; rejectClose = reject; });
+    void (async () => {
+      logger.info("WhaleLife 关闭");
+      runtime.events.emit("whalelife/shutdown", { at: new Date().toISOString() });
+      // Let shutdown listeners receive the notification before their subscriptions are removed.
+      await new Promise<void>((r) => setImmediate(r));
+      sessions.beginClose();
+      services.channels.beginClose();
+      runtime.beginClose();
+      await Promise.all([web.close(), sessions.close(), services.channels.close(), runtime.bus.stop()]);
+      await runtime.events.drain();
+      await memory.queue;
+      await diagnostics.close();
+    })().then(resolveClose, rejectClose);
+    return closing;
+  };
   return { config, ...services, runtime, close };
 }
 if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  boot()
-    .then((app) => {
-      for (const signal of ["SIGINT", "SIGTERM"] as const)
-        process.on(signal, () => void app.close().then(() => process.exit(0)));
-      process.on("uncaughtException", (error) => {
-        app.logger.error("未捕获异常", { error });
-        void app.close().finally(() => process.exit(1));
-      });
-      process.on("unhandledRejection", (error) =>
-        app.logger.error("未处理 Promise 拒绝", { error }),
-      );
-    })
-    .catch((error) => {
-      console.error("WhaleLife 启动失败：", error.message);
-      process.exitCode = 1;
-    });
+  void runMain(boot);
 }
