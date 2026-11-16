@@ -231,13 +231,13 @@ function renderCompatibility(app, d) {
     const provider = app.state.config.providers.find((p) => p.id === m.provider);
     return m.enabled && provider?.enabled && provider.protocol === "openai-compatible";
   });
-  return `<details class="request-parameters model-compatibility"><summary>接口兼容${d.reasoningCompatibility ? " · 已配置" : ""}</summary>
-    <p>仅用于当前模型的思考字段差异，不改变其他模型。</p>
+  return `<section class="model-compatibility" aria-labelledby="compatibility-heading"><div class="settings-section-title"><h3 id="compatibility-heading">接口兼容</h3><span>${e(d.name || d.model || "当前模型")}${d.reasoningCompatibility ? " · 已配置" : ""}</span></div>
+    <p class="hint">使用中转站或其他兼容接口时，可在这里处理当前模型的思考字段差异。</p>
     <label for="compatibility-assistant">辅助分析模型</label><div class="compatibility-actions"><select id="compatibility-assistant" name="compatibilityAssistant"><option value="">使用当前模型</option>${assistants.map((m) => `<option value="${e(m.id)}" ${d.compatibilityAssistant === m.id ? "selected" : ""}>${e(m.name)}</option>`).join("")}</select><button type="button" class="btn tonal" data-ai-compatibility ${d.compatibilityLoading || app.state.modelSaving ? "disabled" : ""}>${d.compatibilityLoading ? "分析并验证中…" : "AI 辅助兼容配置"}</button><button type="button" class="btn small" data-cancel-compatibility ${d.compatibilityLoading ? "" : "hidden"}>取消检测</button></div>
     <p class="hint">最多调用模型 4 次，会产生用量；只用合成测试，不写入聊天。验证通过后填入草稿，保存后生效。</p>
     <div class="compatibility-mapping"><span id="compatibility-mapping">${e(compatibilityMappingText(d))}</span><button type="button" class="btn small link" data-clear-compatibility ${d.reasoningCompatibility?.response_field || d.reasoningCompatibility?.request_field ? "" : "disabled"}>清除映射</button></div>
     <label class="setting-toggle"><input name="compatibilityFill" type="checkbox" ${d.reasoningCompatibility?.fill_missing === true ? "checked" : ""}><span>缺失思考字段补空（实验性）</span></label><p class="hint">已有思考正文保持原样；接口仍可能拒绝空值。AI 辅助配置不会自动开启此项。</p>
-    <div id="compatibility-result" class="connection-result ${d.compatibilityError ? "error" : ""}" role="status">${e(d.compatibilityLoading ? "正在分析并验证工具续轮…" : d.compatibilityMessage || "")}</div></details>`;
+    <div id="compatibility-result" class="connection-result ${d.compatibilityError ? "error" : ""}" role="status">${e(d.compatibilityLoading ? "正在分析并验证工具续轮…" : d.compatibilityMessage || "")}</div></section>`;
 }
 function renderEditor(app, d) {
   const embedding = d.type === "embedding";
@@ -252,6 +252,7 @@ function renderEditor(app, d) {
     <div class="connection-settings"><div class="settings-section-title"><h3>设置</h3><span id="draft-state">${d.dirty ? "有未保存的修改" : "已保存"}</span></div>
     ${d.repair ? '<div class="configuration-warning repair-note">旧记录已保留。请选择正确的服务类型并填写该服务的 Key；旧 DeepSeek 密钥不会转移到新地址。</div>' : ""}
     ${d.revision !== app.state.config.revision ? '<div class="configuration-warning repair-note">已保存的配置发生了变化。当前未保存的内容仍保留；请先放弃修改，再根据最新配置重新编辑。</div>' : ""}
+    ${renderCompatibility(app, d)}
     <div class="service-notice">${icon("info")}<p>${e(t?.note || "选择要连接的服务，然后填写实际模型名称。")}</p></div>
     ${renderConnectionModels(app, d)}
     <h3 class="model-section-heading">服务连接</h3>
@@ -282,7 +283,6 @@ function renderEditor(app, d) {
     ${embedding ? row("dimensions", "嵌入维度", "记录模型实际返回的向量长度，用于检查结果是否一致。留空后点击自动检测。", `<div class="dimension-input">${input(d, "dimensions", 'type="number" min="1" max="65536" step="1" placeholder="尚未检测"')}<button type="button" class="btn tonal" data-detect ${supported ? "" : "disabled"}>自动检测</button></div>`) : ""}
     ${supported ? row("use", embedding ? "选为嵌入模型" : "选为对话模型", embedding ? "保存后记录此选择。记忆向量检索尚未接入。" : "保存后用于新的对话请求；人格单独指定的模型仍优先。", `<label class="setting-toggle"><input id="setting-use" name="use" type="checkbox" ${d.use ? "checked" : ""}><span>使用此配置</span></label>`) : ""}
     <details class="request-parameters"><summary>高级请求参数（可选）</summary><p>仅在服务文档要求时填写 JSON。${embedding ? `如模型支持缩减维度，可通过 ${d.protocol === "dashscope" ? "dimension" : "dimensions"} 指定请求维度，然后重新检测实际结果。` : "例如 temperature。"}</p><textarea name="parametersText" aria-label="高级请求参数" rows="5" spellcheck="false">${e(d.parametersText)}</textarea></details>
-    ${renderCompatibility(app, d)}
     ${shared.length ? `<details class="shared-connection-note"><summary>共用此连接的其他模型（${shared.length}）</summary>${shared.map((m) => `<p><strong>${e(m.name)}</strong> · ${e(m.model)} · ${e(typeNames[m.type])}${issueFor(app.state.config, m) ? `<br><span class="form-error">${e(issueFor(app.state.config, m))}</span>` : ""}</p>`).join("")}</details>` : ""}
     <div id="connection-result" class="connection-result ${d.probeError ? "error" : ""}" role="status">${e(d.probeMessage || "")}</div><div id="connection-error" class="form-error" role="alert"></div>
     <footer class="connection-footer"><button type="button" class="btn small" data-discard>放弃修改</button>${existing ? `<button type="button" class="btn small danger" data-delete>${icon("trash")}删除此配置</button>` : ""}</footer>

@@ -825,6 +825,23 @@
 #persona-prompt-text {
   margin-top: 12px;
 }
+.model-compatibility {
+  margin: 0 0 24px;
+  padding: 18px 20px;
+  border: 1px solid #ded9f6;
+  border-left: 3px solid #7460db;
+  border-radius: 12px;
+  background: #faf9ff;
+  font-size: 13px;
+}
+.model-compatibility .settings-section-title {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.model-compatibility p {
+  margin: 8px 0;
+}
 .compatibility-actions,
 .compatibility-mapping {
   display: flex;

@@ -75,9 +75,16 @@ function formData(t: any) {
 const verified = (extra: any = {}) => ({ verified: true, compatibility: { ...mapping }, message: "已验证", requests: 4,
   usage: { input_tokens: 41, output_tokens: 12 }, ...extra });
 
-test("compatibility controls are collapsed, chat-only, default-off, and helpers exclude unusable models", () => {
+test("compatibility controls stay visible above the model list and connection settings, chat-only and default-off, with usable helpers", () => {
   const config = fixture(), app = appFor(config), html = renderModels(app);
-  assert.match(html, /<details class="request-parameters model-compatibility"><summary>接口兼容<\/summary>/);
+  const compatibility = html.match(/<section\b[^>]*class="[^"]*\bmodel-compatibility\b[^"]*"[^>]*>/);
+  assert.ok(compatibility, "compatibility controls must be in an always-visible section");
+  assert.doesNotMatch(compatibility[0], /\bhidden\b/);
+  assert.ok(compatibility.index! < html.indexOf('<h3 class="model-section-heading">服务连接</h3>'),
+    "compatibility controls must appear before the connection settings");
+  assert.ok(compatibility.index! < html.indexOf('<section class="connection-models">'),
+    "compatibility controls must appear above the configured model list");
+  assert.doesNotMatch(html, /<details\b[^>]*class="[^"]*\bmodel-compatibility\b/);
   assert.match(html, /name="compatibilityFill" type="checkbox" >缺|name="compatibilityFill" type="checkbox" ><span/);
   assert.match(html, /最多调用模型 4 次/);
   const select = html.match(/<select id="compatibility-assistant"[\s\S]*?<\/select>/)![0];
