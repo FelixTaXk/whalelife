@@ -842,6 +842,19 @@
 .model-compatibility p {
   margin: 8px 0;
 }
+.compatibility-intro {
+  line-height: 1.7;
+}
+.compatibility-option {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #e6e1f5;
+}
+.compatibility-option h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
 .compatibility-actions,
 .compatibility-mapping {
   display: flex;
@@ -859,8 +872,13 @@
   overflow-wrap: anywhere;
 }
 .model-compatibility .hint {
+  display: block;
+  color: #697386;
   font-size: 12px;
   line-height: 1.6;
+}
+.model-compatibility code {
+  white-space: nowrap;
 }
 .model-compatibility .connection-result:empty {
   display: none;

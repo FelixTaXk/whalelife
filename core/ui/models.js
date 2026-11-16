@@ -232,11 +232,14 @@ function renderCompatibility(app, d) {
     return m.enabled && provider?.enabled && provider.protocol === "openai-compatible";
   });
   return `<section class="model-compatibility" aria-labelledby="compatibility-heading"><div class="settings-section-title"><h3 id="compatibility-heading">接口兼容</h3><span>${e(d.name || d.model || "当前模型")}${d.reasoningCompatibility ? " · 已配置" : ""}</span></div>
-    <p class="hint">使用中转站或其他兼容接口时，可在这里处理当前模型的思考字段差异。</p>
+    <p class="compatibility-intro">用于中转站等接口的思考字段适配。<strong>聊天和工具调用都正常时，保持默认即可。</strong></p>
+    <div class="compatibility-option"><h4>工具调用提示思考字段缺失：先尝试 AI 适配</h4>
+    <p class="hint">例如报错中出现 <code>reasoning_content</code> 缺失。AI 会检查接口实际返回的字段，尝试适配不同的字段名称，并验证工具调用能否继续。</p>
     <label for="compatibility-assistant">辅助分析模型</label><div class="compatibility-actions"><select id="compatibility-assistant" name="compatibilityAssistant"><option value="">使用当前模型</option>${assistants.map((m) => `<option value="${e(m.id)}" ${d.compatibilityAssistant === m.id ? "selected" : ""}>${e(m.name)}</option>`).join("")}</select><button type="button" class="btn tonal" data-ai-compatibility ${d.compatibilityLoading || app.state.modelSaving ? "disabled" : ""}>${d.compatibilityLoading ? "分析并验证中…" : "AI 辅助兼容配置"}</button><button type="button" class="btn small" data-cancel-compatibility ${d.compatibilityLoading ? "" : "hidden"}>取消检测</button></div>
     <p class="hint">最多调用模型 4 次，会产生用量；只用合成测试，不写入聊天。验证通过后填入草稿，保存后生效。</p>
-    <div class="compatibility-mapping"><span id="compatibility-mapping">${e(compatibilityMappingText(d))}</span><button type="button" class="btn small link" data-clear-compatibility ${d.reasoningCompatibility?.response_field || d.reasoningCompatibility?.request_field ? "" : "disabled"}>清除映射</button></div>
-    <label class="setting-toggle"><input name="compatibilityFill" type="checkbox" ${d.reasoningCompatibility?.fill_missing === true ? "checked" : ""}><span>缺失思考字段补空（实验性）</span></label><p class="hint">已有思考正文保持原样；接口仍可能拒绝空值。AI 辅助配置不会自动开启此项。</p>
+    <div class="compatibility-mapping"><span id="compatibility-mapping">${e(compatibilityMappingText(d))}</span><button type="button" class="btn small link" data-clear-compatibility ${d.reasoningCompatibility?.response_field || d.reasoningCompatibility?.request_field ? "" : "disabled"}>清除映射</button></div></div>
+    <div class="compatibility-option"><label class="setting-toggle"><input name="compatibilityFill" type="checkbox" ${d.reasoningCompatibility?.fill_missing === true ? "checked" : ""}><span>强兼容：缺失思考字段补空（实验性）</span></label><p class="hint">检测提示接口没有返回思考内容时，才考虑开启：仅在字段缺失时填入空字符串，尝试继续工具调用。已有内容不变，缺失内容无法恢复，接口仍可能拒绝。开启后需点击右上角“保存”。</p></div>
+    <p class="hint">以上设置只影响当前选中的模型。密钥错误、余额不足、网络故障或 HTTP 429 繁忙，需要按对应报错处理。</p>
     <div id="compatibility-result" class="connection-result ${d.compatibilityError ? "error" : ""}" role="status">${e(d.compatibilityLoading ? "正在分析并验证工具续轮…" : d.compatibilityMessage || "")}</div></section>`;
 }
 function renderEditor(app, d) {
@@ -252,9 +255,9 @@ function renderEditor(app, d) {
     <div class="connection-settings"><div class="settings-section-title"><h3>设置</h3><span id="draft-state">${d.dirty ? "有未保存的修改" : "已保存"}</span></div>
     ${d.repair ? '<div class="configuration-warning repair-note">旧记录已保留。请选择正确的服务类型并填写该服务的 Key；旧 DeepSeek 密钥不会转移到新地址。</div>' : ""}
     ${d.revision !== app.state.config.revision ? '<div class="configuration-warning repair-note">已保存的配置发生了变化。当前未保存的内容仍保留；请先放弃修改，再根据最新配置重新编辑。</div>' : ""}
-    ${renderCompatibility(app, d)}
     <div class="service-notice">${icon("info")}<p>${e(t?.note || "选择要连接的服务，然后填写实际模型名称。")}</p></div>
     ${renderConnectionModels(app, d)}
+    ${renderCompatibility(app, d)}
     <h3 class="model-section-heading">服务连接</h3>
     ${row("providerName", "连接名称", "这个连接下的模型共用地址、密钥、代理和超时。", input(d, "providerName", 'required maxlength="200"'))}
     ${row(
