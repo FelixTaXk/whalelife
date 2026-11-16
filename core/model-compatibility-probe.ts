@@ -109,13 +109,14 @@ export async function probeModelCompatibility(options: {
     if (reply.finish_reason === "length") throw new ProbeFailure("输出被截断，未完成验证；请调整模型参数后手动重试");
     return reply;
   };
-  const report = (verified: boolean, message: string, compatibility?: ReasoningCompatibility, httpStatus?: number) => {
+  const report = (verified: boolean, message: string, compatibility?: ReasoningCompatibility, httpStatus?: number, reason?: string) => {
     const total = (key: "input_tokens" | "output_tokens") => usage.length && usage.every(item => count(item[key]))
       ? usage.reduce((sum, item) => sum + item[key]!, 0) : null;
     return { verified, message, requests: usage.length,
       usage: { requests: usage, input_tokens: total("input_tokens"), output_tokens: total("output_tokens") },
       ...(!verified ? { diagnostic: { stage,
         ...(httpStatus === undefined ? {} : { http_status: httpStatus }),
+        ...(reason === undefined ? {} : { reason }),
         ...(attemptedMapping ? { attempted_mapping: attemptedMapping } : {}) } } : {}),
       ...(verified && compatibility ? { compatibility } : {}) };
   };
@@ -146,7 +147,9 @@ export async function probeModelCompatibility(options: {
     messages.push({ role: "assistant", content: toolReply.text || null, reasoning_content: toolReply.reasoning_content,
       tool_calls: [{ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }] },
       { role: "tool", tool_call_id: call.id, content: JSON.stringify({ code }) });
-    const final = await request("continuation", mapped, { messages, tools, tool_choice: "none" });
+    // Match the ordinary Sessions continuation; another tool request fails this
+    // bounded probe below instead of executing a second tool or retrying.
+    const final = await request("continuation", mapped, { messages, tools });
     if (final.toolCalls?.length || final.text.trim() !== code)
       throw new ProbeFailure("接口未完成测试工具结果的准确续接，未应用映射；没有执行真实插件工具");
     return report(true, "字段映射已通过工具请求及续轮验证，保存当前模型设置后生效", compatibility);
@@ -157,7 +160,12 @@ export async function probeModelCompatibility(options: {
     const status = error instanceof ModelRequestError ? error.message.match(/^模型服务返回 HTTP ([1-5]\d{2})(?:：|$)/)?.[1] : undefined;
     const details = [status ? `HTTP ${status}` : "", attemptedMapping
       ? `读取 ${attemptedMapping.response_field}，回传 ${attemptedMapping.request_field}` : ""].filter(Boolean).join("；");
+    // The transport has already replaced upstream text with its own classified
+    // explanation and safe metadata. Preserve that explanation, never a raw body.
+    const reason = error instanceof ModelRequestError
+      ? error.message.replace(/^模型服务返回 HTTP [1-5]\d{2}：?/, "") || "接口未提供可安全识别的具体原因"
+      : undefined;
     return report(false, `${stages[stage]}失败${details ? `（${details}）` : ""}：${error instanceof ProbeFailure ? error.message
-      : "模型请求或响应处理失败，请查看诊断日志或更换辅助模型后手动重试"}`, undefined, status ? Number(status) : undefined);
+      : reason ?? "模型请求或响应处理失败，请查看诊断日志或更换辅助模型后手动重试"}`, undefined, status ? Number(status) : undefined, reason);
   }
 }

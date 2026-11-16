@@ -1,7 +1,7 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type RequestListener } from "node:http";
-import { withModelResponse } from "../core/model-http.ts";
+import { withModelResponse, modelErrorMessage } from "../core/model-http.ts";
 import { LLM } from "../core/llm.ts";
 
 async function server(t: TestContext, handler: RequestListener) {
@@ -75,4 +75,40 @@ test("SSE error messages use the same safe diagnostic policy", async t => {
     assert.doesNotMatch(error.message, /PRIVATE_CONTEXT/);
     return true;
   });
+});
+
+test("a model-busy 429 explains capacity rejection without echoing arbitrary upstream text", async t => {
+  let requests = 0;
+  const provider = await server(t, (req, res) => {
+    requests++; req.resume(); res.writeHead(429, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: { code: "MODEL_RATE_LIMITED", type: "rate_limit_error",
+      message: "The model is temporarily busy. Please try again later. PRIVATE_CONTEXT secret-never-disclose" },
+      request_id: "req_1234567890abcdef" }));
+  });
+  await assert.rejects(withModelResponse(provider, "/chat/completions", {}, r => r.text()), (error: any) => {
+    assert.equal(error.status, 502);
+    assert.match(error.message, /HTTP 429.*模型服务繁忙.*暂时无法处理请求.*rate_limit_error.*req_1234567890abcdef/);
+    assert.doesNotMatch(error.message, /频率|余额|额度|PRIVATE_CONTEXT|secret-never-disclose|Please try again/);
+    return true;
+  });
+  assert.equal(requests, 1, "diagnosis does not automatically retry");
+});
+
+test("known error labels provide safe fallback reasons while an unexplained 429 stays unexplained", () => {
+  for (const [label, reason] of [
+    ["MODEL_RATE_LIMITED", "当前模型请求受限"], ["rate_limit_error", "服务暂时限制了请求"],
+    ["overloaded_error", "模型服务繁忙"], ["MODEL_UNAVAILABLE", "当前模型不可用"],
+    ["insufficient_quota", "服务额度或余额不足"], ["invalid_api_key", "服务拒绝了认证信息"],
+  ]) {
+    const message = modelErrorMessage(429, { error: { code: label, message: "PRIVATE_CONTEXT secret-never-disclose" } }, "secret-never-disclose");
+    assert.ok(message.includes(reason));
+    assert.doesNotMatch(message, /PRIVATE_CONTEXT|secret-never-disclose/);
+  }
+  assert.equal(modelErrorMessage(429, { error: { code: "unknown_private_code", type: "__proto__", message: "PRIVATE_CONTEXT" } }),
+    "模型服务返回 HTTP 429");
+  assert.equal(modelErrorMessage(429, undefined), "模型服务返回 HTTP 429");
+  assert.match(modelErrorMessage(429, { error: { type: "rate_limit_error", code: "MODEL_RATE_LIMITED" } }), /当前模型请求受限/,
+    "a known specific code is more informative than its generic type");
+  assert.match(modelErrorMessage(429, { error: { type: "rate_limit_error", message: "insufficient balance" } }), /余额不足/,
+    "an explicit quota error is not overridden by a generic rate-limit label");
 });

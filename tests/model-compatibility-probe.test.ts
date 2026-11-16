@@ -53,7 +53,7 @@ test("AI proposes an observed mapping and real LLM request encoding verifies one
       assert.equal(Object.hasOwn(body.messages[1], "reasoning_content"), false);
       assert.equal(body.messages[1].tool_calls[0].id, "validation-call");
       assert.equal(body.messages[2].tool_call_id, "validation-call");
-      assert.equal(body.tool_choice, "none");
+      assert.equal(Object.hasOwn(body, "tool_choice"), false);
     }
     return normal(round, body);
   });
@@ -99,7 +99,8 @@ test("rejected continuation reports its safe candidate and actual upstream HTTP 
   const result = await probeModelCompatibility({ target, assistant, logger });
   assert.equal(result.verified, false); assert.equal(result.requests, 4);
   assert.equal(Object.hasOwn(result, "compatibility"), false);
-  assert.deepEqual(result.diagnostic, { stage: "continuation", http_status: 400, attempted_mapping: goodMapping });
+  assert.deepEqual(result.diagnostic, { stage: "continuation", http_status: 400,
+    reason: "思考模式要求回传完整 reasoning_content，请检查工具续轮协议", attempted_mapping: goodMapping });
   assert.match(result.message, /工具续轮验证失败.*HTTP 400.*读取 metadata\.thought，回传 thought/);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_BODY|SYNTHETIC_TARGET_KEY|passed back/);
 });
@@ -137,10 +138,13 @@ for (const sample of invalid) test(sample.name, async t => {
   t.mock.method(globalThis, "fetch", async (_url: any, init: any) => {
     const round = requests++, body = JSON.parse(init.body);
     assert.ok(round <= sample.round, "failure must not trigger another request");
+    if (round === 3) assert.equal(Object.hasOwn(body, "tool_choice"), false,
+      "continuation must use the same default tool selection as Sessions");
     return round === sample.round ? sample.reply(body) : normal(round, body);
   });
   const result = await probeModelCompatibility({ target, assistant, logger });
   assert.equal(result.verified, false); assert.equal(result.requests, sample.round + 1);
+  assert.equal(requests, result.requests); assert.ok(requests <= 4);
   assert.equal(Object.hasOwn(result, "compatibility"), false); assert.match(result.message, sample.pattern);
 });
 
@@ -149,8 +153,44 @@ test("missing usage stays unknown and protocol error text is never reflected to 
     message: "PRIVATE_RESPONSE SYNTHETIC_TARGET_KEY", type: "unexpected-provider-error" } }), { status: 400 }));
   const result = await probeModelCompatibility({ target, assistant, logger });
   assert.equal(result.requests, 1); assert.equal(result.usage.input_tokens, null); assert.equal(result.usage.output_tokens, null);
-  assert.deepEqual(result.diagnostic, { stage: "sample", http_status: 400 });
+  assert.deepEqual(result.diagnostic, { stage: "sample", http_status: 400, reason: "接口未提供可安全识别的具体原因" });
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_RESPONSE|SYNTHETIC_TARGET_KEY/);
+});
+
+for (const failure of [
+  { status: 429, type: "rate_limit_error", message: "rate limit exceeded", expected: "服务请求频率受限" },
+  { status: 429, type: "insufficient_quota", message: "insufficient quota", expected: "服务额度或余额不足" },
+  { status: 401, type: "authentication_error", message: "invalid API key", expected: "服务拒绝了认证信息" },
+]) test(`safe transport cause remains visible for ${failure.status} ${failure.type}`, async t => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return new Response(JSON.stringify({ error: { type: failure.type,
+      message: failure.message + " PRIVATE_PROVIDER_BODY SYNTHETIC_TARGET_KEY" } }), { status: failure.status });
+  });
+  const result = await probeModelCompatibility({ target, assistant, logger });
+  assert.equal(result.verified, false); assert.equal(result.requests, 1); assert.equal(calls, 1);
+  assert.equal(result.diagnostic?.http_status, failure.status);
+  assert.equal(result.diagnostic?.reason, failure.expected + "；" + failure.type);
+  assert.ok(result.message.includes(failure.expected));
+  assert.equal(Object.hasOwn(result, "compatibility"), false);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_PROVIDER_BODY|SYNTHETIC_TARGET_KEY/);
+});
+
+test("gateway MODEL_RATE_LIMITED busy envelope is reported as a failed probe without applying or retrying", async t => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return new Response(JSON.stringify({ error: { code: "MODEL_RATE_LIMITED", type: "rate_limit_error",
+      message: "The model is temporarily busy. Please try again later." } }), { status: 429 });
+  });
+  const result = await probeModelCompatibility({ target, assistant, logger });
+  assert.equal(result.verified, false); assert.equal(result.requests, 1); assert.equal(calls, 1);
+  assert.equal(result.diagnostic?.http_status, 429);
+  assert.match(result.message, /模型服务繁忙/);
+  assert.match(result.diagnostic?.reason ?? "", /模型服务繁忙/);
+  assert.equal(Object.hasOwn(result, "compatibility"), false);
+  assert.doesNotMatch(JSON.stringify(result), /The model is temporarily busy/);
 });
 
 test("an omitted usage report does not turn into zero or a misleading complete total", async t => {

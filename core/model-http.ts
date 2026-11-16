@@ -100,20 +100,38 @@ export class ModelRequestError extends Error {
 /** Only emit recognised diagnostic categories, never a provider's arbitrary text/request echo. */
 export function modelErrorMessage(status: number | undefined, body: any, secret = "", headerId?: string | null) {
   const error = body?.error, message = typeof error?.message === "string" ? error.message.slice(0, 8192) : "";
+  const labels = [error?.type, error?.code].filter((value): value is string => typeof value === "string")
+    .map(value => value.toLowerCase());
+  const fallback: Record<string, string> = {
+    authentication_error: "服务拒绝了认证信息", invalid_api_key: "服务拒绝了认证信息",
+    permission_error: "服务拒绝了此操作的权限", insufficient_quota: "服务额度或余额不足",
+    context_length_exceeded: "请求超出模型上下文限制",
+    // A rate-limit category can cover either request frequency or model capacity.
+    // Do not infer an account balance or a specific limit from HTTP 429 alone.
+    rate_limit_error: "服务暂时限制了请求，请稍后重试",
+    model_rate_limited: "当前模型请求受限，请稍后重试",
+    overloaded_error: "模型服务繁忙，暂时无法处理请求，请稍后重试",
+    model_overloaded: "模型服务繁忙，暂时无法处理请求，请稍后重试",
+    model_unavailable: "当前模型不可用，请检查服务状态或稍后重试",
+    server_error: "模型服务暂时异常，请稍后重试",
+  };
   let reason = "";
   if (/reasoning_content/i.test(message) && /thinking|passed back|missing|must|思考|缺少/i.test(message))
     reason = "思考模式要求回传完整 reasoning_content，请检查工具续轮协议";
   else if (/context.{0,30}(length|window)|maximum.{0,30}token|too many tokens/i.test(message)) reason = "请求超出模型上下文限制";
   else if (/invalid.{0,20}(api.?key|authentication)|unauthorized/i.test(message)) reason = "服务拒绝了认证信息";
   else if (/insufficient.{0,20}(quota|balance)|quota.{0,20}exceed/i.test(message)) reason = "服务额度或余额不足";
+  else if (/\b(model|server|service)\b.{0,45}\b(busy|overloaded|temporarily unavailable)\b|^\s*overloaded[.!]?\s*$|(?:模型|服务).{0,15}繁忙/i.test(message))
+    reason = "模型服务繁忙，暂时无法处理请求，请稍后重试";
   else if (/rate.{0,10}limit/i.test(message)) reason = "服务请求频率受限";
   else if (/(image|vision|multimodal|图片|图像)/i.test(message) && /not support|unsupported|not allowed|only.{0,15}text|不支持/i.test(message))
     reason = "当前模型或接口不支持图片输入，请选择支持图片与工具调用的模型；未自动切换模型";
   else if (/(invalid|invalid_value|corrupt|format).{0,40}image|image.{0,40}(invalid|corrupt|format)/i.test(message))
     reason = "模型服务拒绝了图片格式，请检查插件提供的图片";
   else if (/(tool|function).{0,40}(invalid|schema)|invalid.{0,30}(tool|function)/i.test(message)) reason = "服务拒绝了工具定义或调用格式";
-  const known = new Set(["invalid_request_error", "authentication_error", "permission_error", "rate_limit_error", "server_error", "insufficient_quota", "context_length_exceeded", "invalid_api_key"]);
-  const type = [error?.type, error?.code].find(x => typeof x === "string" && known.has(x));
+  if (!reason) reason = [...labels].reverse().map(label => Object.hasOwn(fallback, label) ? fallback[label] : "").find(Boolean) ?? "";
+  const known = new Set(["invalid_request_error", ...Object.keys(fallback)]);
+  const type = labels.find(label => known.has(label));
   const candidate = headerId ?? body?.request_id ?? error?.request_id ?? message.match(/request_id:\s*([a-f\d-]{36})/i)?.[1];
   const requestId = typeof candidate === "string" && /^(?:[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}|req_[a-z\d]{8,80})$/i.test(candidate) &&
     (!secret || !candidate.includes(secret)) ? candidate : undefined;
