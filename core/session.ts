@@ -5,6 +5,7 @@
 import { persona, personaIdentity } from "./persona.ts";
 import { conversationRows } from "./channel-history.ts";
 import { thinkingToolHistory } from "./llm.ts";
+import { EmptyModelResponseError } from "./model-response-error.ts";
 import { promptText, toolContentMessage, TOOL_CONTENT_LIMITS } from "./tool-content.ts";
 import { timezone, timeContext, timeLabel, messageTime, summaryTime, TIME_GUIDANCE } from "./time.ts";
 import { safeId } from "./memory.ts";
@@ -613,6 +614,9 @@ export class Sessions {
           // Seal synchronously after the last await. Unsent candidates never enter history.
           if (input && !input.tryFinish()) continue;
           final = reply.text;
+          if (typeof final !== "string" || !final.trim())
+            throw new EmptyModelResponseError(reply.finish_reason,
+              typeof reply.reasoning_content === "string" && !!reply.reasoning_content.trim());
           break;
         }
         if (historyReference && typeof reply.reasoning_content !== "string")
@@ -695,7 +699,7 @@ export class Sessions {
         messages.push(...attachments);
         if (attachments.length) diagnostics?.event("context.change", { operation: "append", source: "tool_attachments", after: attachments });
       }
-      if (!final) throw Error("模型未返回最终回复，请重试");
+      if (!final) throw new EmptyModelResponseError(undefined);
       await memory.appendEvent({
         type: "message",
         ...source,

@@ -3,6 +3,7 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { WebClientDisconnectedError } from "./web-errors.ts";
 
 export type PluginHandler = (req: IncomingMessage, res: ServerResponse, context: { signal: AbortSignal }) => unknown | Promise<unknown>;
 export type PageOptions = { title: string; settings?: boolean; navigation?: boolean };
@@ -44,13 +45,15 @@ export class PluginWebRegistry {
     if (!row) return false;
     const request = new AbortController();
     const signal = AbortSignal.any([row.signal, request.signal]);
-    const close = () => { if (!res.writableEnded) request.abort(Error("页面请求已断开")); };
-    const abort = () => { if (!res.writableEnded) { if (!res.headersSent) res.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" }); res.end("插件已停用或请求已取消"); } };
-    res.on("close", close); signal.addEventListener("abort", abort, { once: true });
+    const disconnected = () => request.abort(new WebClientDisconnectedError());
+    const close = () => { if (!res.writableFinished) disconnected(); };
+    const abort = () => { if (!(signal.reason instanceof WebClientDisconnectedError) && !res.destroyed && !res.writableEnded) { if (!res.headersSent) res.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" }); res.end("插件已停用或请求已取消"); } };
+    req.on("aborted", disconnected); res.on("close", close); signal.addEventListener("abort", abort, { once: true });
+    if (req.aborted) disconnected();
     const work = Promise.resolve().then(() => { signal.throwIfAborted(); return row.handler(req, res, { signal }); });
     this.pending.add(work);
     try { await work; }
-    finally { this.pending.delete(work); res.off("close", close); signal.removeEventListener("abort", abort); }
+    finally { this.pending.delete(work); req.off("aborted", disconnected); res.off("close", close); signal.removeEventListener("abort", abort); }
     return true;
   }
 }

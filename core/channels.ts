@@ -12,6 +12,7 @@ import type { ToolTurn } from "./tool-retention.ts";
 import { TurnInput } from "./turn-input.ts";
 import { outgoingMessage } from "./channel-history.ts";
 import type { ChannelTurn, TurnAppendResult } from "./plugin-api.ts";
+import { channelFailureReason } from "./channel-errors.ts";
 
 export type ChannelRoute = {
   channel: string;
@@ -552,17 +553,26 @@ export class Channels {
         }
         const inbox = new TurnInput({ messageId: message.messageId, text: message.text,
           receivedAt: route.receivedAt!, timezone: route.timezone! }, route.signal!);
+        let toolTurn: ToolTurn | undefined;
+        let failureStage = "等待执行阶段";
         const completion = this.watch(this.operation(reg, signal, () => this.lease(reg, message.peer,
           () => this.tracked(id, () => this.sessions.dispatchIncoming(id, route, async (generate, turn) => {
+            toolTurn = turn;
+            failureStage = "生成或会话记录阶段";
             const response = await generate(message.text);
             receipt = { ...receipt, status: "generated", text: response, ...(turn.transient ? { private_errors: true } : {}) };
+            failureStage = "回复回执保存阶段";
             await this.save(id, route, receipt);
+            failureStage = "最终回复投递阶段";
             return this.deliver(reg, id, route, receipt, signal);
-          }, inbox).catch(async () => {
+          }, inbox).catch(async (error: unknown) => {
             // Accepted raw inputs remain in pending receipts even if execution never got its slot.
+            const privateErrors = toolTurn?.transient || receipt.private_errors || receipt.transient;
+            const reason = privateErrors ? "临时资料处理失败，原始错误未保存"
+              : channelFailureReason(error, this.sessions.services.logger?.secrets);
             receipt = { ...receipt, status: "generation_failed", error: signal.aborted
-              ? "本轮已取消或渠道停用；已执行动作不会重放，已接纳来信保留在回执中"
-              : "本轮生成或记录失败；已接纳来信保留，请核对执行档案，不要自动重跑" };
+              ? `${failureStage}：本轮已取消或渠道停用；已执行动作不会重放，已接纳来信保留在回执中`
+              : `${failureStage}失败：${reason}；已接纳来信保留，请核对执行档案，不要自动重跑` };
             try { await this.save(id, route, receipt); }
             catch { receipt = { ...receipt, status: "uncertain", error: "执行或回执记录中断；已发生动作待核对，不会自动重放" }; }
             return this.result(id, receipt);

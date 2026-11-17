@@ -6,6 +6,7 @@ import { createServer, request, type IncomingMessage, type ServerResponse } from
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Socket } from "node:net";
 import type { PluginHandler } from "./plugin-api.ts";
+import { WebClientDisconnectedError } from "./web-errors.ts";
 
 export type PluginHttpEndpoint = { port: number; token: string };
 export interface PluginHttpServer {
@@ -68,7 +69,7 @@ export function forwardPluginHttp(
     const outgoing = request({ hostname: "127.0.0.1", port: endpoint.port,
       path: req.url || "/", method: req.method, headers, setHost: false, agent: false });
     const cleanup = () => {
-      req.off("aborted", disconnected); req.off("error", disconnected); req.off("end", requestEnded);
+      req.off("aborted", disconnected); req.off("error", requestError); req.off("end", requestEnded);
       res.off("finish", responseFinished); res.off("close", responseClosed);
       signal.removeEventListener("abort", aborted);
       req.unpipe(outgoing);
@@ -85,8 +86,10 @@ export function forwardPluginHttp(
       outgoing.destroy(); incoming?.destroy();
       if (!sendCancellation && res.headersSent && !res.writableEnded) res.destroy();
     };
-    const aborted = () => terminate(cancelled(signal.reason), true);
-    const disconnected = () => terminate(Error("页面请求已断开"));
+    const aborted = () => terminate(cancelled(signal.reason), !(signal.reason instanceof WebClientDisconnectedError));
+    const disconnected = () => terminate(new WebClientDisconnectedError());
+    // A stream error or an already-destroyed response alone does not prove who closed it.
+    const requestError = () => terminate(Error("页面请求已断开"));
     const responseClosed = () => { if (!res.writableFinished) disconnected(); };
     const responseFinished = () => {
       settle();
@@ -98,7 +101,7 @@ export function forwardPluginHttp(
       if (Object.keys(req.trailers).length) outgoing.addTrailers(publicTrailers(req.trailers));
       outgoing.end();
     };
-    req.on("aborted", disconnected); req.on("error", disconnected); req.on("end", requestEnded);
+    req.on("aborted", disconnected); req.on("error", requestError); req.on("end", requestEnded);
     res.on("finish", responseFinished); res.on("close", responseClosed);
     signal.addEventListener("abort", aborted, { once: true });
     // Do not relay socket error strings: they may include the private endpoint port.
@@ -120,7 +123,8 @@ export function forwardPluginHttp(
       response.pipe(res, { end: false });
     });
     if (signal.aborted) aborted();
-    else if (req.aborted || res.destroyed) disconnected();
+    else if (req.aborted) disconnected();
+    else if (res.destroyed) terminate(Error("页面请求已断开"));
     else if (req.readableEnded) requestEnded();
     else req.pipe(outgoing, { end: false });
   });
@@ -173,18 +177,19 @@ export async function createPluginHttpServer(
     const cleanup = () => {
       if (!workDone || !responseDone) return;
       clearTimeout(timer);
-      req.off("aborted", disconnected); req.off("error", disconnected);
+      req.off("aborted", disconnected); req.off("error", requestError);
       res.off("finish", finish); res.off("close", closeResponse);
       signal.removeEventListener("abort", abort);
     };
-    const disconnected = () => requestController.abort(Error("页面请求已断开"));
+    const disconnected = () => requestController.abort(new WebClientDisconnectedError());
+    const requestError = () => requestController.abort(Error("页面请求已断开"));
     const abort = () => { clearTimeout(timer); finishCancelled(res); };
     const finish = () => { responseDone = true; cleanup(); };
     const closeResponse = () => {
       if (!res.writableFinished) disconnected();
       responseDone = true; cleanup();
     };
-    req.on("aborted", disconnected); req.on("error", disconnected);
+    req.on("aborted", disconnected); req.on("error", requestError);
     res.on("finish", finish); res.on("close", closeResponse);
     signal.addEventListener("abort", abort, { once: true });
     const work = Promise.resolve().then(() => {

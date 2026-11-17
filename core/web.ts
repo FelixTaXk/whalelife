@@ -10,6 +10,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { Channels } from "./channels.ts";
 import { conversationRows } from "./channel-history.ts";
 import { PluginWebRegistry } from "./plugin-web.ts";
+import { WebClientDisconnectedError } from "./web-errors.ts";
 export async function startWeb(config: any, services: any, runtime: any) {
   const { logger, memory, sessions } = services;
   const channels = services.channels ?? new Channels(memory, sessions, config);
@@ -375,7 +376,12 @@ export async function startWeb(config: any, services: any, runtime: any) {
       if (await routes.serve(req.method!, memoryUrl.pathname, req, res)) return;
       send(404, { error: "接口不存在" });
     } catch (error: any) {
+      if (error instanceof WebClientDisconnectedError) {
+        logger.info("Web 客户端已断开");
+        return;
+      }
       logger.error("Web 请求失败", { error });
+      if (res.destroyed) return;
       if (!res.headersSent)
         send(
           [400, 404, 409, 413, 500, 502].includes(error.status)
