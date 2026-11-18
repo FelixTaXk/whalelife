@@ -250,6 +250,10 @@ export async function startWeb(config: any, services: any, runtime: any) {
           200,
           await services.memoryAdmin.saveFacts(await body(req, 131072)),
         );
+      if (req.method === "POST" && memoryUrl.pathname === "/api/memory/session/tool-projection") {
+        const input = await body(req, 4096);
+        return send(200, await services.memoryEngine.setToolProjection(input.id, input.record_id, input.revision, input.enabled));
+      }
       if (req.method === "GET" && memoryUrl.pathname === "/api/memory/session")
         return send(
           200,

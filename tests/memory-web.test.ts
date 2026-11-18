@@ -30,6 +30,7 @@ test("memory console routes require authentication and support revision-safe edi
       "/api/session/context",
       "/api/memory/session/rename",
       "/api/memory/session/delete",
+      "/api/memory/session/tool-projection",
     ])
       assert.equal(
         (await fetch(url + path, { method: "POST", body: "{}" })).status,
@@ -79,6 +80,24 @@ test("memory console routes require authentication and support revision-safe edi
         .text,
       "可搜索的记录",
     );
+    const oldText = '<｜DSML｜calls><｜DSML｜invoke name="example"></｜DSML｜invoke></｜DSML｜calls>';
+    await app.memory.appendEvent({ session: "web-test", type: "message", id: "reviewable", role: "assistant",
+      text: oldText, origin: { channel: "web", action: "生成回复" } });
+    const browse = async () => (await get("/api/memory/session?id=web-test")).json();
+    const snapshot = await browse(), review = snapshot.tool_projections[0];
+    assert.equal(review.record_id, "reviewable"); assert.equal(review.enabled, false);
+    const decision = { id: "web-test", record_id: review.record_id, revision: review.revision, enabled: true };
+    const route = "/api/memory/session/tool-projection";
+    app.sessions.locks.add("web-test");
+    assert.notEqual((await post(route, decision)).status, 200);
+    app.sessions.locks.delete("web-test");
+    assert.equal((await post(route, { ...decision, revision: "0".repeat(64) })).status, 409);
+    assert.equal((await post(route, decision)).status, 200);
+    const confirmed = await browse();
+    assert.equal(confirmed.tool_projections[0].enabled, true);
+    assert.equal(confirmed.items[1].text, oldText);
+    assert.equal((await post(route, { ...decision, enabled: false })).status, 200);
+    assert.equal((await browse()).tool_projections[0].enabled, false);
     assert.equal(
       (await get("/api/memory/summary?id=..%2Fconfig%2Fconfig")).status,
       400,

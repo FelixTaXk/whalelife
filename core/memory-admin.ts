@@ -34,7 +34,7 @@ import {
   type SessionIndex,
 } from "./memory.ts";
 import type { Logger } from "./logger.ts";
-import { MemoryEngine, validateMemoryState } from "./memory-engine.ts";
+import { legacyToolProjection, MemoryEngine, validateMemoryState } from "./memory-engine.ts";
 import { diaryContext, type DiaryContext, type DiaryEntry } from "./memory-diary.ts";
 import { contextPolicy, matchingHistory, memoryWindow } from "./session-context.ts";
 import { persona } from "./persona.ts";
@@ -849,10 +849,26 @@ export class MemoryAdmin {
             JSON.stringify(row).toLocaleLowerCase().includes(query),
           )
         : rows.items;
+      const items = matched.slice(offset, offset + limit);
+      const toolProjections = items.flatMap(row => {
+        const projection = legacyToolProjection(row, id);
+        return projection ? [{ record_id: row.id, ...projection, enabled: false }] : [];
+      });
+      if (toolProjections.length) {
+        try {
+          const state = await new MemoryEngine(this.memory).state(id);
+          const approved = new Map(state.records.filter(x => x.kind === "event-state").map(x => [x.id, x.tool_protocol_projection]));
+          for (const item of toolProjections) item.enabled = approved.get(item.record_id) === item.revision;
+        } catch {
+          toolProjections.length = 0;
+          rows.warnings.push("无法读取工具标记的确认状态，本页仅显示档案原文");
+        }
+      }
       return {
         id,
         name: typeof meta?.name === "string" ? meta.name : null,
-        items: matched.slice(offset, offset + limit),
+        items,
+        tool_projections: toolProjections,
         total: matched.length,
         ...paging,
         bytes: rows.bytes,

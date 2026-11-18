@@ -192,6 +192,7 @@ class ConsoleApp {
       .map((r) => ({
         role: r.role,
         text: r.text,
+        protocolOriginal: r.tool_protocol_original,
         personaName: r.persona_name,
       }));
   }
@@ -515,7 +516,7 @@ class ConsoleApp {
     box.innerHTML = this.state.messages
       .map(
         (m) =>
-          `<div class="message ${m.role === "user" ? "user" : m.role === "error" ? "error" : ""}"><span class="mini-avatar" title="${e(m.personaName || "助手")}">${m.role === "user" ? "你" : m.role === "error" ? "!" : e((m.personaName || "助手").slice(0, 1))}</span><div class="bubble">${e(m.text)}</div></div>`,
+          `<div class="message ${m.role === "user" ? "user" : m.role === "error" ? "error" : ""}"><span class="mini-avatar" title="${e(m.personaName || "助手")}">${m.role === "user" ? "你" : m.role === "error" ? "!" : e((m.personaName || "助手").slice(0, 1))}</span><div class="bubble">${e(m.text)}${m.protocolOriginal ? `<details><summary>查看模型原文</summary><div>${e(m.protocolOriginal)}</div></details>` : ""}</div></div>`,
       )
       .join("");
     box.scrollTop = box.scrollHeight;

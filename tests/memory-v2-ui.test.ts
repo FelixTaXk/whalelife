@@ -244,3 +244,41 @@ test("shared spaces show explicit membership without implying local facts are sh
   assert.match(html, /独立事实不会自动共享/);
   assert.match(html, /退出只改变所选会话的检索范围/);
 });
+
+test("session transcript previews one escaped projection before a reversible explicit confirmation", async t => {
+  const app: any = fixture("sessions");
+  const view: any = { dataset: { session: "viewed" } };
+  const toggle: any = { dataset: { toolProjection: "1" }, isConnected: true };
+  app.content.querySelectorAll = (selector: string) => selector === "[data-session]" ? [view] : [];
+  let html = "", enabled = false;
+  app.dialog = (_title: string, body: string) => { html = body; };
+  const globals = globalThis as any, before = globals.document;
+  globals.document = { querySelectorAll: () => [toggle], querySelector: () => ({}) };
+  t.after(() => { if (before === undefined) delete globals.document; else globals.document = before; });
+  const posts: any[] = [];
+  t.mock.method(globalThis, "fetch", async (path: any, init: any) => {
+    if (init.method === "POST") {
+      assert.equal(path, "/api/memory/session/tool-projection");
+      const decision = JSON.parse(init.body);
+      posts.push(decision);
+      enabled = decision.enabled;
+      return Response.json({ enabled });
+    }
+    assert.match(path, /memory\/session\?id=viewed/);
+    return Response.json({ total: 2, items: [{ id: "user", role: "user", text: "未动" },
+      { id: "reply", role: "assistant", text: "前文 <script> 后文" }],
+      tool_projections: [{ record_id: "reply", revision: "exact", text: "<preview>", enabled }] });
+  });
+  bindMemory(app);
+  await view.onclick();
+  assert.equal(posts.length, 0);
+  assert.match(html, /<details><summary>预览隐藏工具标记后的模型上下文/);
+  assert.match(html, /前文 &lt;script&gt; 后文/);
+  assert.match(html, /&lt;preview&gt;/);
+  assert.doesNotMatch(html, /data-tool-projection="0"/);
+  await toggle.onclick();
+  assert.match(html, /确认恢复原文到模型上下文/);
+  await toggle.onclick();
+  assert.deepEqual(posts, [true, false].map(enabled => ({ id: "viewed", record_id: "reply", revision: "exact", enabled })));
+  assert.deepEqual(app.errors, []);
+});

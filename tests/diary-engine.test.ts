@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Memory } from "../core/memory.ts";
 import { MemoryEngine, MAX_DAILY_MEMORY_TOKENS, validateMemoryState } from "../core/memory-engine.ts";
+import { MemoryAdmin } from "../core/memory-admin.ts";
+import { TOOL_TEXT_NOTICE } from "../core/tool-protocol-text.ts";
 import { diaryContext, diaryRequestPlan, diarySourceRevision, writeDiary, type DiaryEntry } from "../core/memory-diary.ts";
 import { collectTimes } from "../core/time.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
@@ -41,6 +43,117 @@ function entry(rows: any[], patch: Partial<DiaryEntry> = {}): DiaryEntry {
     source_ids: rows.map(row => row.id), source_revision: diarySourceRevision(rows),
     created_at: "2026-11-08T08:00:00.000Z", ...collectTimes(undefined, rows), ...patch };
 }
+
+test("confirmed historical tool text is projected per reply and restored without rewriting its sources", async t => {
+  const f = await fixture(t, 0);
+  const admin = new MemoryAdmin(f.memory, { root: f.root, locks: new Set() }, f.services.logger);
+  const block = '<｜DSML｜tool_calls><｜DSML｜invoke name="historic_marker"></｜DSML｜invoke></｜DSML｜tool_calls>';
+  const text = ["正文 preservedstart", block, "结尾 preservedend"].join("\n");
+  const subjectText = text + " subjectanchor", clean = subjectText.replace(block, TOOL_TEXT_NOTICE);
+  const message = { type: "message", role: "assistant", session: "one", text, origin: { channel: "web", action: "生成回复" } };
+  await f.memory.appendEvent({ ...message, id: "subject", text: subjectText });
+  await f.memory.appendEvent({ ...message, id: "unconfirmed" });
+  await f.memory.appendEvent({ ...message, id: "example", text: "\u0060\u0060\u0060xml\n" + block + "\n\u0060\u0060\u0060" });
+  await f.memory.appendEvent({ ...message, id: "user", role: "user" });
+  await f.memory.appendEvent({ ...message, id: "tool", type: "tool" });
+  await f.memory.appendEvent({ ...message, id: "delivery", delivery_id: "out", origin: { action: "发送消息" } });
+  await f.memory.appendEvent({ ...message, id: "imported", origin: undefined });
+  await f.memory.appendEvent({ ...message, id: "current", tool_protocol_original: text });
+  await f.memory.appendEvent({ ...message, id: "subject", session: "other", text: subjectText });
+  const files = await f.memory.episodePaths("one"), originalFile = await readFile(files[0]);
+  const original = await f.memory.readSession("one"), subject = original[0];
+  const oldDiary = entry([subject]), unrelatedDiary = entry([original[1]]);
+  await f.engine.commitDiary("one", oldDiary);
+  await f.engine.commitDiary("one", unrelatedDiary);
+  await f.engine.summaryState("one", "old", { text: "旧摘要", covered: 1 });
+  await f.memory.writeSummary("old", "旧摘要", "one");
+  const originalRevision = await f.engine.contextRevision("one");
+  const review = await admin.session("one");
+  assert.deepEqual(review.items, original);
+  assert.deepEqual(review.tool_projections.map(p => p.record_id), ["subject", "unconfirmed"]);
+  const preview = review.tool_projections[0];
+  assert.equal(preview.enabled, false); assert.equal(preview.text, clean);
+  assert.deepEqual(await f.engine.contextRows("one"), original);
+  for (const id of ["example", "user", "tool", "delivery", "imported", "current"])
+    await assert.rejects(f.engine.setToolProjection("one", id, preview.revision, true), /重新查看/);
+  await assert.rejects(f.engine.setToolProjection("other", "subject", preview.revision, true), /重新查看/);
+  await assert.rejects(f.engine.setToolProjection("one", "subject", "0".repeat(64), true), /重新查看/);
+  await f.engine.setToolProjection("one", "subject", preview.revision, true);
+  await f.engine.setToolProjection("one", "subject", preview.revision, true);
+  const restarted = new MemoryEngine(f.memory), projected = await restarted.contextRows("one");
+  await restarted.recoverSummaries();
+  assert.equal(await f.memory.readSummary("old"), "旧摘要");
+  assert.deepEqual(projected, [{ ...subject, text: clean }, ...original.slice(1)]);
+  assert.deepEqual(await restarted.contextRows("one", projected), projected);
+  assert.equal((await restarted.contextRows("other"))[0].text, subjectText);
+  assert.equal((await admin.session("one")).tool_projections[0].enabled, true);
+  assert.notEqual(await restarted.contextRevision("one"), originalRevision);
+  const search = await restarted.search("one", "subjectanchor", { budget: 4000, persistTrace: false });
+  assert.ok(search.items.some(row => row.id === "subject"));
+  assert.doesNotMatch(JSON.stringify(search.items), /historic_marker/);
+  assert.equal((await restarted.inspect("one")).items.find(row => row.id === "subject")?.text, clean);
+  const diaries = await diaryContext(restarted, "one", "session", original);
+  assert.deepEqual(diaries.entries.map(x => x.id), [unrelatedDiary.id]);
+  assert.equal(diaries.remaining[0].text, clean);
+  await assert.rejects(restarted.commitDiary("one", oldDiary), /来源已变更/);
+  assert.equal(await restarted.readSummary("one", "old"), "");
+  const checkpoint = await restarted.summaryState("one", "old");
+  const projectedDiary = entry([projected[0]]);
+  await restarted.commitDiary("one", projectedDiary);
+  await restarted.commitSummary("one", "new", { text: "已确认版本摘要", covered: 1, input_revision: checkpoint.input_revision });
+  await restarted.setToolProjection("one", "subject", preview.revision, false);
+  assert.deepEqual(await restarted.contextRows("one"), original);
+  assert.equal((await admin.session("one")).tool_projections[0].enabled, false);
+  const restored = await diaryContext(restarted, "one", "session", original);
+  assert.deepEqual(restored.entries.map(x => x.id), [oldDiary.id, unrelatedDiary.id]);
+  assert.equal(restored.invalid, 1);
+  assert.equal(await restarted.readSummary("one", "old"), "旧摘要");
+  assert.equal(await restarted.readSummary("one", "new"), "");
+  assert.deepEqual(await readFile(files[0]), originalFile);
+  assert.equal(f.requests.length, 0);
+  await writeFile(join(f.memory.sessionDir("one"), "knowledge", "state.json"), "{");
+  const degraded = await admin.session("one");
+  assert.deepEqual(degraded.items, original);
+  assert.equal(degraded.tool_projections.length, 0);
+  assert.match(degraded.warnings.join(" "), /仅显示档案原文/);
+  assert.deepEqual((await admin.session("one", 2, 1)).warnings, []);
+});
+
+test("restarting preserves Markdown only across manual projections and clears it after plugin input exclusions", async t => {
+  const f = await fixture(t, 4), id = "one";
+  const text = '<｜DSML｜calls><｜DSML｜invoke name="old_tool"></｜DSML｜invoke></｜DSML｜calls>';
+  await f.memory.appendEvent({ session: id, id: "old_reply", type: "message", role: "assistant", text,
+    origin: { channel: "web", action: "生成回复" } });
+  const admin = new MemoryAdmin(f.memory, { root: f.root, locks: new Set() }, f.services.logger);
+  const review = (await admin.session(id)).tool_projections[0];
+  const project = (enabled: boolean) => f.engine.setToolProjection(id, review.record_id, review.revision, enabled);
+  const recover = () => new MemoryEngine(f.memory).recoverSummaries();
+  const save = async (key: string) => {
+    const checkpoint = await f.engine.summaryState(id, key);
+    await f.engine.commitSummary(id, key, { input_revision: checkpoint.input_revision, text: key, covered: 1 });
+    await f.memory.writeSummary(key, key, id);
+  };
+  const plugin = f.engine.plugin("diary-fixture", () => {});
+  await save("original");
+  await plugin.excludeInputs(id, [f.rows[0].id]);
+  await recover();
+  assert.equal(await f.memory.readSummary("original"), "", "previous plugin-only privacy behavior");
+  await save("after_first_exclusion");
+  await project(true);
+  await recover();
+  assert.equal(await f.memory.readSummary("after_first_exclusion"), "after_first_exclusion");
+  assert.equal(await f.engine.readSummary(id, "after_first_exclusion"), "");
+  await save("while_projected");
+  await project(false);
+  await recover();
+  assert.equal(await f.memory.readSummary("while_projected"), "while_projected", "undo only changed the human projection");
+  assert.equal(await f.engine.readSummary(id, "while_projected"), "");
+  await project(true);
+  await plugin.excludeInputs(id, [f.rows[2].id]);
+  await recover();
+  assert.equal(await f.memory.readSummary("after_first_exclusion"), "");
+  assert.equal(await f.memory.readSummary("while_projected"), "", "a new privacy exclusion clears projected material too");
+});
 
 test("diary preflight exactly matches generation messages and reservation without mutating state or sources", async t => {
   const f = await fixture(t), rows = structuredClone(f.rows), state = await f.engine.state("one");

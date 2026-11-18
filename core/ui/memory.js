@@ -706,11 +706,33 @@ async function showSession(app, id, offset = 0) {
       "/api/memory/session?" +
         new URLSearchParams({ id, offset: String(offset), limit: "100" }),
     );
+    const projections = new Map((value.tool_projections || []).map(item => [item.record_id, item]));
+    const transcript = value.items.map((item, index) => {
+      const projection = projections.get(item.id);
+      const review = projection ? `<details><summary>${projection.enabled ? "已隐藏工具标记 · 查看或恢复" : "预览隐藏工具标记后的模型上下文"}</summary>
+        <p>只调整这条回复提供给模型的正文。上方档案保留原文，引用原文的日记会按来源重新校验。</p>
+        <pre>${e(projection.text)}</pre><button type="button" class="btn small" data-tool-projection="${index}">${projection.enabled ? "确认恢复原文到模型上下文" : "确认对这条回复隐藏工具标记"}</button></details>` : "";
+      return `<article><small>${e(item.ts || "")} · ${e(item.persona_name || "")} · ${e(item.role || item.type)}</small><pre>${e(item.text ?? JSON.stringify(item, null, 2))}</pre>${review}</article>`;
+    }).join("");
     app.dialog(
       "会话记录",
-      `<p>${e(id)} · 共 ${value.total} 条记录</p>${value.warnings?.length ? `<p class="form-error">${e(value.warnings.join("；"))}</p>` : ""}<div class="memory-transcript">${value.items.map((item) => `<article><small>${e(item.ts || "")} · ${e(item.persona_name || "")} · ${e(item.role || item.type)}</small><pre>${e(item.text ?? JSON.stringify(item, null, 2))}</pre></article>`).join("")}</div><div class="row memory-actions"><button type="button" class="btn small" id="session-prev" ${offset === 0 ? "disabled" : ""}>上一页</button><button type="button" class="btn small" id="session-next" ${offset + 100 >= value.total ? "disabled" : ""}>下一页</button></div>`,
+      `<p>${e(id)} · 共 ${value.total} 条记录</p>${value.warnings?.length ? `<p class="form-error">${e(value.warnings.join("；"))}</p>` : ""}<div class="memory-transcript">${transcript}</div><div class="row memory-actions"><button type="button" class="btn small" id="session-prev" ${offset === 0 ? "disabled" : ""}>上一页</button><button type="button" class="btn small" id="session-next" ${offset + 100 >= value.total ? "disabled" : ""}>下一页</button></div>`,
       null,
     );
+    document.querySelectorAll("[data-tool-projection]").forEach(button => {
+      button.onclick = async () => {
+        const item = value.items[Number(button.dataset.toolProjection)], projection = projections.get(item.id);
+        button.disabled = true;
+        try {
+          await api("/api/memory/session/tool-projection", { id, record_id: item.id, revision: projection.revision, enabled: !projection.enabled });
+          app.toast(projection.enabled ? "已恢复这条回复的上下文原文" : "已隐藏这条回复在模型上下文中的工具标记");
+          if (button.isConnected) await showSession(app, id, offset);
+        } catch (error) {
+          app.toast(error.message, true);
+          button.disabled = false;
+        }
+      };
+    });
     document.querySelector("#session-prev").onclick = () =>
       showSession(app, id, Math.max(0, offset - 100));
     document.querySelector("#session-next").onclick = () =>

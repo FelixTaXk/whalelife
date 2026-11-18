@@ -56,7 +56,10 @@ async function fixture(t: TestContext) {
       .replace("const app = new ConsoleApp();\napp.start();", "globalThis.consoleApp = new ConsoleApp();")
       .replace("const app = new ConsoleApp();\r\napp.start();", "globalThis.consoleApp = new ConsoleApp();");
     const node = { addEventListener() {}, querySelector: () => ({}) };
-    const sandbox: any = { api: browserApi, localStorage: { whaleSession: legacyId }, location: { hash: "#chat" },
+    const { escapeHTML } = await import(new URL("../core/ui/api.js", import.meta.url).href);
+    const { extensionActiveKey } = await import(new URL("../core/ui/extensions.js", import.meta.url).href);
+    const sandbox: any = { api: browserApi, e: escapeHTML, extensionActiveKey,
+      localStorage: { whaleSession: legacyId }, location: { hash: "#chat" },
       document: { getElementById: () => node, querySelectorAll: () => [] },
       window: { addEventListener() {} } };
     for (const file of ["views", "memory", "personas", "models"])
@@ -70,6 +73,34 @@ async function fixture(t: TestContext) {
   };
   return { root, app, requests, url, cookie, request, api, plugin, browser };
 }
+
+test("chat refresh and reload show escaped protocol source only in a collapsed disclosure", async t => {
+  const f = await fixture(t), ui = await f.browser();
+  f.app.config.channels.web.permission = "full";
+  const lead = "<b>合成正文 & 结果</b>";
+  const block = '<｜DSML｜tool_calls><｜DSML｜invoke name="inspect_execution"></｜DSML｜invoke></｜DSML｜tool_calls>';
+  const raw = lead + "\n" + block;
+  f.app.llm.chat = async (input: any) => {
+    input.onChunk?.(raw);
+    return { text: raw, toolCalls: [], usage: { prompt_tokens: 20, completion_tokens: 4 } };
+  };
+  await f.app.channels.web(ui.state.session, "合成任务", () => {});
+  ui.authenticated = true;
+  ui.render = () => ui.renderMessages();
+  ui.toast = (message: string, error: boolean) => { if (error) throw Error(message); };
+  for (const refresh of [() => ui.syncView(), () => ui.reload()]) {
+    ui.state.messages = [];
+    ui.content.innerHTML = "";
+    await refresh();
+    assert.equal(ui.state.messages.at(-1).protocolOriginal, raw);
+    const html = ui.content.innerHTML;
+    const [visible, source] = html.split("<details><summary>查看模型原文</summary><div>");
+    assert.match(visible, /&lt;b&gt;合成正文 &amp; 结果&lt;\/b&gt;/);
+    assert.doesNotMatch(visible, /DSML/);
+    assert.match(source, /&lt;｜DSML｜invoke name=&quot;inspect_execution&quot;&gt;/);
+    assert.doesNotMatch(html, /<b>|<｜DSML/);
+  }
+});
 
 test("concurrent current calls create only once; selection survives a host restart", async (t) => {
   const f = await fixture(t);

@@ -12,6 +12,7 @@ import { attribution, collectOrigins, originOf, pluginOrigin, validateAttributio
 import type { DocumentWrite, SessionDocument } from "./plugin-api.ts";
 import { TRANSIENT_REPLY } from "./tool-retention.ts";
 import { conversationRows } from "./channel-history.ts";
+import { projectToolProtocolText } from "./tool-protocol-text.ts";
 import { diaryRowInScope, validateDiaryEntry, validateDiaryScope, validateDiaryState, validDiarySources,
   type DiaryEntry, type DiaryFailure } from "./memory-diary-state.ts";
 
@@ -29,10 +30,37 @@ const temporaryPlaceholder = (row: any) => row.type === "message" && row.role ==
   row.transient === true && row.text === TRANSIENT_REPLY;
 const excludedInputs = (state: { records: any[] }) => new Set<string>(
   state.records.filter(x => x.kind === "event-state" && x.context_excluded === true).map(x => x.id));
-const inputRevision = (state: { records: any[] }) => {
+export function legacyToolProjection(row: any, session: string) {
+  if (row?.type !== "message" || row.role !== "assistant" || row.session !== session ||
+      typeof row.id !== "string" || !row.id || row.origin?.action !== "生成回复" ||
+      row.delivery_id !== undefined || row.transient || row.tool_protocol_original !== undefined ||
+      typeof row.text !== "string") return;
+  const text = projectToolProtocolText(row.text);
+  if (text !== row.text) return { text, revision: hash(JSON.stringify([session, row.id, row.text, text])) };
+}
+function effectiveRows(session: string, rows: any[], state: { records: any[] }) {
+  const events = new Map(state.records.filter(x => x.kind === "event-state").map(x => [x.id, x]));
+  return conversationRows(rows).filter(row => !events.get(row.id)?.context_excluded && !temporaryPlaceholder(row))
+    .map(row => {
+      const revision = events.get(row.id)?.tool_protocol_projection;
+      if (!revision) return row;
+      const projection = legacyToolProjection(row, session);
+      return projection && projection.revision === revision ? { ...row, text: projection.text } : row;
+    });
+}
+const inputVersions = (state: { records: any[] }) => {
   const ids = [...excludedInputs(state)].sort();
-  return ids.length ? hash(JSON.stringify(ids)) : undefined;
+  const exclusions = ids.length ? hash(JSON.stringify(ids)) : undefined;
+  const projections = state.records.filter(x => x.kind === "event-state" && x.tool_protocol_projection)
+    .map(x => [x.id, x.tool_protocol_projection]).sort(([a], [b]) => a.localeCompare(b));
+  return {
+    input_revision: projections.length ? hash(JSON.stringify([ids, projections])) : exclusions,
+    // Historical checkpoints without a tool projection already use the exclusions hash as their input revision.
+    projected_from_exclusions: projections.length ? exclusions ?? null : undefined,
+  };
 };
+const exclusionsAtCheckpoint = (checkpoint: { input_revision?: string; projected_from_exclusions?: string | null }) =>
+  checkpoint.projected_from_exclusions === undefined ? checkpoint.input_revision ?? null : checkpoint.projected_from_exclusions;
 const initial = () => ({
   version: 1,
   facts: { text: "", revision: hash(""), updated_by: "user", updated_at: "" },
@@ -125,6 +153,9 @@ export function validateMemoryState(s: any) {
     validateAttribution(record);
     if (record.context_excluded !== undefined && typeof record.context_excluded !== "boolean")
       throw Error("上下文排除标记损坏");
+    if (record.tool_protocol_projection !== undefined && (record.kind !== "event-state" ||
+        typeof record.tool_protocol_projection !== "string" || !/^[a-f0-9]{64}$/.test(record.tool_protocol_projection)))
+      throw Error("工具标记投影版本无效");
     if (record.kind === "cognition" && record.format_version === 2 && charCount(record.text) > 80)
       throw Error("新版长期认知每条不能超过80字符");
     if (record.uncertain !== undefined && typeof record.uncertain !== "boolean")
@@ -146,6 +177,10 @@ export function validateMemoryState(s: any) {
     if (value?.input_revision !== undefined &&
         (typeof value.input_revision !== "string" || !/^[a-f0-9]{64}$/.test(value.input_revision)))
       throw Error("摘要来源版本损坏");
+    if (value?.projected_from_exclusions !== undefined && (!value.input_revision ||
+        (value.projected_from_exclusions !== null && (typeof value.projected_from_exclusions !== "string" ||
+          !/^[a-f0-9]{64}$/.test(value.projected_from_exclusions)))))
+      throw Error("摘要的输入排除版本损坏");
     if (value && typeof value === "object") validateAttribution(value);
     safeId(key);
     if (
@@ -363,7 +398,8 @@ export class MemoryEngine {
         s.facts.revision,
         s.settings,
         s.memberships,
-        s.records.map((x) => [x.id, x.status, x.pinned, x.text, x.uncertain, attribution(x), x.context_excluded]),
+        s.records.map((x) => [x.id, x.status, x.pinned, x.text, x.uncertain, attribution(x), x.context_excluded,
+          ...(x.tool_protocol_projection ? [x.tool_protocol_projection] : [])]),
         Object.entries(s.summaries).map(([key, x]) => [key, x.text, x.mode, attribution(x)]),
         s.diaries, s.diary_failures,
         await this.memory.readFacts(),
@@ -371,8 +407,37 @@ export class MemoryEngine {
     );
   }
   async contextRows(id: string, rows?: any[]) {
-    const excluded = excludedInputs(await this.state(id));
-    return conversationRows(rows ?? await this.memory.readSession(id)).filter((row: any) => !excluded.has(row.id) && !temporaryPlaceholder(row));
+    return effectiveRows(id, rows ?? await this.memory.readSession(id), await this.state(id));
+  }
+  async setToolProjection(id: string, recordId: string, revision: string, enabled: boolean) {
+    if (typeof recordId !== "string" || !recordId || recordId.length > 200 ||
+        typeof revision !== "string" || !/^[a-f0-9]{64}$/.test(revision) || typeof enabled !== "boolean")
+      throw Error("需要指定单条回复、预览版本及操作");
+    if (!(await this.memory.sessionMeta(safeId(id)))) throw Error("会话不存在");
+    const release = this.inputEditGuard(id);
+    try {
+      return await this.update(id, async s => {
+        const rows = (await this.memory.readSession(id)).filter(row => row.id === recordId);
+        if (rows.length !== 1 || legacyToolProjection(rows[0], id)?.revision !== revision)
+          throw Object.assign(Error("原文或预览已变更，请重新查看该条助手回复"), { status: 409 });
+        let item = s.records.find(x => x.id === recordId);
+        if (item && item.kind !== "event-state") throw Error("消息ID与其他记忆记录冲突");
+        if ((item?.tool_protocol_projection === revision) === enabled) return { enabled };
+        if (enabled) {
+          if (!item) {
+            item = { id: recordId, kind: "event-state", status: "active", pinned: false };
+            s.records.push(item);
+          }
+          item.tool_protocol_projection = revision;
+        } else if (item) {
+          delete item.tool_protocol_projection;
+          if (item.status === "active" && !item.pinned &&
+              Object.keys(item).every(key => ["id", "kind", "status", "pinned"].includes(key)))
+            s.records = s.records.filter(record => record !== item);
+        }
+        return { enabled };
+      });
+    } finally { release(); }
   }
   private async excludeInputs(id: string, owner: string, messageIds: string[], check: () => void) {
     if (!Array.isArray(messageIds) || !messageIds.length || messageIds.length > 100 ||
@@ -578,7 +643,7 @@ export class MemoryEngine {
   }
   private async candidates(id: string) {
     const s = await this.state(id),
-      rows = conversationRows(await this.memory.readSession(id));
+      rows = effectiveRows(id, await this.memory.readSession(id), s);
     // Keep legacy experience records on disk, but do not recall the shortened
     // delivery summary again when the same communication has complete history.
     const outgoing = rows.filter(row => row.type === "message" && row.delivery_id);
@@ -599,7 +664,7 @@ export class MemoryEngine {
       s.records.filter((x) => x.kind === "event-state").map((x) => [x.id, x]),
     );
     for (const row of rows) {
-      if (row.type !== "message" || !row.text || muted.get(row.id)?.context_excluded || temporaryPlaceholder(row)) continue;
+      if (row.type !== "message" || !row.text) continue;
       const rid = row.id || hash(JSON.stringify(row)).slice(0, 32);
       items.push({
         id: rid,
@@ -924,9 +989,7 @@ export class MemoryEngine {
     if (entry.session !== id) throw Error("日记不属于当前会话");
     return this.update(id, async s => {
       signal?.throwIfAborted();
-      const excluded = excludedInputs(s);
-      const rows = conversationRows(await this.memory.readSession(id)).filter(row =>
-        !excluded.has(row.id) && !temporaryPlaceholder(row) && diaryRowInScope(row, id, entry.scope));
+      const rows = effectiveRows(id, await this.memory.readSession(id), s).filter(row => diaryRowInScope(row, id, entry.scope));
       if (!validDiarySources(entry, id, entry.scope, rows)) throw Error("日记来源已变更，请重新读取原文");
       const sources = new Set(entry.source_ids);
       const expectedTimes = collectTimes(undefined, rows.filter(row => sources.has(row.id))).time_range;
@@ -969,13 +1032,15 @@ export class MemoryEngine {
     safeId(key);
     if (value !== undefined)
       await this.update(id, (s) => {
-        const revision = inputRevision(s);
-        if (revision && value.input_revision !== revision && !(value.text === "" && value.covered === 0)) return;
-        s.summaries = { ...s.summaries, [key]: { ...value, ...(revision ? { input_revision: revision } : {}) } };
+        const versions = inputVersions(s);
+        if (value.input_revision !== versions.input_revision && !(value.text === "" && value.covered === 0 && !value.input_revision)) return;
+        s.summaries = { ...s.summaries, [key]: { ...value, ...versions } };
       });
-    const state = await this.state(id), revision = inputRevision(state);
+    const state = await this.state(id), revision = inputVersions(state).input_revision;
     const saved = Object.hasOwn(state.summaries, key) ? state.summaries[key] : { covered: 0 };
-    return revision && saved.input_revision !== revision ? { covered: 0, input_revision: revision } : saved;
+    if (saved.input_revision !== revision)
+      return revision ? { covered: 0, input_revision: revision } : { covered: 0, text: "" };
+    return saved;
   }
   async readSummary(id: string, key: string) {
     const checkpoint = await this.summaryState(id, key);
@@ -1034,9 +1099,10 @@ export class MemoryEngine {
     )
       throw Error("认知缺少有效来源或超出长度");
     await this.update(id, (s) => {
-      if (inputRevision(s) !== value.input_revision) throw Error("摘要来源范围已变更，请重新整理");
+      const versions = inputVersions(s);
+      if (versions.input_revision !== value.input_revision) throw Error("摘要来源范围已变更，请重新整理");
       const existing = s.summaries[key];
-      if (value.last_id && existing?.last_id === value.last_id &&
+      if (value.last_id && existing?.last_id === value.last_id && existing.input_revision === value.input_revision &&
           existing.last_offset === value.last_offset && existing.text === value.text &&
           existing.mode === value.mode && existing.start_id === value.start_id &&
           existing.covered === value.covered) return;
@@ -1046,7 +1112,7 @@ export class MemoryEngine {
         Object.assign(record, collectOrigins(undefined, record.evidence.map((id: string) => byEvidence.get(id))));
         Object.assign(record, collectTimes(undefined, record.evidence.map((id: string) => byEvidence.get(id))));
       }
-      s.summaries = { ...s.summaries, [key]: value };
+      s.summaries = { ...s.summaries, [key]: { ...value, ...versions } };
     });
   }
   async recoverSummaries() {
@@ -1056,7 +1122,11 @@ export class MemoryEngine {
     for (const [id, meta] of Object.entries<any>(index.sessions)) {
       if (meta.deleted) continue;
       const state = await this.state(id);
-      for (const key of Object.keys(state.summaries)) {
+      const versions = inputVersions(state);
+      for (const [key, saved] of Object.entries(state.summaries)) {
+        // Only a manual projection change preserves the archived Markdown. A plugin privacy exclusion
+        // must still blank a stale file, including while a human projection is active or after its undo.
+        if (saved.input_revision !== versions.input_revision && exclusionsAtCheckpoint(saved) === exclusionsAtCheckpoint(versions)) continue;
         const checkpoint = await this.summaryState(id, key);
         if (
           (checkpoint.text !== undefined || checkpoint.input_revision) &&

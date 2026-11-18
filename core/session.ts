@@ -6,6 +6,7 @@ import { persona, personaIdentity } from "./persona.ts";
 import { conversationRows } from "./channel-history.ts";
 import { thinkingToolHistory } from "./llm.ts";
 import { EmptyModelResponseError } from "./model-response-error.ts";
+import { requestsProtocolExample, ToolProtocolStream } from "./tool-protocol-stream.ts";
 import { promptText, toolContentMessage, TOOL_CONTENT_LIMITS } from "./tool-content.ts";
 import { timezone, timeContext, timeLabel, messageTime, summaryTime, TIME_GUIDANCE } from "./time.ts";
 import { safeId } from "./memory.ts";
@@ -541,6 +542,9 @@ export class Sessions {
         after: { materials: materials(), history: recent, input: text, transient,
           history_scope: policy.history_scope, context_limit: limit.tokens, request_budget: Number.isFinite(requestBudget) ? requestBudget : null } });
       let final = "";
+      let originalProtocolReply: string | undefined;
+      let literalExample = requestsProtocolExample(text);
+      const offeredNames = new Set<string>(toolList.map((item: any) => item.function.name));
       let measured: any = null;
       let memoryWriteRejected = false;
       const mediaSignals: AbortSignal[] = [];
@@ -552,6 +556,7 @@ export class Sessions {
         if (!input) return;
         for (const message of await input.take()) {
           signal.throwIfAborted();
+          literalExample ||= requestsProtocolExample(message.text);
           // A real person's additions remain history even after transient tools.
           const row = { type: "message", ...source, ...context,
             origin: { ...source.origin, action: "接收消息" }, session: id, role: "user",
@@ -598,13 +603,20 @@ export class Sessions {
           }
         }
         diagnostics?.event("context.change", { operation: "refresh", source: "clock", after: requestTime, round: turn.round });
-        const reply = await llm.chat({
-          provider: p.provider,
-          messages,
-          tools: activeTools,
-          onChunk,
-          signal: requestSignal,
-        });
+        const stream = activeTools.length && !literalExample ? new ToolProtocolStream(onChunk) : undefined;
+        let reply;
+        try {
+          reply = await llm.chat({
+            provider: p.provider, messages, tools: activeTools,
+            onChunk: stream?.push ?? onChunk, signal: requestSignal,
+          });
+        } catch (error) {
+          if (!requestSignal.aborted) stream?.interrupted();
+          throw error;
+        }
+        // Structured calls are authoritative, even when the provider also
+        // supplied literal markup in content. Never construct calls from text.
+        if (reply.toolCalls.length) stream?.flushUnclassified();
         await execution?.write("model_result", { round: turn.round, elapsed_ms: Date.now() - modelStarted,
           usage: reply.usage, tool_calls: reply.toolCalls.length, final_reply: !reply.toolCalls.length });
         measured = requestUsage(reply.usage, p.provider, limit.tokens);
@@ -612,11 +624,18 @@ export class Sessions {
         requestSignal.throwIfAborted();
         if (!reply.toolCalls.length) {
           // Seal synchronously after the last await. Unsent candidates never enter history.
-          if (input && !input.tryFinish()) continue;
+          if (input && !input.tryFinish()) { stream?.flushUnclassified(); continue; }
           final = reply.text;
           if (typeof final !== "string" || !final.trim())
             throw new EmptyModelResponseError(reply.finish_reason,
               typeof reply.reasoning_content === "string" && !!reply.reasoning_content.trim());
+          if (stream) {
+            final = stream.finish(reply.text, offeredNames);
+            if (final !== reply.text) {
+              if (!transient && !turn.transient) originalProtocolReply = reply.text;
+              logger.warn("模型在正文中返回了工具调用标记", { session: id, round: turn.round });
+            }
+          }
           break;
         }
         if (historyReference && typeof reply.reasoning_content !== "string")
@@ -708,6 +727,7 @@ export class Sessions {
         role: "assistant",
         // User-facing conversation is primary history. Technical plugin runs retain their opt-in privacy.
         text: transient && turn.transient ? TRANSIENT_REPLY : final,
+        ...(originalProtocolReply === undefined ? {} : { tool_protocol_original: originalProtocolReply }),
         ...(transient && turn.transient ? { transient: true } : {}),
         ...context,
         request_usage: measured,
