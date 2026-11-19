@@ -8,62 +8,46 @@ import { icon } from "./icons.js";
 const glyphs = { qq: "chat", qzone: "persona", autonomy: "bolt", gallery: "grid", surf: "send", bilibili: "terminal", vision: "eye" };
 const stepNames = { install: "安装", enable: "启用", reuse: "沿用", uninstall: "卸载" };
 
-function githubLink(url, label) {
+function githubLink(url, label, title = label) {
   try {
     const target = new URL(url);
     if (target.origin === "https://github.com" && !target.username && !target.password)
-      return `<a href="${e(target.href)}" target="_blank" rel="noopener noreferrer">${e(label)}${icon("arrow")}</a>`;
+      return `<a href="${e(target.href)}" target="_blank" rel="noopener noreferrer" aria-label="${e(title)}" title="${e(title)}">${e(label)}${icon("arrow")}</a>`;
   } catch {}
   return "";
 }
 
-function resultMessage(result) {
-  if (!result) return "";
-  return `<div class="official-result ${result.error ? "failed" : "succeeded"}" role="${result.error ? "alert" : "status"}">
-    ${icon(result.error ? "info" : "check")}<div><strong>${e(result.message)}</strong>
-    ${result.rolledBack?.length ? `<p>已撤回的改动</p><ul>${result.rolledBack.map(item => `<li>${e(item)}</li>`).join("")}</ul>` : ""}
-    </div></div>`;
-}
-
-function officialCard(plugin, state) {
-  const { id, name, version, installedVersion, installed, enabled, status, description, action, label, steps = [], reason, planKey } = plugin;
-  const busy = state.officialBusy;
+function officialRow(plugin, state) {
+  const { id, name, installed, enabled, status, description } = plugin;
+  const action = installed ? "uninstall" : "install";
+  const verb = installed ? "卸载" : "安装";
+  const version = installed ? plugin.installedVersion : plugin.version;
   const preference = enabled ? "已启用" : "已停用";
-  const runtimeState = status === "failed" ? "加载失败" : status === "blocked" ? "等待依赖" : "";
-  const statusLabel = installed ? "已安装 · " + (runtimeState || preference) : "未安装";
-  const stateClass = installed && runtimeState ? "is-" + status : installed && enabled ? "is-installed" : "";
-  const versionLabel = installed ? installedVersion : version;
-  const dependencies = steps.filter(step => step.id !== id);
-  return `<article class="official-card" data-official-id="${e(id)}" tabindex="-1">
-    <header><span class="official-glyph">${icon(glyphs[id] || "puzzle")}</span>
-      <div class="official-title"><h2>${e(name)}</h2><span class="official-state ${stateClass}">${statusLabel}</span>${installed && runtimeState ? `<span class="official-preference">开关${preference}</span>` : ""}</div>
-    </header>
-    <p class="official-description">${e(description)}</p>
-    ${dependencies.length ? `<ul class="official-steps" aria-label="依赖处理计划">${dependencies.map(step =>
-      `<li><strong>${e(stepNames[step.action])}</strong> ${e(step.name)}${step.version ? ` <span>v${e(step.version)}</span>` : ""}</li>`).join("")}</ul>` : ""}
-    ${reason ? `<div class="official-reason">${icon("info")}<div>${e(reason)} ${githubLink(plugin.upgradeUrl, "查看升级说明")}</div></div>` : ""}
-    <footer>
-      <div class="official-links">${githubLink(plugin.installation, "安装说明")}</div>
-      <div class="official-operation">
-        ${versionLabel ? `<span class="official-version" aria-label="${installed ? "已安装版本" : "安装版本"} v${e(versionLabel)}">v${e(versionLabel)}</span>` : ""}
-        ${(action === "install" || action === "uninstall") && planKey
-          ? `<button type="button" class="btn small ${action === "install" ? "primary" : "official-uninstall"}" data-official-action="${action}" data-key="${e(planKey)}" ${busy ? "disabled" : ""}>${icon(action === "install" ? "download" : "trash")}${busy === id ? (action === "install" ? "正在安装…" : "正在卸载…") : e(label)}</button>`
-          : `<span class="official-unavailable">${installed ? "暂不可卸载" : "暂不可安装"}</span>`}
-      </div>
-    </footer>
-    ${state.officialResult?.id === id ? resultMessage(state.officialResult) : ""}
+  const fault = status === "failed" ? "加载失败" : status === "blocked" ? "等待依赖" : "";
+  const statusLabel = installed ? fault || preference : "未安装";
+  const busy = state.officialBusy === id;
+  return `<article class="official-row" data-official-id="${e(id)}">
+    <span class="official-glyph" aria-hidden="true">${icon(glyphs[id] || "puzzle")}</span>
+    <div class="official-summary"><h2>${githubLink(plugin.installation, name, name + "安装说明") || e(name)}</h2>
+      <p>${e(description)}</p></div>
+    <div class="official-meta"><span class="official-state" data-state="${installed ? e(status || (enabled ? "active" : "stopped")) : ""}"${fault ? ` title="开关${preference}"` : ""}>${statusLabel}</span>
+      ${version ? `<span class="official-version" aria-label="${installed ? "已安装版本" : "安装版本"} v${e(version)}">v${e(version)}</span>` : ""}</div>
+    <button type="button" class="btn small ${installed ? "official-remove" : "tonal"}" data-official-action="${action}"
+      aria-label="${e(verb + " " + name)}" ${state.officialBusy ? "disabled" : ""}>${busy ? (installed ? "卸载中…" : "安装中…") : verb}</button>
   </article>`;
 }
 
 export function renderOfficialShelf(state) {
-  const items = state.officialPlugins;
-  const note = `<p class="official-data-note">${icon("database")}<span>卸载保留配置和个人资料，包括图库图片和标签。</span></p>`;
-  if (state.officialReadError) return note + resultMessage(state.officialResult)
-    + `<div class="official-loading" role="alert">${e(state.officialReadError)} <button class="btn small" type="button" data-official-retry>重新读取</button></div>`;
-  if (!items) return note + resultMessage(state.officialResult)
-    + '<div class="official-loading" role="status">正在核对本机插件与官方版本…</div>';
-  return note + (items.length ? `<div class="official-grid">${items.map(plugin => officialCard(plugin, state)).join("")}</div>`
-    : '<div class="official-loading">暂无已验证的官方插件。</div>');
+  if (state.officialReadError) return `<div class="official-loading" role="alert">${e(state.officialReadError)} <button class="btn small" type="button" data-official-retry>重新读取</button></div>`;
+  if (!state.officialPlugins) return '<p class="official-loading" role="status">正在读取官方插件…</p>';
+  return state.officialPlugins.length
+    ? `<div class="panel official-list">${state.officialPlugins.map(plugin => officialRow(plugin, state)).join("")}</div>`
+    : '<p class="official-loading">暂无已验证的官方插件。</p>';
+}
+
+function failureMessage(error) {
+  const changes = error.rolledBack;
+  return error.message + (changes?.length ? "\n\n已撤回的改动\n" + changes.join("\n") : "");
 }
 
 export function bindOfficialShelf(app) {
@@ -112,27 +96,66 @@ export function bindOfficialShelf(app) {
     if (view === "official") void refresh();
   };
 
+  function openDialog(plugin, title, body, submit, label, danger) {
+    app.dialog(title, body, submit, label, danger);
+    // Refresh can redraw the rows while the native modal holds keyboard focus.
+    shelf.ownerDocument.getElementById("dialog")?.addEventListener("close", () => {
+      if (state.page !== "plugins") return;
+      const focused = shelf.ownerDocument.activeElement;
+      if (focused?.isConnected && focused !== shelf.ownerDocument.body) return;
+      const row = [...content.querySelectorAll("#official-shelf:not([hidden]) [data-official-id]")].find(el => el.dataset.officialId === plugin.id);
+      row?.querySelector("[data-official-action]:enabled")?.focus({ preventScroll: true });
+    }, { once: true });
+  }
+
+  async function apply(plugin) {
+    if (state.officialBusy) throw Error("另一个插件操作正在进行。");
+    state.officialBusy = plugin.id;
+    app.officialRead = null;
+    paint();
+    try {
+      const result = await api("/api/official-plugins/apply", { id: plugin.id, action: plugin.action, planKey: plugin.planKey });
+      if (!result.ok) throw Object.assign(Error(result.error || result.message || "插件操作失败。"), { rolledBack: result.rolledBack });
+      app.toast(result.message);
+    } finally {
+      try { await app.refreshStatus(); } catch (error) { app.toast(error.message, true); }
+      state.officialBusy = null;
+      if (state.page === "plugins") app.render();
+    }
+  }
+
   shelf.onclick = async event => {
     if (state.officialBusy) return;
     if (event.target.closest("[data-official-retry]")) return refresh();
     const button = event.target.closest("[data-official-action]");
     if (!button || button.disabled) return;
     const id = button.closest("[data-official-id]").dataset.officialId;
-    const { officialAction: action, key: planKey } = button.dataset;
-    state.officialBusy = id;
-    state.officialResult = null;
-    app.officialRead = null;
-    paint();
-    try {
-      const result = await api("/api/official-plugins/apply", { id, action, planKey });
-      state.officialResult = { id, message: result.message, rolledBack: result.rolledBack, error: !result.ok };
-    } catch (error) {
-      state.officialResult = { id, message: error.message, rolledBack: error.rolledBack, error: true };
-    } finally {
-      try { await app.refreshStatus(); } catch (error) { app.toast(error.message, true); }
-      state.officialPlugins = null;
-      state.officialBusy = null;
-      if (state.page === "plugins") app.render();
+    const plugin = state.officialPlugins?.find(item => item.id === id);
+    if (!plugin) return refresh();
+    const action = button.dataset.officialAction;
+    const verb = action === "uninstall" ? "卸载" : "安装";
+    if (plugin.reason || plugin.action !== action || !plugin.planKey) {
+      const reason = plugin.reason || "插件状态已更新，请重新查看后再操作。";
+      const upgrade = githubLink(plugin.upgradeUrl, "查看升级说明");
+      openDialog(plugin, "暂时无法" + verb + " " + plugin.name,
+        `<p class="official-dialog-text">${e(reason)}</p>${upgrade ? `<p class="official-help">${upgrade}</p>` : ""}`);
+      return;
+    }
+    const steps = plugin.steps || [];
+    if (action === "uninstall" || steps.some(step => step.id !== id)) {
+      const body = action === "uninstall"
+        ? '<p class="official-dialog-text">只移除这个插件的程序文件。配置和用户资料会保留，重新安装后可以继续使用。</p>'
+        : `<ul class="official-plan">${steps.map(step => `<li><span>${e(stepNames[step.action])}</span><strong>${e(step.name)}</strong><small>v${e(step.version)}</small></li>`).join("")}</ul>`;
+      openDialog(plugin, verb + " " + plugin.name, body, async () => {
+        try { await apply(plugin); } catch (error) { throw Error(failureMessage(error)); }
+      }, e(plugin.label || verb), action === "uninstall");
+      return;
+    }
+    try { await apply(plugin); }
+    catch (error) {
+      if (state.page === "plugins") openDialog(plugin, verb + " " + plugin.name + "失败",
+        `<p class="official-dialog-text">${e(failureMessage(error))}</p>`);
+      else app.toast(failureMessage(error), true);
     }
   };
   if (!shelf.hidden) void refresh();

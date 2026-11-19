@@ -1,56 +1,159 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 
-const { renderOfficialShelf } = await import(new URL("../core/ui/official-plugins.js", import.meta.url).href);
-const plugin = {
+const { bindOfficialShelf, renderOfficialShelf } = await import(new URL("../core/ui/official-plugins.js", import.meta.url).href);
+const { renderPlugins } = await import(new URL("../core/ui/views.js", import.meta.url).href);
+
+const dependent = {
   id: "bilibili", name: "B 站", version: "1.2.0", installed: false, action: "install",
-  label: "启用网上冲浪并安装 B 站插件", planKey: "preview-key", installation: "https://github.com/example/bilibili",
+  label: "启用网上冲浪并安装 B 站插件", planKey: "preview-key", reason: "", installation: "https://github.com/example/bilibili",
   steps: [
     { id: "surf", name: "网上冲浪", action: "enable", version: "1.0.0" },
     { id: "bilibili", name: "B 站", action: "install", version: "1.2.0" },
   ],
 };
+const gallery = {
+  id: "gallery", name: "图库", version: "0.1.2", installed: false, action: "install",
+  label: "安装图库", planKey: "gallery-plan", reason: "",
+  steps: [{ id: "gallery", name: "图库", action: "install", version: "0.1.2" }],
+};
+const installed = { ...gallery, action: "uninstall", label: "卸载图库", installed: true, installedVersion: "0.1.1", enabled: true, steps: [] };
+const shelfHtml = (row: object) => renderOfficialShelf({ officialPlugins: [row] });
+const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
-test("official cards show the approved dependency plan, version and one action", () => {
-  const html = renderOfficialShelf({ officialPlugins: [plugin] });
-  assert.match(html, /图库图片和标签/);
-  assert.match(html, /启用<\/strong> 网上冲浪 <span>v1\.0\.0/);
-  assert.match(html, /安装版本 v1\.2\.0/);
-  assert.match(html, /data-key="preview-key"/);
-  assert.match(html, /启用网上冲浪并安装 B 站插件/);
-  assert.equal(html.match(/<button\b/g)?.length, 1);
-  assert.match(renderOfficialShelf({ officialPlugins: [plugin], officialBusy: "bilibili" }), /disabled>.*正在安装/s);
+type Dialog = { title: string; body: string; confirm?: () => Promise<void>; label?: string };
+function controller(t: TestContext, row: Record<string, unknown> & { id: string }, failure?: { error: string; rolledBack: string[] }) {
+  const posts: unknown[] = [], dialogs: Dialog[] = [];
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    if (path === "/api/official-plugins" && !init.method) return Response.json({ plugins: [row] });
+    assert.equal(path, "/api/official-plugins/apply");
+    assert.equal(init.method, "POST");
+    posts.push(JSON.parse(String(init.body)));
+    return failure ? Response.json(failure, { status: 409 }) : Response.json({ ok: true, message: "完成" });
+  });
+  const shelf = {
+    hidden: true, isConnected: true, innerHTML: "", contains: () => false, ownerDocument: { activeElement: null, getElementById: () => null },
+    onclick: undefined as undefined | ((event: unknown) => Promise<void>),
+  };
+  const app = {
+    content: { querySelector: (key: string) => key === "#official-shelf" ? shelf : {}, querySelectorAll: () => [] },
+    state: { page: "plugins", officialPlugins: [row] },
+    dialog(title: string, body: string, confirm?: Dialog["confirm"], label?: string) { dialogs.push({ title, body, confirm, label }); },
+    refreshStatus: async () => {}, render() {}, toast() {},
+  };
+  bindOfficialShelf(app);
+  shelf.hidden = false;
+  async function click() {
+    const tag = shelfHtml(row).match(/<button\b[^>]*data-official-action[^>]*>/)?.[0];
+    assert.ok(tag, "a blocked action must still be reachable by button");
+    assert.doesNotMatch(tag, /\sdisabled\b/);
+    const action = tag.match(/data-official-action="([^"]*)"/)?.[1];
+    const card = { dataset: { officialId: row.id } };
+    const button = { dataset: { officialAction: action }, closest: () => card };
+    await shelf.onclick!({ target: { closest: (selector: string) => selector === "[data-official-action]" ? button : null } });
+  }
+  return { click, posts, dialogs };
+}
+
+test("the management landing page opens installed plugin controls and still links to discovery", () => {
+  const row = { id: "gallery", name: "图库", version: "0.1.1", status: "active", enabled: true };
+  const html = renderPlugins({ state: { status: { plugins: [row] } } });
+  const panel = html.match(/<section\b[^>]*id="installed-plugins"[^>]*>/)?.[0];
+  assert.ok(panel);
+  assert.doesNotMatch(panel, /\shidden\b/);
+  assert.match(html, /<section\b[^>]*id="official-shelf"[^>]*\shidden\b/);
+  assert.match(html, /href="\/market\/"/);
 });
 
-test("blocked cards explain the reason without an action and show the installed version", () => {
-  const html = renderOfficialShelf({ officialPlugins: [{
-    ...plugin, action: null, installed: true, enabled: true, installedVersion: "1.1.5", steps: [],
-    reason: "请先卸载依赖它的插件：<示例>。", installation: "javascript:invalid", upgradeUrl: "https://github.com/example/core",
-  }] });
-  assert.match(html, /已安装版本 v1\.1\.5/);
-  assert.match(html, /请先卸载依赖它的插件：&lt;示例&gt;/);
-  assert.match(html, /查看升级说明/);
-  assert.doesNotMatch(html, /<button|javascript:invalid/);
-});
-
-test("runtime failures and blocked dependencies retain the saved enablement setting", () => {
-  const installed = { ...plugin, installed: true, enabled: true };
+test("official rows show the short action, name, version and state without instructions or dependencies", () => {
+  const html = shelfHtml(dependent);
+  assert.match(html, /B 站/);
+  assert.match(html, /v1\.2\.0/);
+  assert.match(html, /未安装/);
+  assert.match(text(html.match(/<button\b[^>]*data-official-action[^>]*>([\s\S]*?)<\/button>/)![1]), /^安装$/);
+  const pending = renderOfficialShelf({ officialPlugins: [dependent], officialBusy: dependent.id });
+  assert.match(pending.match(/<button\b[^>]*data-official-action[^>]*>/)![0], /\sdisabled\b/);
+  assert.doesNotMatch(text(html), /网上冲浪|安装说明|图库图片和标签/);
+  const existing = shelfHtml(installed);
+  assert.match(existing, /v0\.1\.1/);
+  assert.match(existing, /已启用/);
+  assert.match(text(existing.match(/<button\b[^>]*data-official-action[^>]*>([\s\S]*?)<\/button>/)![1]), /^卸载$/);
   for (const [status, label] of [["failed", "加载失败"], ["blocked", "等待依赖"]]) {
-    const html = renderOfficialShelf({ officialPlugins: [{ ...installed, status }] });
-    assert.ok(html.includes("已安装 · " + label));
-    assert.ok(html.includes("开关已启用"));
+    const markup = shelfHtml({ ...installed, status });
+    assert.ok(markup.includes(label));
+    assert.ok(markup.includes("已启用"));
   }
-  assert.ok(renderOfficialShelf({ officialPlugins: [installed] }).includes("已安装 · 已启用"));
-  assert.ok(renderOfficialShelf({ officialPlugins: [{ ...installed, enabled: false }] }).includes("已安装 · 已停用"));
+  assert.match(shelfHtml({ ...installed, enabled: false }), /已停用/);
+  assert.doesNotMatch(shelfHtml({ ...dependent, name: "<img src=x>" }), /<img src=x>/);
 });
 
-test("failed actions display the failing step and the exact rollback even when catalog refresh fails", () => {
-  const state = { officialPlugins: [plugin], officialResult: {
-    id: "bilibili", message: "安装 B 站失败", error: true, rolledBack: ["恢复网上冲浪为停用", "移除 <新文件>"],
-  } };
-  for (const html of [renderOfficialShelf(state), renderOfficialShelf({ ...state, officialReadError: "目录暂不可读" })]) {
-    assert.match(html, /role="alert"/);
-    assert.match(html, /安装 B 站失败/);
-    assert.match(html, /<li>恢复网上冲浪为停用<\/li><li>移除 &lt;新文件&gt;<\/li>/);
-  }
+test("dependency-blocked uninstall opens a dismissible explanation and sends no mutation", async t => {
+  const row = { ...installed, action: null, planKey: "", reason: "请先卸载依赖它的插件：<QQ 空间>。" };
+  assert.doesNotMatch(shelfHtml(row), /请先卸载|&lt;QQ 空间&gt;|暂不可卸载/);
+  const ui = controller(t, row);
+  await ui.click();
+  assert.equal(ui.dialogs.length, 1);
+  assert.match(ui.dialogs[0].body, /&lt;QQ 空间&gt;/);
+  assert.doesNotMatch(ui.dialogs[0].body, /<QQ 空间>/);
+  assert.ok(!ui.dialogs[0].confirm);
+  assert.deepEqual(ui.posts, []);
+});
+
+test("a blocked install offers a safe upgrade link only after the click", async t => {
+  const row = { ...dependent, action: null, planKey: "", reason: "请先升级网上冲浪", upgradeUrl: "https://github.com/example/surf" };
+  assert.doesNotMatch(shelfHtml(row), /请先升级|github\.com\/example\/surf/);
+  const ui = controller(t, row);
+  await ui.click();
+  assert.match(ui.dialogs[0].body, /请先升级网上冲浪/);
+  assert.match(ui.dialogs[0].body, /href="https:\/\/github.com\/example\/surf"/);
+  assert.ok(!ui.dialogs[0].confirm);
+  assert.deepEqual(ui.posts, []);
+
+  const invalid = controller(t, { ...row, upgradeUrl: "javascript:invalid" });
+  await invalid.click();
+  assert.doesNotMatch(invalid.dialogs[0].body, /javascript:invalid/);
+  assert.deepEqual(invalid.posts, []);
+});
+
+test("the install dialog previews each dependency and sends the approved plan only on confirm", async t => {
+  const row = { ...dependent, steps: [
+    { id: "cache", name: "缓存", action: "install", version: "2.0.0" },
+    { id: "viewer", name: "查看器", action: "reuse", version: "1.5.0" },
+    ...dependent.steps,
+  ] };
+  const ui = controller(t, row);
+  await ui.click();
+  assert.equal(ui.dialogs.length, 1);
+  assert.deepEqual(ui.posts, []);
+  const dialog = ui.dialogs[0];
+  const details = text(dialog.body);
+  for (const word of ["安装", "缓存", "2.0.0", "沿用", "查看器", "1.5.0", "启用", "网上冲浪", "1.0.0"]) assert.ok(details.includes(word), details);
+  assert.equal(dialog.label, row.label);
+  assert.ok(dialog.confirm);
+  await dialog.confirm();
+  assert.deepEqual(ui.posts, [{ id: row.id, action: "install", planKey: row.planKey }]);
+});
+
+test("uninstall requires confirmation and a failed operation reports the step and rollback inside it", async t => {
+  const error = "移除图库失败：文件已更改", rolledBack = ["已恢复图库原启停状态", "已撤回 <临时更改>"];
+  const ui = controller(t, installed, { error, rolledBack });
+  await ui.click();
+  assert.deepEqual(ui.posts, []);
+  const dialog = ui.dialogs[0];
+  assert.match(dialog.body, /保留/);
+  assert.ok(dialog.confirm);
+  await assert.rejects(dialog.confirm, (failure: Error) => [error, ...rolledBack].every(line => failure.message.includes(line)));
+  assert.deepEqual(ui.posts, [{ id: installed.id, action: "uninstall", planKey: installed.planKey }]);
+});
+
+test("a single-plugin install runs on click and reports a rejected plan in an escaped dialog", async t => {
+  const ui = controller(t, gallery, { error: "安装图库失败", rolledBack: ["撤回 <变动>"] });
+  await ui.click();
+  assert.deepEqual(ui.posts, [{ id: gallery.id, action: "install", planKey: gallery.planKey }]);
+  assert.equal(ui.dialogs.length, 1);
+  const dialog = ui.dialogs[0];
+  assert.match(dialog.title + dialog.body, /安装图库失败/);
+  assert.match(dialog.body, /&lt;变动&gt;/);
+  assert.doesNotMatch(dialog.body, /<变动>/);
+  assert.ok(!dialog.confirm);
 });

@@ -200,18 +200,17 @@ export function bindBindings(app) {
 export function renderPlugins(app) {
   const plugins = extensionPlugins(app.state.status);
   const cards = visiblePluginCards(app.state.status);
-  const installedView = app.state.pluginView === "installed";
+  const installedView = app.state.pluginView ? app.state.pluginView === "installed" : plugins.length > 0;
   return `<header class="page-heading plugin-hub-heading">
-    <div><h1>插件管理</h1><p>为 WhaleLife 安装新能力，或管理这台设备上的插件。</p></div>
-    <a class="btn plugin-discover" href="/market/">发现插件</a>
+    <div><h1>插件管理</h1><p>${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</p></div>
+    <a class="btn" href="/market/">发现插件</a>
   </header>
   <nav class="plugin-views" aria-label="插件视图">
-    <button type="button" data-plugin-view="official" aria-controls="official-shelf" aria-pressed="${!installedView}">${icon("cube")}官方插件</button>
-    <button type="button" data-plugin-view="installed" aria-controls="installed-plugins" aria-pressed="${installedView}">${icon("sliders")}已安装<span>${plugins.length}</span></button>
+    <button type="button" data-plugin-view="installed" aria-controls="installed-plugins" aria-pressed="${installedView}">已安装</button>
+    <button type="button" data-plugin-view="official" aria-controls="official-shelf" aria-pressed="${!installedView}">官方插件</button>
   </nav>
   <section id="official-shelf" aria-label="官方插件" ${installedView ? "hidden" : ""}>${renderOfficialShelf(app.state)}</section>
   <section id="installed-plugins" aria-label="已安装插件" ${installedView ? "" : "hidden"}>
-    <div class="plugin-library-note"><strong>${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</strong><span>启停选择在重启后继续生效。</span></div>
     <div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}
   </section>`;
 }
