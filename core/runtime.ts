@@ -25,6 +25,7 @@ export class Runtime {
   events: PluginEvents;
   private actions: Promise<unknown> = Promise.resolve();
   private closing = false;
+  private managementClosing = false;
   private processOptions: ReturnType<typeof pluginRuntimeOptions>;
   private optionalServices: OptionalServices;
   beginClose() {
@@ -83,7 +84,7 @@ export class Runtime {
       for (const dir of await readdir(join(this.root, "plugins"), {
         withFileTypes: true,
       }))
-        if (dir.isDirectory()) await this.loadPath(dir.name);
+        if (dir.isDirectory() && await this.discoverable(join(this.root, "plugins", dir.name))) await this.loadPath(dir.name);
       await this.resumeBlocked();
     });
   }
@@ -91,6 +92,22 @@ export class Runtime {
     const result = this.actions.then(task);
     this.actions = result.catch(() => {});
     return result;
+  }
+  /** Uninstall keeps the data directory. Only a directory with a program is a plugin. */
+  private async discoverable(dir: string) {
+    const entries = await readdir(dir);
+    return entries.includes("plugin.yaml") || entries.includes("index.ts");
+  }
+  async managePackages<T>(task: () => Promise<T>) {
+    if (this.managementClosing) throw Error("核心正在关闭");
+    return this.serial(async () => {
+      if (this.closing) throw Error("核心正在关闭");
+      return task();
+    });
+  }
+  async finishManagement() {
+    this.managementClosing = true;
+    await this.actions;
   }
   private lookup(record: any, name: string) {
     let at = record;
@@ -107,10 +124,10 @@ export class Runtime {
     for (const child of dirs) {
       if (!child.isDirectory() || (Array.isArray(record.manifest.sub) && !record.manifest.sub.includes(child.name))) continue;
       const id = record.id + "/" + child.name;
-      if (this.records.get(id)?.parent !== record) await this.loadPath(id);
+      if (this.records.get(id)?.parent !== record && await this.discoverable(join(record.dir, "sub", child.name))) await this.loadPath(id);
     }
   }
-  private async resumeBlocked() {
+  async resumeBlocked() {
     let progress = true;
     while (progress) {
       progress = false;
@@ -517,6 +534,7 @@ export class Runtime {
     return record.stopping;
   }
   async action(id: string, action: string) {
+    if (this.managementClosing) throw Error("核心正在关闭");
     return this.serial(async () => {
       if (this.closing) throw Error("核心正在关闭");
       if (!validPluginId(id)) throw Error("插件 ID 无效");

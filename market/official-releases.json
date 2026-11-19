@@ -7,7 +7,66 @@
       "repository": "https://github.com/iinukami/whalelife-plugin-qq",
       "parentId": null,
       "requiredPlugins": [],
-      "verifiedReleases": []
+      "verifiedReleases": [
+        {
+          "version": "0.22.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "10d046ece6895f6f4136d029d9778db32f8d57c7",
+          "delivery": "local-build",
+          "verification": "market/official-builds.md",
+          "bundledPluginIds": [
+            "qq/gallery"
+          ],
+          "sha256": "b1a5e0bc03cdbc7b2376040283297c62dbb339303d668338428d798eb618e741",
+          "fileCount": 2925,
+          "sizeBytes": 235658116
+        },
+        {
+          "version": "0.22.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "10d046ece6895f6f4136d029d9778db32f8d57c7",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "bundledPluginIds": [
+            "qq/gallery"
+          ],
+          "sha256": "513538cbd179a8d816c443c40fa35c2a8168d87a5e1362df3ca777f0f828a489",
+          "fileCount": 2925,
+          "sizeBytes": 440927,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/513538cbd179a8d816c443c40fa35c2a8168d87a5e1362df3ca777f0f828a489.json"
+        },
+        {
+          "version": "0.22.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "10d046ece6895f6f4136d029d9778db32f8d57c7",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "bundledPluginIds": [
+            "qq/gallery"
+          ],
+          "sha256": "a54aeca89bc78c2d990b40619187254eab3bf312519284043b9a02c44c0525fa",
+          "fileCount": 2943,
+          "sizeBytes": 443202,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/a54aeca89bc78c2d990b40619187254eab3bf312519284043b9a02c44c0525fa.json"
+        }
+      ],
+      "preserve": [
+        "vendor/napcat/beacon_report.log",
+        "vendor/napcat/guild1.db",
+        "vendor/napcat/guild1.db-shm",
+        "vendor/napcat/guild1.db-wal"
+      ]
     },
     {
       "id": "qzone",
@@ -17,7 +76,66 @@
       "requiredPlugins": [
         "qq"
       ],
-      "verifiedReleases": []
+      "verifiedReleases": [
+        {
+          "version": "0.5.2",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {
+            "qq": "0.22.0"
+          },
+          "sourceCommit": "107882f05eb1c8b9c49d3ac9684070ccedf0ae25",
+          "delivery": "local-build",
+          "verification": "market/official-builds.md",
+          "bundledPluginIds": [
+            "qq/qzone/gallery"
+          ],
+          "sha256": "8aa3553b4b32dbed467f0d613443eb1d405157a24c8154c04b536ce2d47f68e8",
+          "fileCount": 136,
+          "sizeBytes": 8887306
+        },
+        {
+          "version": "0.5.2",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {
+            "qq": "0.22.0"
+          },
+          "sourceCommit": "5ede71d2305070c7d97519f2fb00396af60cf0f0",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "bundledPluginIds": [
+            "qq/qzone/gallery"
+          ],
+          "sha256": "51da0edc0a070c1aecd1a64a92a97d71018e6eca4f347a467d06bd75a68b4fe1",
+          "fileCount": 136,
+          "sizeBytes": 18311,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/51da0edc0a070c1aecd1a64a92a97d71018e6eca4f347a467d06bd75a68b4fe1.json"
+        },
+        {
+          "version": "0.5.2",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {
+            "qq": "0.22.0"
+          },
+          "sourceCommit": "5ede71d2305070c7d97519f2fb00396af60cf0f0",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "bundledPluginIds": [
+            "qq/qzone/gallery"
+          ],
+          "sha256": "0740df6fae19276fe3e72e930875c9c1e73a5eb9bc47489f05a8becc33677d8a",
+          "fileCount": 139,
+          "sizeBytes": 18688,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/0740df6fae19276fe3e72e930875c9c1e73a5eb9bc47489f05a8becc33677d8a.json"
+        }
+      ]
     },
     {
       "id": "autonomy",
@@ -25,7 +143,51 @@
       "repository": "https://github.com/iinukami/whalelife-plugin-autonomy",
       "parentId": null,
       "requiredPlugins": [],
-      "verifiedReleases": []
+      "verifiedReleases": [
+        {
+          "version": "0.6.3",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "e9c29f4e903c58cec5e1c309db06a328e0d65f84",
+          "delivery": "local-build",
+          "verification": "market/official-builds.md",
+          "sha256": "a1c8eb5eaaeee4c36dd68b350724c1681f92d0caed8349358b8cc086b74c7022",
+          "fileCount": 16,
+          "sizeBytes": 66436
+        },
+        {
+          "version": "0.6.3",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "e9c29f4e903c58cec5e1c309db06a328e0d65f84",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "28dbd7c1ea95f30cf8221c5ea52835b0ada222e53de63b3119f7ee49f63951b3",
+          "fileCount": 16,
+          "sizeBytes": 1838,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/28dbd7c1ea95f30cf8221c5ea52835b0ada222e53de63b3119f7ee49f63951b3.json"
+        },
+        {
+          "version": "0.6.3",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "e9c29f4e903c58cec5e1c309db06a328e0d65f84",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "0a27e3a9f7d122d7cba8b265476df22efa5b43014d4cd62696587eedc7f88776",
+          "fileCount": 17,
+          "sizeBytes": 1952,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/0a27e3a9f7d122d7cba8b265476df22efa5b43014d4cd62696587eedc7f88776.json"
+        }
+      ]
     },
     {
       "id": "gallery",
@@ -33,7 +195,51 @@
       "repository": "https://github.com/iinukami/whalelife-plugin-gallery",
       "parentId": null,
       "requiredPlugins": [],
-      "verifiedReleases": []
+      "verifiedReleases": [
+        {
+          "version": "0.1.2",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "ad22986cf691eb1c60f8d17db91836c48c65c948",
+          "delivery": "local-build",
+          "verification": "market/official-builds.md",
+          "sha256": "eba7500513b67fa3e17ec17c3d312b1dbc05ad5ca2e68109562fad73459a9b89",
+          "fileCount": 381,
+          "sizeBytes": 9368872
+        },
+        {
+          "version": "0.1.2",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "f4545c32848ece751e5cbbb89c9630307105e57b",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "24bb337c3058eb98de93b0f6fb972334403d49edd12cfd10b7f28766409bacfe",
+          "fileCount": 381,
+          "sizeBytes": 53359,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/24bb337c3058eb98de93b0f6fb972334403d49edd12cfd10b7f28766409bacfe.json"
+        },
+        {
+          "version": "0.1.1",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "c5327f6e5e65438ebd8b52c7a24431c2766834d9",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "44075f2b87c9933a85015d570729d096c1d873833bd7b59159219902cdb08f5c",
+          "fileCount": 379,
+          "sizeBytes": 53131,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/44075f2b87c9933a85015d570729d096c1d873833bd7b59159219902cdb08f5c.json"
+        }
+      ]
     },
     {
       "id": "surf",
@@ -41,7 +247,36 @@
       "repository": "https://github.com/iinukami/whalelife-plugin-surf",
       "parentId": null,
       "requiredPlugins": [],
-      "verifiedReleases": []
+      "verifiedReleases": [
+        {
+          "version": "0.1.1",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "47d39017f7947dc07f85cb47bfe5368e874c6ff4",
+          "delivery": "local-build",
+          "verification": "market/official-builds.md",
+          "sha256": "851e379f224dee49b4b1f87ae7c7a75147f28ff66c2965a5b7a5accd1b5640e2",
+          "fileCount": 1239,
+          "sizeBytes": 1626976
+        },
+        {
+          "version": "0.1.1",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "3bac5010ed50fc9a727033aa24dec983a98773ef",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "1683af1014b629d27d23b87cc1e61cc94a9b7c227037fb3aa9a2c8b8a53aadd6",
+          "fileCount": 1239,
+          "sizeBytes": 185588,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/1683af1014b629d27d23b87cc1e61cc94a9b7c227037fb3aa9a2c8b8a53aadd6.json"
+        }
+      ]
     },
     {
       "id": "bilibili",
@@ -51,7 +286,40 @@
       "requiredPlugins": [
         "surf"
       ],
-      "verifiedReleases": []
+      "verifiedReleases": [
+        {
+          "version": "0.2.8",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {
+            "surf": "0.1.1"
+          },
+          "sourceCommit": "258a5b863c5d08908c5fd86457598872260323a7",
+          "delivery": "local-build",
+          "verification": "market/official-builds.md",
+          "sha256": "b6e2de7b87721295168ef763fe31d568002401382d331dcc232683e6fa8fd23d",
+          "fileCount": 335,
+          "sizeBytes": 526335
+        },
+        {
+          "version": "0.2.8",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {
+            "surf": "0.1.1"
+          },
+          "sourceCommit": "0cace3dfd7e413c7680cf8ab05a7e4ba3ec18e7e",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "ccecf9d46e2bda66e30bfa503b3ed0895d715d9120ca8307e1a352f55f9020b0",
+          "fileCount": 335,
+          "sizeBytes": 45714,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/ccecf9d46e2bda66e30bfa503b3ed0895d715d9120ca8307e1a352f55f9020b0.json"
+        }
+      ]
     },
     {
       "id": "vision",
@@ -59,7 +327,36 @@
       "repository": "https://github.com/iinukami/whalelife-plugin-vision",
       "parentId": null,
       "requiredPlugins": [],
-      "verifiedReleases": []
+      "verifiedReleases": [
+        {
+          "version": "0.5.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "c95330d3a8323debd6684113222c729b6418e5fa",
+          "delivery": "local-build",
+          "verification": "market/official-builds.md",
+          "sha256": "d5a0e8331722fefdd930c33465a29a6362a8d2961d10a241cab38d73558cf9dc",
+          "fileCount": 386,
+          "sizeBytes": 88664256
+        },
+        {
+          "version": "0.5.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "c95330d3a8323debd6684113222c729b6418e5fa",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "d5c117bcbd2269b429da7e4dfa602983223b0f908c290dc89fb9a877db9da10d",
+          "fileCount": 386,
+          "sizeBytes": 53652,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/d5c117bcbd2269b429da7e4dfa602983223b0f908c290dc89fb9a877db9da10d.json"
+        }
+      ]
     }
   ]
 }

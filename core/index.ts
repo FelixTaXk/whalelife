@@ -147,6 +147,7 @@ export async function boot(
     closing = new Promise<void>((resolve, reject) => { resolveClose = resolve; rejectClose = reject; });
     void (async () => {
       logger.info("WhaleLife 关闭");
+      await runtime.finishManagement();
       runtime.events.emit("whalelife/shutdown", { at: new Date().toISOString() });
       // Let shutdown listeners receive the notification before their subscriptions are removed.
       await new Promise<void>((r) => setImmediate(r));

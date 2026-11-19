@@ -1,0 +1,2 @@
+# Inventory filenames commit to the raw UTF-8 bytes, including the final LF.
+*.json -text

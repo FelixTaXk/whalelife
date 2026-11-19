@@ -17,6 +17,7 @@ export async function api(path, data) {
   if (!response.ok) {
     const error = new Error(value.error || "请求失败，请重试");
     error.status = response.status;
+    if (Array.isArray(value.rolledBack)) error.rolledBack = value.rolledBack;
     throw error;
   }
   return value;

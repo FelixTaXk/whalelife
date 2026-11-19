@@ -3,6 +3,7 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import { pluginCard, visiblePluginCards, bindPluginActions } from "./extensions.js";
+import { renderOfficialShelf, bindOfficialShelf } from "./official-plugins.js";
 import {
   api,
   escapeHTML as e,
@@ -199,16 +200,24 @@ export function bindBindings(app) {
 export function renderPlugins(app) {
   const plugins = extensionPlugins(app.state.status);
   const cards = visiblePluginCards(app.state.status);
-  return `<div class="page-heading">
-    <div><h1>插件管理</h1><p>插件开关会保存，重启后保持选择；依赖恢复后会自动恢复原本启用的插件。</p></div>
-    <div class="heading-actions">
-      <span class="badge">${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</span>
-      <a class="btn primary" href="/market/">发现插件</a>
-    </div>
-  </div><div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
+  const installedView = app.state.pluginView === "installed";
+  return `<header class="page-heading plugin-hub-heading">
+    <div><h1>插件管理</h1><p>为 WhaleLife 安装新能力，或管理这台设备上的插件。</p></div>
+    <a class="btn plugin-discover" href="/market/">发现插件</a>
+  </header>
+  <nav class="plugin-views" aria-label="插件视图">
+    <button type="button" data-plugin-view="official" aria-controls="official-shelf" aria-pressed="${!installedView}">${icon("cube")}官方插件</button>
+    <button type="button" data-plugin-view="installed" aria-controls="installed-plugins" aria-pressed="${installedView}">${icon("sliders")}已安装<span>${plugins.length}</span></button>
+  </nav>
+  <section id="official-shelf" aria-label="官方插件" ${installedView ? "hidden" : ""}>${renderOfficialShelf(app.state)}</section>
+  <section id="installed-plugins" aria-label="已安装插件" ${installedView ? "" : "hidden"}>
+    <div class="plugin-library-note"><strong>${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</strong><span>启停选择在重启后继续生效。</span></div>
+    <div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}
+  </section>`;
 }
 export function bindPlugins(app) {
   bindPluginActions(app);
+  bindOfficialShelf(app);
 }
 
 export function renderChat(app) {
