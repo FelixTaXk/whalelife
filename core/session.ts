@@ -618,7 +618,7 @@ export class Sessions {
           reply = await llm.chat({
             provider: p.provider, messages, tools: activeTools,
             onChunk: stream?.push ?? onChunk, signal: requestSignal,
-          });
+          }, this.services.toolOrder);
         } catch (error) {
           if (!requestSignal.aborted) stream?.interrupted();
           throw error;

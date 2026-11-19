@@ -103,6 +103,23 @@ async function fixture(t: TestContext) {
   return { app, id, api, requests, violations, base, omit: () => { omitReasoning = true; } };
 }
 
+test("newly registered skills append on the wire, even before the first chat and after reload", async t => {
+  const f = await fixture(t);
+  const baseline = f.app.tools.list().map((tool: any) => tool.function.name).sort();
+  const extra = "aaa_new_skill";
+  f.app.tools.register({ name: extra, description: extra, schema: {}, run() { return "unused"; } });
+  await f.app.channels.web(f.id, "first turn", () => {});
+  const count = f.requests.length;
+  assert.ok(count > 0);
+  await f.app.runtime.action("protocol-probe", "reload");
+  await f.app.channels.web(f.id, "second turn", () => {});
+  assert.ok(f.requests.length > count);
+  for (const body of f.requests) {
+    assert.deepEqual(body.tools.map((tool: any) => tool.function.name), [...baseline, extra]);
+    assert.equal(JSON.stringify(body.tools), JSON.stringify(f.requests[0].tools));
+  }
+});
+
 for (const history of [false, true]) test(`thinking transient full HTTP tool chain with ${history ? "legacy completed" : "empty"} history`, async t => {
   const f = await fixture(t), trigger = "case-trigger-ephemeral";
   if (history) {
