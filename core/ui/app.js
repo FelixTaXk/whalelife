@@ -8,6 +8,7 @@ import { renderModels, bindModels } from "./models.js";
 import { renderPersonas, bindPersonas } from "./personas.js";
 import { renderMemory, bindMemory, loadMemory } from "./memory.js";
 import { renderContextMeter } from "./context.js";
+import { renderStore, bindStore } from "./plugin-store.js";
 import { extensionPage, extensionNavigation, extensionActiveKey, extensionSignature, updateExtensionContent } from "./extensions.js";
 import {
   renderOverview,
@@ -29,6 +30,7 @@ const pages = {
   bindings: { name: "使用配置", render: renderBindings, bind: bindBindings },
   chat: { name: "对话", render: renderChat, bind: bindChat },
   plugins: { name: "插件管理", render: renderPlugins, bind: bindPlugins },
+  market: { name: "插件商店", render: renderStore, bind: bindStore },
   logs: { name: "运行日志", render: renderLogs, bind: bindLogs },
 };
 const $ = (id) => document.getElementById(id);

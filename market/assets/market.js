@@ -88,8 +88,8 @@ async function refreshPublishedCatalog() {
 
 if (["/market/", "/market/index.html"].includes(location.pathname)) {
   const home = document.querySelector("#project-home");
-  home.href = "/#plugins";
-  home.textContent = "返回插件管理";
+  home.href = "/#market";
+  home.textContent = "在 WhaleLife 中打开";
 }
 document.querySelector("#open-submission").addEventListener("click", () => submission.showModal());
 sort.addEventListener("change", showView);

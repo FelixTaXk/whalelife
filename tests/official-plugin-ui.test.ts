@@ -1,11 +1,13 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 
-const { bindOfficialShelf, renderOfficialShelf } = await import(new URL("../core/ui/official-plugins.js", import.meta.url).href);
+const { bindOfficialActions, renderManageSlot, renderStoreInstall } = await import(new URL("../core/ui/official-plugins.js", import.meta.url).href);
 const { renderPlugins } = await import(new URL("../core/ui/views.js", import.meta.url).href);
 
+const { extensionPage, pluginCard } = await import(new URL("../core/ui/extensions.js", import.meta.url).href);
+
 const dependent = {
-  id: "bilibili", name: "B 站", version: "1.2.0", installed: false, action: "install",
+  id: "bilibili", runtimeId: "surf/bilibili", name: "B 站", version: "1.2.0", installed: false, action: "install",
   label: "启用网上冲浪并安装 B 站插件", planKey: "preview-key", reason: "", installation: "https://github.com/example/bilibili",
   steps: [
     { id: "surf", name: "网上冲浪", action: "enable", version: "1.0.0" },
@@ -13,16 +15,18 @@ const dependent = {
   ],
 };
 const gallery = {
-  id: "gallery", name: "图库", version: "0.1.2", installed: false, action: "install",
+  id: "gallery", runtimeId: "gallery", name: "图库", version: "0.1.2", installed: false, action: "install",
   label: "安装图库", planKey: "gallery-plan", reason: "",
   steps: [{ id: "gallery", name: "图库", action: "install", version: "0.1.2" }],
 };
 const installed = { ...gallery, action: "uninstall", label: "卸载图库", installed: true, installedVersion: "0.1.1", enabled: true, steps: [] };
-const shelfHtml = (row: object) => renderOfficialShelf({ officialPlugins: [row] });
+const shelfHtml = (row: Record<string, unknown> & { id: string }) => row.installed
+  ? renderManageSlot({ officialPlugins: [row] }, row.runtimeId)
+  : renderStoreInstall({ officialPlugins: [row] }, row.id);
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 type Dialog = { title: string; body: string; confirm?: () => Promise<void>; label?: string };
-function controller(t: TestContext, row: Record<string, unknown> & { id: string }, failure?: { error: string; rolledBack: string[] }) {
+function controller(t: TestContext, row: Record<string, unknown> & { id: string }, failure?: { error: string; rolledBack: string[] }, workspace?: string) {
   const posts: unknown[] = [], dialogs: Dialog[] = [];
   t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
     if (path === "/api/official-plugins" && !init.method) return Response.json({ plugins: [row] });
@@ -31,59 +35,60 @@ function controller(t: TestContext, row: Record<string, unknown> & { id: string 
     posts.push(JSON.parse(String(init.body)));
     return failure ? Response.json(failure, { status: 409 }) : Response.json({ ok: true, message: "完成" });
   });
-  const shelf = {
-    hidden: true, isConnected: true, innerHTML: "", contains: () => false, ownerDocument: { activeElement: null, getElementById: () => null },
-    onclick: undefined as undefined | ((event: unknown) => Promise<void>),
-  };
+  let handler!: (event: unknown) => Promise<void>;
+  const location = { hash: workspace ? "#plugin:" + encodeURIComponent(workspace) : "#plugins" };
   const app = {
-    content: { querySelector: (key: string) => key === "#official-shelf" ? shelf : {}, querySelectorAll: () => [] },
-    state: { page: "plugins", officialPlugins: [row] },
+    content: { querySelector: () => workspace ? { dataset: { runtimeId: workspace } } : null, querySelectorAll: () => [],
+      addEventListener: (_: string, callback: typeof handler) => { handler = callback; },
+      ownerDocument: { getElementById: () => null, defaultView: { location } } },
+    state: { page: workspace ? location.hash.slice(1) : row.installed ? "plugins" : "market", officialPlugins: [row] },
     dialog(title: string, body: string, confirm?: Dialog["confirm"], label?: string) { dialogs.push({ title, body, confirm, label }); },
     refreshStatus: async () => {}, render() {}, toast() {},
   };
-  bindOfficialShelf(app);
-  shelf.hidden = false;
+  bindOfficialActions(app);
   async function click() {
     const tag = shelfHtml(row).match(/<button\b[^>]*data-official-action[^>]*>/)?.[0];
     assert.ok(tag, "a blocked action must still be reachable by button");
     assert.doesNotMatch(tag, /\sdisabled\b/);
     const action = tag.match(/data-official-action="([^"]*)"/)?.[1];
-    const card = { dataset: { officialId: row.id } };
-    const button = { dataset: { officialAction: action }, closest: () => card };
-    await shelf.onclick!({ target: { closest: (selector: string) => selector === "[data-official-action]" ? button : null } });
+    const slot = { dataset: row.installed ? { officialManageSlot: row.runtimeId } : { officialStoreSlot: row.id } };
+    const button = { dataset: { officialAction: action, officialId: row.id }, closest: () => slot };
+    await handler({ target: { closest: (s: string) => s === "[data-official-action]" ? button : null } });
   }
-  return { click, posts, dialogs };
+  return { click, posts, dialogs, location };
 }
 
-test("the management landing page opens installed plugin controls and still links to discovery", () => {
-  const row = { id: "gallery", name: "图库", version: "0.1.1", status: "active", enabled: true };
-  const html = renderPlugins({ state: { status: { plugins: [row] } } });
-  const panel = html.match(/<section\b[^>]*id="installed-plugins"[^>]*>/)?.[0];
-  assert.ok(panel);
-  assert.doesNotMatch(panel, /\shidden\b/);
-  assert.match(html, /<section\b[^>]*id="official-shelf"[^>]*\shidden\b/);
-  assert.match(html, /href="\/market\/"/);
+test("management shows uninstall for the exact installed runtime, including grouped children", () => {
+  const root = { id: "surf", name: "网上冲浪", version: "1", status: "active", enabled: true, console: { groupChildren: true } };
+  const child = { id: "surf/bilibili", name: "B 站", version: "1", status: "active", enabled: true };
+  const bridge = { ...child, id: "qq/gallery" };
+  const status = { plugins: [root, child, bridge] };
+  const state = { status, officialPlugins: [{ ...installed, id: "surf", runtimeId: "surf" }, { ...dependent, installed: true }, installed] };
+  const html = renderPlugins({ state });
+  assert.match(html, /href="#market"/);
+  assert.doesNotMatch(html, /id="official-shelf"|data-plugin-view=/);
+  const card = pluginCard(status, root, state);
+  assert.match(card, /data-official-id="surf" data-official-action="uninstall"/);
+  assert.match(card, /<details\b[\s\S]*?data-official-id="bilibili" data-official-action="uninstall"[\s\S]*?<\/details>/);
+  assert.doesNotMatch(pluginCard(status, bridge, state), /data-official-action/);
+  const detail = extensionPage({ state: { ...state, page: "plugin:surf%2Fbilibili" } }).render();
+  assert.match(detail, /data-runtime-id="surf\/bilibili"/);
+  assert.match(detail, /aria-label="卸载 B 站"/);
+  assert.doesNotMatch(detail, /aria-label="卸载 网上冲浪"/);
 });
 
-test("official rows show the short action, name, version and state without instructions or dependencies", () => {
+test("store exposes versioned installation and marks installed releases without uninstall options", () => {
   const html = shelfHtml(dependent);
-  assert.match(html, /B 站/);
   assert.match(html, /v1\.2\.0/);
-  assert.match(html, /未安装/);
-  assert.match(text(html.match(/<button\b[^>]*data-official-action[^>]*>([\s\S]*?)<\/button>/)![1]), /^安装$/);
-  const pending = renderOfficialShelf({ officialPlugins: [dependent], officialBusy: dependent.id });
+  assert.match(html, /aria-label="安装 B 站"/);
+  assert.doesNotMatch(html, /网上冲浪|data-official-action="uninstall"/);
+  const pending = renderStoreInstall({ officialPlugins: [dependent], officialBusy: dependent.id }, dependent.id);
   assert.match(pending.match(/<button\b[^>]*data-official-action[^>]*>/)![0], /\sdisabled\b/);
-  assert.doesNotMatch(text(html), /网上冲浪|安装说明|图库图片和标签/);
-  const existing = shelfHtml(installed);
+  const existing = renderStoreInstall({ officialPlugins: [installed] }, installed.id);
   assert.match(existing, /v0\.1\.1/);
-  assert.match(existing, /已启用/);
-  assert.match(text(existing.match(/<button\b[^>]*data-official-action[^>]*>([\s\S]*?)<\/button>/)![1]), /^卸载$/);
-  for (const [status, label] of [["failed", "加载失败"], ["blocked", "等待依赖"]]) {
-    const markup = shelfHtml({ ...installed, status });
-    assert.ok(markup.includes(label));
-    assert.ok(markup.includes("已启用"));
-  }
-  assert.match(shelfHtml({ ...installed, enabled: false }), /已停用/);
+  assert.match(existing, /已安装/);
+  assert.doesNotMatch(existing, /<button|卸载/);
+  assert.doesNotMatch(renderStoreInstall({ officialPlugins: [] }, "new-public-entry"), /<button/);
   assert.doesNotMatch(shelfHtml({ ...dependent, name: "<img src=x>" }), /<img src=x>/);
 });
 
@@ -144,6 +149,17 @@ test("uninstall requires confirmation and a failed operation reports the step an
   assert.ok(dialog.confirm);
   await assert.rejects(dialog.confirm, (failure: Error) => [error, ...rolledBack].every(line => failure.message.includes(line)));
   assert.deepEqual(ui.posts, [{ id: installed.id, action: "uninstall", planKey: installed.planKey }]);
+});
+
+test("removing a child from its own workspace returns to management after confirmation", async t => {
+  const plugin = { ...dependent, installed: true, action: "uninstall", label: "卸载 B 站插件", steps: [] };
+  const ui = controller(t, plugin, undefined, plugin.runtimeId);
+  await ui.click();
+  assert.ok(ui.dialogs[0].confirm);
+  assert.equal(ui.location.hash, "#plugin:surf%2Fbilibili");
+  await ui.dialogs[0].confirm();
+  assert.deepEqual(ui.posts, [{ id: "bilibili", action: "uninstall", planKey: plugin.planKey }]);
+  assert.equal(ui.location.hash, "#plugins");
 });
 
 test("a single-plugin install runs on click and reports a rejected plan in an escaped dialog", async t => {

@@ -42,7 +42,7 @@ const community = [...catalog.community].sort((a, b) =>
 const readme = [
   "<!-- Generated from catalog.json by tools/generate-catalog.mjs. -->",
   "# WhaleLife 插件市场",
-  "在这里找到作者、安装说明和反馈渠道。启动 WhaleLife 后，在控制台的「插件管理」中选择「发现插件」，也可以按默认端口[打开本机插件市场](http://127.0.0.1:9270/market/)。",
+  "在这里找到作者、安装说明和反馈渠道。启动 WhaleLife 后，可以从控制台首页或侧栏[进入插件商店](http://127.0.0.1:9270/#market)，并在「插件管理」中设置或卸载已安装的官方插件。",
   "## 官方插件",
   "以下插件由 WhaleLife 团队开发和维护。",
   table(catalog.official),

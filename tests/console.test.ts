@@ -9,18 +9,23 @@ import { boot } from "../core/index.ts";
 import { persona } from "../core/persona.ts";
 import { startWeb } from "../core/web.ts";
 
-test("plugin management opens the bundled market without installed plugins", async t => {
+test("plugin management opens the store inside the console and public catalog links still work", async t => {
   const { renderPlugins } = await import(new URL("../core/ui/views.js", import.meta.url).href);
   const management = renderPlugins({ state: { status: { plugins: [] } } });
-  const entry = management.match(/<a\b[^>]*href="([^"]+)"[^>]*>发现插件<\/a>/);
-  assert.ok(entry);
-  assert.equal(entry[1], "/market/");
+  assert.match(management, /href="#market"/);
+  assert.doesNotMatch(management, /data-plugin-view|id="official-shelf"/);
   const web = await startWeb({ web: { port: 0 } }, { channels: {}, logger: { info() {} } }, {});
   t.after(() => web.close());
   const address = web.server.address();
   assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
-  const market = new URL(entry[1], base);
+  const shell = await fetch(base);
+  assert.equal(shell.status, 200);
+  assert.match(await shell.text(), /href="#market" data-page="market"/);
+  const store = await fetch(base + "/ui/plugin-store.js");
+  assert.equal(store.status, 200);
+  assert.match(store.headers.get("content-type") || "", /javascript/);
+  const market = new URL("/market/", base);
   const page = await fetch(market);
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-type") || "", /^text\/html/);
@@ -50,6 +55,11 @@ test("plugin management opens the bundled market without installed plugins", asy
   assert.equal((await fetch(new URL("tools/check-official.mjs", market))).status, 404);
   assert.equal((await fetch(market, { headers: { Origin: "https://example.invalid" } })).status, 403);
   assert.equal((await fetch(base + "/api/status")).status, 401);
+  const login = await fetch(base + "/api/login", { method: "POST", body: "{}" });
+  const cookie = login.headers.get("set-cookie")!.split(";")[0];
+  const signedIn = await fetch(market, { redirect: "manual", headers: { cookie } });
+  assert.equal(signedIn.status, 302);
+  assert.equal(signedIn.headers.get("location"), "/#market");
 });
 
 test("console config API persists model selection, protects secrets and changes the next chat request", async () => {

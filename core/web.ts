@@ -46,6 +46,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
     "models.js",
     "views.js",
     "official-plugins.js",
+    "plugin-store.js",
     "personas.js",
     "memory.js",
     "context.js",
@@ -105,11 +106,16 @@ export async function startWeb(config: any, services: any, runtime: any) {
       }
       if (req.method === "GET" && pathname.startsWith("/market/")) {
         const file = pathname.slice("/market/".length) || "index.html";
+        if (file === "index.html" && authorized(req)) {
+          res.writeHead(302, { Location: "/#market", Vary: "Cookie", "Cache-Control": "no-store" });
+          return res.end();
+        }
         const type = marketFiles.get(file);
         if (!type) return send(404, { error: "文件不存在" });
         const content = await readFile(new URL("../market/" + file, import.meta.url));
         res.writeHead(200, {
           "Content-Type": type + "; charset=utf-8",
+          ...(file === "index.html" ? { Vary: "Cookie" } : {}),
           "Cache-Control": "no-cache",
           "X-Content-Type-Options": "nosniff",
           "X-Frame-Options": "DENY",
@@ -137,7 +143,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
           "Cache-Control": "no-store",
           "X-Frame-Options": "DENY",
           "Content-Security-Policy":
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'",
         });
         res.end(await readFile(new URL("./ui/index.html", import.meta.url)));
         return;

@@ -42,6 +42,8 @@ async function fixture(t: TestContext, broken = false, required = "1.0.0") {
 test("install previews missing dependencies, rejects stale plans, and uninstalls only the selected child", async t => {
   const f = await fixture(t);
   const first = await f.get("bilibili");
+  assert.equal(first.runtimeId, "surf/bilibili");
+  assert.equal((await f.get("surf")).runtimeId, "surf");
   assert.deepEqual(first.steps.map(s => [s.action, s.id]), [["install","surf"], ["install","bilibili"]]);
   await f.apply("surf");
   await assert.rejects(f.manager.apply(first), /刷新/);

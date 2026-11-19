@@ -121,7 +121,7 @@ export class OfficialPlugins {
       verbs[s.action] + (/^[A-Za-z]/.test(s.name) ? " " : "") + s.name + (s.id === "bilibili" ? "插件" : "")).join("并");
     const planKey = action ? createHash("sha256").update(JSON.stringify([item.entry.id, action,
       steps.map(s => { const p = items.get(s.id)!; return [s, p.enabled, p.active, (p.existing ?? p.target)?.sha256]; })])).digest("hex") : "";
-    return { id: item.entry.id, name: item.entry.name, description: card?.description, repository: item.entry.repository,
+    return { id: item.entry.id, runtimeId: item.pathId, name: item.entry.name, description: card?.description, repository: item.entry.repository,
       installation: card?.installation, version: item.target?.version ?? item.installedVersion ?? null,
       installedVersion: item.installedVersion ?? null, installed: item.installed, enabled: item.installed && item.enabled,
       status: this.runtime.records.get(item.pathId)?.status ?? null,
