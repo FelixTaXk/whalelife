@@ -6,7 +6,7 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Memory } from "../core/memory.ts";
 import { MemoryEngine, MAX_DAILY_MEMORY_TOKENS, validateMemoryState } from "../core/memory-engine.ts";
 import { MemoryAdmin } from "../core/memory-admin.ts";
@@ -118,6 +118,49 @@ test("confirmed historical tool text is projected per reply and restored without
   assert.equal(degraded.tool_projections.length, 0);
   assert.match(degraded.warnings.join(" "), /仅显示档案原文/);
   assert.deepEqual((await admin.session("one", 2, 1)).warnings, []);
+});
+
+test("an existing confirmation on a mixed reply keeps its exact preview until the user restores it", async t => {
+  const f = await fixture(t, 0);
+  const admin = new MemoryAdmin(f.memory, { root: f.root, locks: new Set() }, f.services.logger);
+  const invoke = '<｜DSML｜invoke name="example_tool"></｜DSML｜invoke>';
+  const wrapped = "<｜DSML｜tool_calls>" + invoke + "</｜DSML｜tool_calls>";
+  const raw = wrapped + "\n正文\n" + invoke;
+  const oldText = TOOL_TEXT_NOTICE + "\n正文\n" + invoke;
+  const newText = TOOL_TEXT_NOTICE + "\n正文\n" + TOOL_TEXT_NOTICE;
+  const id = "mixed-reply", session = "one";
+  await f.memory.appendEvent({ session, id, type: "message", role: "assistant", text: raw, origin: { action: "生成回复" } });
+  const sampleId = "old-html-example", sample = "<pre>\n" + wrapped + "\n</pre>";
+  await f.memory.appendEvent({ session, id: sampleId, type: "message", role: "assistant", text: sample, origin: { action: "生成回复" } });
+  const oldRevision = createHash("sha256").update(JSON.stringify([session, id, raw, oldText])).digest("hex");
+  const oldSampleText = "<pre>\n" + TOOL_TEXT_NOTICE + "\n</pre>";
+  const sampleRevision = createHash("sha256").update(JSON.stringify([session, sampleId, sample, oldSampleText])).digest("hex");
+  const latest = (await admin.session(session)).tool_projections[0];
+  assert.equal(latest.text, newText);
+  await f.engine.setToolProjection(session, id, latest.revision, true);
+  const state = await f.engine.state(session);
+  state.records.find(record => record.id === id).tool_protocol_projection = oldRevision;
+  state.records.push({ id: sampleId, kind: "event-state", status: "active", pinned: false, tool_protocol_projection: sampleRevision });
+  await writeFile(join(f.memory.sessionDir(session), "knowledge", "state.json"), JSON.stringify(state));
+
+  assert.equal((await f.engine.contextRows(session))[0].text, oldText);
+  assert.deepEqual((await admin.session(session)).tool_projections[0], {
+    record_id: id, enabled: true, revision: oldRevision, text: oldText,
+  });
+  await f.engine.setToolProjection(session, id, oldRevision, false);
+  assert.equal((await f.engine.contextRows(session))[0].text, raw);
+  assert.equal((await admin.session(session)).tool_projections[0].revision, latest.revision);
+  await assert.rejects(f.engine.setToolProjection(session, id, oldRevision, true), /重新查看/);
+  await f.engine.setToolProjection(session, id, latest.revision, true);
+  assert.equal((await f.engine.contextRows(session))[0].text, newText);
+  assert.equal((await f.memory.readSession(session))[0].text, raw);
+  // The newer recognizer protects HTML samples, but the previously approved view can still be undone.
+  const review = (await admin.session(session)).tool_projections.find(p => p.record_id === sampleId);
+  assert.equal(review?.revision, sampleRevision);
+  assert.equal(review?.enabled, true);
+  await f.engine.setToolProjection(session, sampleId, sampleRevision, false);
+  assert.equal((await f.engine.contextRows(session))[1].text, sample);
+  assert.ok(!(await admin.session(session)).tool_projections.some(p => p.record_id === sampleId));
 });
 
 test("restarting preserves Markdown only across manual projections and clears it after plugin input exclusions", async t => {

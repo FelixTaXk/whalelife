@@ -5,6 +5,7 @@ import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { boot } from "../core/index.ts";
 import { EmptyModelResponseError } from "../core/model-response-error.ts";
+import { TOOL_TEXT_NOTICE } from "../core/tool-protocol-text.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
 
 type Reply = { text?: string | string[]; reasoning?: string; finish?: string; tool?: true | string; done?: false };
@@ -126,42 +127,52 @@ function dsmlCall(name = "perform_once", bars = "｜｜") {
   ].join("\n");
 }
 
-test("a text-only DSML block after a real tool call stays out of delivery and subsequent history", async t => {
-  const preface = "我来处理。\n";
-  const before = "结果已返回。";
-  const after = "这是结果说明。";
-  const f = await fixture(t, [
-    { text: preface, reasoning: privateThought, tool: true, finish: "tool_calls" },
-    { text: [before + "\n", ...dsmlCall(), "\n" + after] }, // Split even the opening and closing delimiters.
-    { text: ["后", "续", "正常。"] },
-  ]);
-  const chunks: string[] = [];
-  const result = await f.chat("请完成合成测试动作。", chunk => chunks.push(chunk));
-  assert.ok(result.startsWith(before) && result.endsWith(after));
-  assert.match(result, /标记|工具调用文本/);
-  assert.doesNotMatch(result, /DSML|invoke|perform_once|SYNTHETIC_DSML_ARGUMENT/);
-  assert.equal(chunks.join(""), preface + result);
-  assert.equal(f.actions(), 1);
-  assert.equal(f.requests.length, 2);
-  assert.equal(f.requests[1].messages.find((row: any) => row.tool_calls)?.content, preface);
-  const rows = await f.app.memory.readSession(f.id);
-  assert.deepEqual(rows.filter((row: any) => row.role === "assistant").map((row: any) => row.text), [result]);
-  const assistant = rows.find((row: any) => row.role === "assistant");
-  assert.equal(assistant.tool_protocol_original, [before, dsmlCall(), after].join("\n"));
-  assert.equal(rows.filter((row: any) => row.type === "tool" && row.name === "perform_once").length, 1);
+const wrappedCall = dsmlCall();
+const withoutOpener = wrappedCall.split("\n").slice(1).join("\n");
+const standaloneInvoke = withoutOpener.split("\n").slice(0, -1).join("\n");
+const misspelledOpener = wrappedCall.replace("tool_calls>", "toolcalls>");
 
-  const nextChunks: string[] = [];
-  assert.equal(await f.chat("继续聊天。", chunk => nextChunks.push(chunk)), "后续正常。");
-  assert.deepEqual(nextChunks, ["后", "续", "正常。"]);
-  const nextContext = JSON.stringify(f.requests[2].messages);
-  assert.match(nextContext, /标记|工具调用文本/);
-  assert.doesNotMatch(nextContext, /DSML|SYNTHETIC_DSML_ARGUMENT/);
-  assert.equal(f.requests.length, 3);
-  assert.equal(f.actions(), 1);
-});
+for (const [shape, block] of [
+  ["canonical wrapper", wrappedCall],
+  ["standalone invoke", standaloneInvoke],
+  ["missing opener with a closing tag", withoutOpener],
+  ["toolcalls opener with a tool_calls closer", misspelledOpener],
+]) {
+  test(`text-only DSML (${shape}) after a real tool call stays out of delivery and subsequent history`, async t => {
+    const preface = "我来处理。\n";
+    const before = "结果已返回。\r\n```js\r\nconst ok = true;\r\n```\r\n";
+    const after = "\n这是结果说明。  ";
+    const f = await fixture(t, [
+      { text: preface, reasoning: privateThought, tool: true, finish: "tool_calls" },
+      { text: [before, ...block, after] }, // Split even the opening and closing delimiters.
+      { text: ["后", "续", "正常。"] },
+    ]);
+    const chunks: string[] = [];
+    const result = await f.chat("请完成合成测试动作。", chunk => chunks.push(chunk));
+    assert.equal(result, before + TOOL_TEXT_NOTICE + after);
+    assert.equal(chunks.join(""), preface + result);
+    assert.equal(f.actions(), 1);
+    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests[1].messages.find((row: any) => row.tool_calls)?.content, preface);
+    const rows = await f.app.memory.readSession(f.id);
+    assert.deepEqual(rows.filter((row: any) => row.role === "assistant").map((row: any) => row.text), [result]);
+    const assistant = rows.find((row: any) => row.role === "assistant");
+    assert.equal(assistant.tool_protocol_original, before + block + after);
+    assert.equal(rows.filter((row: any) => row.type === "tool" && row.name === "perform_once").length, 1);
+
+    const nextChunks: string[] = [];
+    assert.equal(await f.chat("继续聊天。", chunk => nextChunks.push(chunk)), "后续正常。");
+    assert.deepEqual(nextChunks, ["后", "续", "正常。"]);
+    const nextContext = JSON.stringify(f.requests[2].messages);
+    assert.ok(nextContext.includes(TOOL_TEXT_NOTICE));
+    assert.doesNotMatch(nextContext, /DSML|SYNTHETIC_DSML_ARGUMENT/);
+    assert.equal(f.requests.length, 3);
+    assert.equal(f.actions(), 1);
+  });
+}
 
 test("structured calls execute once and preserve literal content even when the structured field arrives last", async t => {
-  const example = dsmlCall();
+  const example = [wrappedCall, standaloneInvoke, misspelledOpener].join("\n");
   const f = await fixture(t, [
     { text: [...example, ""], reasoning: privateThought, tool: true, finish: "tool_calls" },
     { text: "已完成。" },
@@ -184,10 +195,11 @@ test("legitimate DSML examples, incomplete markup and short responses survive fr
     { prompt: "继续。", text: "<｜D" },
     { prompt: "继续。", text: example.slice(0, example.lastIndexOf("</")) },
     { prompt: "继续。", text: dsmlCall("unavailable_test_tool") },
-    { prompt: "继续。", text: ["前文", "```xml", example, "```", "后文"].join("\n") },
-    { prompt: "请逐字展示 DSML 工具调用的代码示例。", text: example },
+    { prompt: "继续。", text: ["前文", "```xml", example, withoutOpener, misspelledOpener, "```", "后文"].join("\n") },
+    { prompt: "请逐字展示 DSML 工具调用的代码示例。", text: [example, standaloneInvoke, withoutOpener, misspelledOpener].join("\n\n") },
   ];
-  const f = await fixture(t, [...cases.map(({ text }) => ({ text: [...text] })), { text: [...example] }]);
+  const nextText = [example, "处理下一项。", standaloneInvoke, "最后一项。", misspelledOpener].join("\n");
+  const f = await fixture(t, [...cases.map(({ text }) => ({ text: [...text] })), { text: [...nextText] }]);
   for (const { prompt, text } of cases) {
     const chunks: string[] = [];
     assert.equal(await f.chat(prompt, chunk => chunks.push(chunk)), text);
@@ -198,15 +210,14 @@ test("legitimate DSML examples, incomplete markup and short responses survive fr
   // The earlier request for literal examples does not authorize showing a leaked block in the next turn.
   const chunks: string[] = [];
   const notice = await f.chat("完成今天的合成任务。", chunk => chunks.push(chunk));
-  assert.match(notice, /标记|工具调用文本/);
-  assert.doesNotMatch(notice, /DSML|SYNTHETIC_DSML_ARGUMENT/);
+  assert.equal(notice, [TOOL_TEXT_NOTICE, "处理下一项。", TOOL_TEXT_NOTICE, "最后一项。", TOOL_TEXT_NOTICE].join("\n"));
   assert.equal(chunks.join(""), notice);
   assert.equal(f.actions(), 0);
   assert.equal(f.requests.length, cases.length + 1);
 });
 
 test("a session that offered no tools preserves a literal call naming a registered tool", async t => {
-  const example = dsmlCall();
+  const example = [wrappedCall, standaloneInvoke, withoutOpener, misspelledOpener].join("\n\n");
   const f = await fixture(t, [{ text: [...example] }], "off");
   const chunks: string[] = [];
   assert.equal(await f.chat(undefined, chunk => chunks.push(chunk)), example);

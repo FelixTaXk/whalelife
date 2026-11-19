@@ -12,7 +12,7 @@ import { attribution, collectOrigins, originOf, pluginOrigin, speakerOf, validat
 import type { DocumentWrite, SessionDocument } from "./plugin-api.ts";
 import { TRANSIENT_REPLY } from "./tool-retention.ts";
 import { conversationRows } from "./channel-history.ts";
-import { projectToolProtocolText } from "./tool-protocol-text.ts";
+import { projectToolProtocolText, projectWrappedToolProtocolText } from "./tool-protocol-text.ts";
 import { diaryRowInScope, validateDiaryEntry, validateDiaryScope, validateDiaryState, validDiarySources,
   type DiaryEntry, type DiaryFailure } from "./memory-diary-state.ts";
 
@@ -30,13 +30,28 @@ const temporaryPlaceholder = (row: any) => row.type === "message" && row.role ==
   row.transient === true && row.text === TRANSIENT_REPLY;
 const excludedInputs = (state: { records: any[] }) => new Set<string>(
   state.records.filter(x => x.kind === "event-state" && x.context_excluded === true).map(x => x.id));
-export function legacyToolProjection(row: any, session: string) {
+export function legacyToolProjection(row: any, session: string, project = projectToolProtocolText) {
   if (row?.type !== "message" || row.role !== "assistant" || row.session !== session ||
       typeof row.id !== "string" || !row.id || row.origin?.action !== "生成回复" ||
       row.delivery_id !== undefined || row.transient || row.tool_protocol_original !== undefined ||
-      typeof row.text !== "string") return;
-  const text = projectToolProtocolText(row.text);
+      typeof row.text !== "string" || !row.text.includes("DSML")) return;
+  const text = project(row.text);
   if (text !== row.text) return { text, revision: hash(JSON.stringify([session, row.id, row.text, text])) };
+}
+export function legacyToolPreviews(row: any, session: string) {
+  const current = legacyToolProjection(row, session);
+  const wrappedPreview = () => legacyToolProjection(row, session, projectWrappedToolProtocolText);
+  const previousOnly = current ? undefined : wrappedPreview();
+  if (current || previousOnly) return {
+    current,
+    // Only the exact preview the user confirmed may replace the archived text.
+    confirmed(revision?: string) {
+      if (!revision) return;
+      if (current?.revision === revision) return current;
+      const previous = previousOnly ?? wrappedPreview();
+      if (previous?.revision === revision) return previous;
+    },
+  };
 }
 function effectiveRows(session: string, rows: any[], state: { records: any[] }) {
   const events = new Map(state.records.filter(x => x.kind === "event-state").map(x => [x.id, x]));
@@ -44,8 +59,8 @@ function effectiveRows(session: string, rows: any[], state: { records: any[] }) 
     .map(row => {
       const revision = events.get(row.id)?.tool_protocol_projection;
       if (!revision) return row;
-      const projection = legacyToolProjection(row, session);
-      return projection && projection.revision === revision ? { ...row, text: projection.text } : row;
+      const projection = legacyToolPreviews(row, session)?.confirmed(revision);
+      return projection ? { ...row, text: projection.text } : row;
     });
 }
 const inputVersions = (state: { records: any[] }) => {
@@ -418,9 +433,11 @@ export class MemoryEngine {
     try {
       return await this.update(id, async s => {
         const rows = (await this.memory.readSession(id)).filter(row => row.id === recordId);
-        if (rows.length !== 1 || legacyToolProjection(rows[0], id)?.revision !== revision)
-          throw Object.assign(Error("原文或预览已变更，请重新查看该条助手回复"), { status: 409 });
         let item = s.records.find(x => x.id === recordId);
+        const previews = rows.length === 1 ? legacyToolPreviews(rows[0], id) : undefined;
+        const displayed = previews?.confirmed(item?.tool_protocol_projection) ?? previews?.current;
+        if (displayed?.revision !== revision)
+          throw Object.assign(Error("原文或预览已变更，请重新查看该条助手回复"), { status: 409 });
         if (item && item.kind !== "event-state") throw Error("消息ID与其他记忆记录冲突");
         if ((item?.tool_protocol_projection === revision) === enabled) return { enabled };
         if (enabled) {

@@ -34,7 +34,7 @@ import {
   type SessionIndex,
 } from "./memory.ts";
 import type { Logger } from "./logger.ts";
-import { legacyToolProjection, MemoryEngine, validateMemoryState } from "./memory-engine.ts";
+import { legacyToolPreviews, MemoryEngine, validateMemoryState } from "./memory-engine.ts";
 import { diaryContext, type DiaryContext, type DiaryEntry } from "./memory-diary.ts";
 import { contextPolicy, matchingHistory, memoryWindow } from "./session-context.ts";
 import { persona } from "./persona.ts";
@@ -850,15 +850,20 @@ export class MemoryAdmin {
           )
         : rows.items;
       const items = matched.slice(offset, offset + limit);
-      const toolProjections = items.flatMap(row => {
-        const projection = legacyToolProjection(row, id);
-        return projection ? [{ record_id: row.id, ...projection, enabled: false }] : [];
+      const candidates = items.flatMap(row => {
+        const previews = legacyToolPreviews(row, id);
+        return previews ? [{ record_id: row.id, previews }] : [];
       });
-      if (toolProjections.length) {
+      const toolProjections: { record_id: string; text: string; revision: string; enabled: boolean }[] = [];
+      if (candidates.length) {
         try {
           const state = await new MemoryEngine(this.memory).state(id);
           const approved = new Map(state.records.filter(x => x.kind === "event-state").map(x => [x.id, x.tool_protocol_projection]));
-          for (const item of toolProjections) item.enabled = approved.get(item.record_id) === item.revision;
+          for (const { record_id, previews } of candidates) {
+            const confirmed = previews.confirmed(approved.get(record_id));
+            const visible = confirmed ?? previews.current;
+            if (visible) toolProjections.push({ record_id, ...visible, enabled: !!confirmed });
+          }
         } catch {
           toolProjections.length = 0;
           rows.warnings.push("无法读取工具标记的确认状态，本页仅显示档案原文");

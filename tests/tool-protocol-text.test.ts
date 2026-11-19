@@ -13,6 +13,15 @@ const block = [
 ].join("\n");
 const emptyInvoke = `<${marker}invoke name="read_archive"></${marker}invoke>`;
 const compact = `<${marker}tool_calls>${emptyInvoke}</${marker}tool_calls>`;
+const orphan = [
+  `<${marker}invoke name="hands_write">`,
+  `<${marker}parameter name="path" string="true">tmp/a.md</${marker}parameter>`,
+  `<${marker}parameter name="text" string="true">第一行\n第二行</${marker}parameter>`,
+  `</${marker}invoke>`,
+].join("\n");
+const rootClose = `</${marker}tool_calls>`;
+const typoOpen = `<${marker}toolcalls>`;
+const typoClose = `</${marker}toolcalls>`;
 
 test("both observed block spellings are replaced in place with adjacent bytes preserved", () => {
   const windows = block.replaceAll("\n", "\r\n");
@@ -78,6 +87,94 @@ test("an explicit literal example introduction protects an unfenced sample", () 
   for (const lead of ["下面给出一个示例：", "语法如下：", "例如，", "For example,", "Example:", "Here is the syntax:"]) {
     const excerpt = lead + "\n\n" + block + "\n\n接下来调用工具。\n";
     assert.equal(projectToolProtocolText(excerpt + compact, names), excerpt + TOOL_TEXT_NOTICE);
+  }
+});
+
+test("orphan invokes and the observed toolcalls spelling preserve surrounding prose in place", () => {
+  const variants = [
+    emptyInvoke, orphan, orphan + "\n" + rootClose,
+    [typoOpen, orphan, emptyInvoke, rootClose].join("\n"),
+    [typoOpen, orphan, emptyInvoke, typoClose].join("\n"),
+  ];
+  const before = "回复开头🙂\r\n  ";
+  for (const variant of variants) {
+    for (const after of ["同一行继续\t\r\n\r\n尾注  ", "\r\n\t保留缩进的尾注  "]) {
+      const input = before + variant.replaceAll("\n", "\r\n") + after;
+      assert.equal(projectToolProtocolText(input, names), before + TOOL_TEXT_NOTICE + after);
+    }
+  }
+});
+
+test("orphan and misspelled-root calls use offered names online and valid names in historical previews", () => {
+  for (const variant of [orphan, orphan + "\n" + rootClose, [typoOpen, orphan, rootClose].join("\n")]) {
+    const historical = variant.replace("hands_write", "old_tool-2");
+    assert.equal(projectToolProtocolText(historical), TOOL_TEXT_NOTICE);
+    assert.equal(projectToolProtocolText(historical, names), historical);
+    assert.equal(projectToolProtocolText(variant, new Set()), variant);
+    for (const invalid of ["", "bad/name", "x".repeat(65)]) {
+      const input = variant.replace("hands_write", invalid);
+      assert.equal(projectToolProtocolText(input), input);
+    }
+  }
+});
+
+test("unsupported endings, incomplete invokes and rejected outer blocks survive as a whole", () => {
+  const callsClose = `</${marker}calls>`;
+  const unknown = orphan.replace("hands_write", "other");
+  const malformed = orphan.replace(`</${marker}parameter>`, `</${marker}param>`);
+  const rejected = [
+    orphan + "\n" + callsClose, orphan + "\n" + typoClose,
+    orphan + "\n" + rootClose.replaceAll(marker, "|DSML|"),
+    malformed, orphan.replace(`</${marker}invoke>`, ""),
+    orphan.replace(' name="hands_write"', ' name="hands_write" extra="yes"'),
+    [typoOpen, emptyInvoke, unknown, rootClose].join("\n"),
+    [typoOpen, malformed, emptyInvoke, rootClose].join("\n"),
+    [typoOpen, emptyInvoke, callsClose].join("\n"),
+    [`<${marker}tool_calls>`, emptyInvoke, typoClose].join("\n"),
+    [`<${marker}tool_call>`, emptyInvoke, rootClose].join("\n"),
+    [typoOpen, emptyInvoke].join("\n"),
+    [typoOpen, emptyInvoke, rootClose.replaceAll(marker, "|DSML|")].join("\n"),
+  ];
+  const tail = "\r\n\r\n正常正文继续。\r\n";
+  for (const text of rejected) {
+    assert.equal(projectToolProtocolText(text + tail + compact, names), text + tail + TOOL_TEXT_NOTICE);
+  }
+});
+
+test("new variants remain literal inside Markdown code and quotation contexts", () => {
+  for (const variant of [orphan, orphan + "\n" + rootClose, [typoOpen, emptyInvoke, rootClose].join("\n")]) {
+    const excerpts = [
+      ["```xml", variant, "```"].join("\n"),
+      ["~~~", variant, "~~~"].join("\n"),
+      ["<pre><code>", variant, "</code></pre>"].join("\n"),
+      ["语法写作 ``", variant, "``。"].join("\n"),
+      "> 引用中的下一行\n" + variant,
+      variant.split("\n").map(line => "    " + line).join("\n"),
+      ["- ```xml", ...variant.split("\n").map(line => "  " + line), "  ```"].join("\n"),
+      "正文提及 " + variant,
+    ];
+    for (const excerpt of excerpts) {
+      const prefix = excerpt + "\n\n结束引述。\n";
+      assert.equal(projectToolProtocolText(prefix + variant, names), prefix + TOOL_TEXT_NOTICE);
+    }
+  }
+  for (const code of [emptyInvoke, rootClose]) {
+    const suffix = "\n\n    " + code;
+    assert.equal(projectToolProtocolText(orphan + suffix, names), TOOL_TEXT_NOTICE + suffix);
+  }
+  const fencedOpening = ["```xml", `<${marker}tool_calls>`, "```", "继续处理。", ""].join("\n");
+  assert.equal(projectToolProtocolText(fencedOpening + orphan + "\n" + rootClose, names),
+    fencedOpening + TOOL_TEXT_NOTICE);
+});
+
+test("all invokes in an explicitly introduced unfenced example remain literal", () => {
+  for (const example of [
+    [emptyInvoke, emptyInvoke].join("\n"),
+    [orphan, emptyInvoke, rootClose].join("\n"),
+    [typoOpen, orphan, emptyInvoke, rootClose].join("\n"),
+  ]) {
+    const prefix = "For example,\n\n" + example + "\n\n接下来调用工具。\n";
+    assert.equal(projectToolProtocolText(prefix + orphan, names), prefix + TOOL_TEXT_NOTICE);
   }
 });
 
