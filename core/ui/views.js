@@ -202,7 +202,7 @@ export function renderPlugins(app) {
   const cards = visiblePluginCards(app.state.status);
   return `<header class="page-heading plugin-hub-heading">
     <div><h1>插件管理</h1><p>${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</p></div>
-    <a class="btn" href="#market">${icon("cube")}插件商店</a>
+    <a class="btn primary store-launch" href="#market" aria-haspopup="dialog" aria-controls="store-drawer">${icon("cube")}插件商店</a>
   </header>
   <section id="installed-plugins" aria-label="已安装插件">
     <div data-official-read-status role="status"></div>

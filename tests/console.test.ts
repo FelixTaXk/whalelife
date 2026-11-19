@@ -9,7 +9,7 @@ import { boot } from "../core/index.ts";
 import { persona } from "../core/persona.ts";
 import { startWeb } from "../core/web.ts";
 
-test("plugin management opens the store inside the console and public catalog links still work", async t => {
+test("plugin management opens the store drawer and public catalog links still work", async t => {
   const { renderPlugins } = await import(new URL("../core/ui/views.js", import.meta.url).href);
   const management = renderPlugins({ state: { status: { plugins: [] } } });
   assert.match(management, /href="#market"/);
@@ -21,7 +21,11 @@ test("plugin management opens the store inside the console and public catalog li
   const base = `http://127.0.0.1:${address.port}`;
   const shell = await fetch(base);
   assert.equal(shell.status, 200);
-  assert.match(await shell.text(), /href="#market" data-page="market"/);
+  const shellHTML = await shell.text();
+  assert.match(shellHTML, /<dialog\b[^>]*\bid="store-drawer"/);
+  const sidebar = shellHTML.match(/<aside\b[^>]*\bid="sidebar"[^>]*>[\s\S]*?<\/aside>/)?.[0];
+  assert.ok(sidebar);
+  assert.doesNotMatch(sidebar, /href="#market"/);
   const store = await fetch(base + "/ui/plugin-store.js");
   assert.equal(store.status, 200);
   assert.match(store.headers.get("content-type") || "", /javascript/);

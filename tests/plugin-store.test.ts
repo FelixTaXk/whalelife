@@ -22,8 +22,10 @@ test("the native store keeps official order, sorts only community, and does not 
   assert.doesNotMatch(all, /99991/);
   assert.match(all, /962935021/);
   assert.match(all, /提交插件/);
-  assert.match(all, /原仓库 · 加星/);
-  assert.match(all, /作者 &lt;示例&gt;/);
+  assert.match(all, /type="search" data-store-search/);
+  const detail = renderStore({ state: { ...state, storeDetail: "zeta" } });
+  assert.match(detail, /原仓库 · 加星/);
+  assert.match(detail, /作者 &lt;示例&gt;/);
   assert.deepEqual(rows(renderStore({ state: { ...state, storeSort: "date" } })), ["zeta", "alpha", "recent", "popular"]);
   assert.deepEqual(rows(renderStore({ state: { ...state, storeView: "community" } })), ["popular", "recent"]);
   const officialOnly = renderStore({ state: { ...state, storeView: "official" } });
@@ -32,26 +34,44 @@ test("the native store keeps official order, sorts only community, and does not 
   assert.match(renderStore({ state: { storeView: "community", bundledStore: { official: [], community: [] } } }), /暂无收录的社区插件/);
 });
 
+test("the drawer filters cards by official name, ID and author without changing the catalog", () => {
+  const state = { bundledStore: bundled, storeSearch: " ALPh " };
+  assert.deepEqual(rows(renderStore({ state })), ["alpha"]);
+  assert.deepEqual(rows(renderStore({ state: { ...state, storeSearch: "作者" } })), ["zeta", "alpha", "popular", "recent"]);
+  const miss = renderStore({ state: { ...state, storeSearch: "<xyz>" } });
+  assert.match(miss, /没有找到匹配的插件/);
+  assert.doesNotMatch(miss, /<xyz>/);
+  assert.match(renderStore({ state: { ...state, storeDetail: "retired" } }), /未找到这个插件/);
+});
+
 test("the storefront exposes install only for matching local identities and never offers uninstall", () => {
   const plans = [
     { ...first, installed: true, installedVersion: "1.2.3", version: "1.3.0" },
-    { ...second, installed: false, version: "2.0.0" },
+    { ...second, installed: false, version: "2.0.0", action: "install" },
   ];
   const state = { bundledStore: bundled, officialPlugins: plans };
   const local = renderStore({ state });
   assert.match(local, /v1\.2\.3/);
   assert.match(local, /已安装/);
-  assert.match(local, /data-official-action="install"/);
+  assert.match(local, /可安装/);
+  assert.doesNotMatch(local, /data-official-action=/);
+  const install = renderStore({ state: { ...state, storeDetail: second.id } });
+  assert.match(install, /data-official-action="install"/);
+  assert.match(install, /v2\.0\.0/);
+  const installed = renderStore({ state: { ...state, storeDetail: first.id } });
+  assert.match(installed, /已安装/);
+  assert.doesNotMatch(installed, /data-official-action=/);
   assert.doesNotMatch(local, /data-official-action="uninstall"/);
   const renamed = { ...second, name: "不匹配的名称" };
   const changedRepo = { ...first, repository: "https://github.com/other/zeta" };
   for (const item of [renamed, changedRepo, entry("new")]) {
-    const remote = renderStore({ state: { ...state, publishedStore: { official: [item], community: [] } } });
+    const remote = renderStore({ state: { ...state, storeDetail: item.id, publishedStore: { official: [item], community: [] } } });
     assert.doesNotMatch(remote, /data-official-store-slot|data-official-action/);
     assert.match(remote, /安装说明/);
   }
-  const community = renderStore({ state: { ...state, storeView: "community" } });
+  const community = renderStore({ state: { ...state, storeView: "community", storeDetail: popular.id } });
   assert.doesNotMatch(community, /data-official-store-slot|data-official-action/);
+  assert.match(community, /安装说明/);
 });
 
 test("a failed public refresh keeps the verified local list and permits a later refresh", async t => {

@@ -30,10 +30,10 @@ const pages = {
   bindings: { name: "使用配置", render: renderBindings, bind: bindBindings },
   chat: { name: "对话", render: renderChat, bind: bindChat },
   plugins: { name: "插件管理", render: renderPlugins, bind: bindPlugins },
-  market: { name: "插件商店", render: renderStore, bind: bindStore },
   logs: { name: "运行日志", render: renderLogs, bind: bindLogs },
 };
 const $ = (id) => document.getElementById(id);
+const storeRoute = () => /^#market(?:\/([a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*))?$/.exec(location.hash);
 document
   .querySelectorAll("[data-icon]")
   .forEach((el) => (el.innerHTML = icon(el.dataset.icon)));
@@ -69,7 +69,23 @@ class ConsoleApp {
   constructor() {
     this.state.page = this.pageFromHash();
     window.addEventListener("hashchange", () => {
-      this.state.page = this.pageFromHash();
+      this.storeNavigating = false;
+      const route = storeRoute();
+      const page = this.pageFromHash();
+      if (route && this.authenticated) {
+        if (page !== this.state.page) {
+          this.hideStore();
+          this.state.page = page;
+          this.render();
+        }
+        this.restoreStoreRoute(route);
+        return;
+      }
+      if ($("store-drawer").open) {
+        this.hideStore();
+        if (page === this.state.page) return;
+      }
+      this.state.page = page;
       this.bindingsDirty = false;
       if (this.state.page === "memory") this.state.memoryLoadedTab = null;
       document.body.classList.remove("sidebar-open");
@@ -79,6 +95,24 @@ class ConsoleApp {
         this.syncView();
         if (this.state.page === "memory") loadMemory(this);
       }
+    });
+    this.content.addEventListener("click", event => {
+      const link = event.target.closest('a[href="#market"]');
+      if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      this.storeTrigger = link;
+      history.pushState({ storeOrigin: this.state.page }, "", "#market");
+      this.displayStore(null);
+    });
+    const drawer = $("store-drawer");
+    drawer.addEventListener("cancel", event => {
+      event.preventDefault();
+      this.leaveStore(false);
+    });
+    drawer.addEventListener("click", event => {
+      if (event.target !== drawer) return;
+      const r = drawer.getBoundingClientRect();
+      if (event.clientX < r.left || event.clientX >= r.right || event.clientY < r.top || event.clientY >= r.bottom) this.leaveStore(true);
     });
     window.addEventListener("focus", () => this.syncView());
     $("login-form").onsubmit = (event) => {
@@ -105,8 +139,82 @@ class ConsoleApp {
     });
   }
   pageFromHash() {
+    if (storeRoute()) return history.state?.storeOrigin === "overview" ? "overview" : "plugins";
     const key = location.hash.slice(1);
     return pages[key] || key.startsWith("extension:") || key.startsWith("plugin:") ? key : "overview";
+  }
+  restoreStoreRoute(route) {
+    // Give a bookmarked drawer the same return path as a visit from the console.
+    if (!history.state?.storeOrigin) {
+      const origin = this.state.page;
+      history.replaceState(null, "", "#" + origin);
+      history.pushState({ storeOrigin: origin }, "", "#market");
+      if (route[1]) history.pushState({ storeOrigin: origin }, "", "#market/" + route[1]);
+    }
+    this.displayStore(route[1] || null);
+  }
+  showStoreDetail(id) {
+    history.pushState({ storeOrigin: this.state.page }, "", "#market/" + id);
+    this.displayStore(id);
+  }
+  leaveStore(all) {
+    if (this.storeNavigating) return;
+    this.storeNavigating = true;
+    history.go(all && this.state.storeDetail ? -2 : -1);
+  }
+  displayStore(id) {
+    const drawer = $("store-drawer");
+    const previous = this.state.storeDetail;
+    const opening = !drawer.open;
+    if (opening) {
+      this.storeScroll = 0;
+      this.storeTrigger ??= this.content.querySelector('a[href="#market"]');
+      drawer.innerHTML = `<header class="store-drawer-bar">
+        <button type="button" data-store-back></button>
+        <button type="button" data-store-close>关闭商店 ${icon("close")}</button>
+      </header><div class="store-drawer-body"></div>`;
+      drawer.querySelector("[data-store-back]").onclick = () => this.leaveStore(false);
+      drawer.querySelector("[data-store-close]").onclick = () => this.leaveStore(true);
+      drawer.showModal();
+    } else if (!previous && id) {
+      this.storeScroll = drawer.querySelector("[data-store-scroll]")?.scrollTop || 0;
+    }
+    this.state.storeDetail = id;
+    const backLabel = id ? "插件商店" : pages[this.state.page].name;
+    drawer.querySelector("[data-store-back]").innerHTML = icon("back") + "返回" + backLabel;
+    const container = drawer.querySelector(".store-drawer-body");
+    container.innerHTML = renderStore(this);
+    bindStore(this, container, opening);
+    const scroll = container.querySelector("[data-store-scroll]");
+    if (scroll && !id) scroll.scrollTop = this.storeScroll;
+    const card = !id && previous ? container.querySelector(`[data-store-entry="${CSS.escape(previous)}"]`) : null;
+    (card || container.querySelector("#store-heading") || drawer.querySelector("[data-store-back]")).focus({ preventScroll: true });
+    document.title = "插件商店 · WhaleLife";
+  }
+  hideStore() {
+    const drawer = $("store-drawer");
+    if (!drawer.open) return;
+    if ($("dialog").open) this.closeDialog();
+    drawer.close();
+    drawer.replaceChildren();
+    this.storeOfficialChange = null;
+    this.state.storeDetail = null;
+    if (this.storeNeedsRefresh) {
+      this.storeNeedsRefresh = false;
+      const expanded = new Set([...this.content.querySelectorAll(".plugin-card-children[open]")]
+        .map(detail => detail.closest(".plugin-card").querySelector("[data-official-manage-slot]")?.dataset.officialManageSlot));
+      const scrollY = window.scrollY;
+      this.render();
+      for (const detail of this.content.querySelectorAll(".plugin-card-children")) {
+        const owner = detail.closest(".plugin-card").querySelector("[data-official-manage-slot]");
+        if (owner && expanded.has(owner.dataset.officialManageSlot)) detail.open = true;
+      }
+      window.scrollTo({ top: scrollY, behavior: "instant" });
+    }
+    const trigger = this.storeTrigger?.isConnected ? this.storeTrigger : this.content.querySelector('a[href="#market"]');
+    trigger?.focus({ preventScroll: true });
+    this.storeTrigger = null;
+    document.title = pages[this.state.page].name + " · WhaleLife";
   }
   get chatConnected() {
     return this.chatWS?.readyState === WebSocket.OPEN;
@@ -150,6 +258,8 @@ class ConsoleApp {
     $("login").hidden = true;
     $("shell").hidden = false;
     this.render();
+    const route = storeRoute();
+    if (route) this.restoreStoreRoute(route);
     this.connect("chat");
     this.connect("logs");
   }
@@ -214,6 +324,7 @@ class ConsoleApp {
     }
   }
   async syncView() {
+    if ($("store-drawer").open) return;
     const page = this.state.page;
     if (this.authenticated && (page.startsWith("extension:") || page.startsWith("plugin:")) && !this.syncing) {
       this.syncing = true;
@@ -259,6 +370,7 @@ class ConsoleApp {
     }
   }
   render(preserveExtension = false) {
+    if ($("store-drawer").open) return;
     if (!this.state.config || !this.state.status) return;
     const page = pages[this.state.page] || extensionPage(this);
     const navigation = extensionNavigation(this.state.status);
@@ -433,6 +545,7 @@ class ConsoleApp {
   }
   requireLogin() {
     this.authenticated = false;
+    this.hideStore();
     this.generation++;
     this.chatWS?.close();
     this.logWS?.close();

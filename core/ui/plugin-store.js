@@ -10,7 +10,6 @@ const bundledURL = "/market/catalog.json";
 const publishedURL = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json";
 const submissionURL = "https://github.com/iinukami/whalelife/issues/new?template=submit-plugin.yml";
 const views = { all: "全部", official: "官方", community: "社区" };
-const glyphs = { qq: "chat", qzone: "persona", autonomy: "bolt", gallery: "grid", surf: "send", bilibili: "terminal", vision: "eye" };
 
 async function readCatalog(url) {
   const response = await fetch(url, { credentials: "omit", referrerPolicy: "no-referrer", redirect: "error", signal: AbortSignal.timeout(5000) });
@@ -24,64 +23,110 @@ function externalLink(url, text) {
   return `<a href="${e(url)}" target="_blank" rel="noopener noreferrer">${e(text)}</a>`;
 }
 
-function entryRow(entry, official, names, state) {
+const artNames = new Set(["qq", "qzone", "autonomy", "gallery", "surf", "bilibili", "vision"]);
+
+function bundledIdentity(state, entry) {
+  return state.bundledStore?.official.some(item => item.id === entry.id && item.repository === entry.repository && item.name === entry.name);
+}
+
+function localPlan(state, entry, official) {
+  return official && bundledIdentity(state, entry) ? state.officialPlugins?.find(item => item.id === entry.id) : null;
+}
+
+function art(entry, official, plan) {
+  const theme = official && artNames.has(entry.id) ? entry.id : "generic";
+  const version = plan?.installed ? plan.installedVersion : plan?.version;
+  return `<span class="store-art" data-art="${theme}" aria-hidden="true">
+    <span class="store-object"><i></i><em></em><u></u></span>
+    <span class="store-card-version">${version ? "v" + e(version) : ""}</span></span>`;
+}
+
+function card(state, entry, official) {
+  const plan = localPlan(state, entry, official);
+  const status = plan?.installed ? icon("check") + "已安装" : plan?.action === "install" ? "可安装" : "";
+  return `<button type="button" class="store-card" data-store-entry="${e(entry.id)}">
+    ${art(entry, official, plan)}<span class="store-card-body"><span class="store-card-line"><strong>${e(entry.name)}</strong>
+    <span class="store-card-status"${plan?.installed ? " data-installed" : ""}>${status}</span></span>
+    <span class="store-description">${e(entry.description)}</span></span></button>`;
+}
+
+function communityOrder(sort) {
+  return (a, b) => {
+    if (sort !== "date" && a.stars !== b.stars) return b.stars - a.stars;
+    return b.collected.localeCompare(a.collected) || a.id.localeCompare(b.id);
+  };
+}
+
+function results(state, catalog) {
+  const sections = [];
+  const query = (state.storeSearch || "").trim().toLowerCase();
+  for (const [type, heading] of [["official", "官方插件"], ["community", "社区插件"]]) {
+    if (state.storeView && state.storeView !== "all" && state.storeView !== type) continue;
+    const entries = catalog[type].filter(entry => !query || [entry.name, entry.id, entry.description, entry.author]
+      .some(value => value.toLowerCase().includes(query)));
+    if (!entries.length) continue;
+    if (type === "community") entries.sort(communityOrder(state.storeSort));
+    sections.push(`<section aria-label="${heading}" class="store-section">
+      <div class="store-section-heading"><h2>${heading}</h2><small>${entries.length} 款插件</small></div>
+      <div class="store-grid">${entries.map(entry => card(state, entry, type === "official")).join("")}</div></section>`);
+  }
+  if (sections.length) return sections.join("");
+  const empty = query ? "没有找到匹配的插件" : state.storeView === "community" ? "暂无收录的社区插件" : state.storeView === "official" ? "暂无收录的官方插件" : "暂无收录的插件";
+  return `<p class="store-empty" role="status">${empty}</p>`;
+}
+
+function detail(state, catalog) {
+  const officialEntry = catalog.official.find(entry => entry.id === state.storeDetail);
+  const entry = officialEntry || catalog.community.find(entry => entry.id === state.storeDetail);
+  if (!entry) return '<h1 id="store-heading" tabindex="-1" class="store-empty">未找到这个插件</h1>';
+  const names = new Map([...catalog.official, ...catalog.community].map(item => [item.id, item.name]));
   const dependencies = entry.dependencies.map(id => names.get(id) || id).join("、");
-  const local = official && state.bundledStore?.official.find(item => item.id === entry.id && item.repository === entry.repository && item.name === entry.name);
+  const local = officialEntry && bundledIdentity(state, entry);
+  const action = local
+    ? `<span class="store-action" data-official-store-slot="${e(entry.id)}">${renderStoreInstall(state, entry.id)}</span>`
+    : externalLink(entry.installation, "安装说明");
   const links = [
-    externalLink(entry.installation, "安装说明"),
+    local ? externalLink(entry.installation, "安装说明") : "",
     externalLink(entry.repository, "原仓库 · 加星"),
     externalLink(entry.feedback, "反馈问题"),
   ].join("");
-  const action = local
-    ? `<span class="store-action" data-official-store-slot="${e(entry.id)}">${renderStoreInstall(state, entry.id)}</span>`
-    : `<a class="btn small store-action" href="${e(entry.installation)}" target="_blank" rel="noopener noreferrer">安装说明</a>`;
-  return `<article class="store-entry" data-store-entry="${e(entry.id)}">
-    <details${state.storeExpanded?.has(entry.id) ? " open" : ""}>
-      <summary><span class="store-glyph" aria-hidden="true">${icon(official && Object.hasOwn(glyphs, entry.id) ? glyphs[entry.id] : "puzzle")}</span>
-        <span class="store-summary"><span class="store-name">${e(entry.name)} ${icon("chevron")}</span>
-        <span class="store-description">${e(entry.description)}</span></span></summary>
-      <div class="store-details"><p>作者 · ${e(entry.author)}${dependencies ? `<span>依赖 · ${e(dependencies)}</span>` : ""}</p>
-        <nav aria-label="${e(entry.name)}相关链接">${links}</nav></div>
-    </details>${action}</article>`;
+  return `${art(entry, !!officialEntry, localPlan(state, entry, !!officialEntry))}
+    <div class="store-detail-body"><small class="store-kind">${officialEntry ? "WhaleLife 官方插件" : "社区插件"}</small>
+      <h1 id="store-heading" tabindex="-1">${e(entry.name)}</h1><p class="store-description">${e(entry.description)}</p>
+      <dl class="store-facts"><div><dt>作者</dt><dd>${e(entry.author)}</dd></div>
+        <div><dt>插件依赖</dt><dd>${e(dependencies || "无")}</dd></div></dl>
+      <div class="store-actions">${action}</div>
+      <nav class="store-links" aria-label="${e(entry.name)}相关链接">${links}</nav></div>`;
 }
 
-function results(state) {
+function storeBody(state) {
   const catalog = state.publishedStore || state.bundledStore;
-  if (!catalog) return state.storeReadError
-    ? '<div class="official-loading" role="alert">无法读取插件目录 <button type="button" class="btn small" data-store-retry>重试</button></div>'
-    : '<p class="official-loading" role="status">正在读取插件目录…</p>';
-  const names = new Map([...catalog.official, ...catalog.community].map(entry => [entry.id, entry.name]));
-  const sections = [];
-  for (const [type, heading] of [["official", "官方插件"], ["community", "社区插件"]]) {
-    if (state.storeView && state.storeView !== "all" && state.storeView !== type) continue;
-    const entries = [...catalog[type]];
-    if (type === "community") entries.sort((a, b) => {
-      if (state.storeSort !== "date" && a.stars !== b.stars) return b.stars - a.stars;
-      return b.collected.localeCompare(a.collected) || a.id.localeCompare(b.id);
-    });
-    if (!entries.length) {
-      if (state.storeView === type) sections.push(`<p class="panel store-empty">${type === "community" ? "暂无收录的社区插件" : "暂无收录的官方插件"}</p>`);
-      continue;
-    }
-    sections.push(`<section aria-label="${heading}" class="store-section">${!state.storeView || state.storeView === "all" ? `<h2>${heading}</h2>` : ""}
-      <div class="panel store-list">${entries.map(entry => entryRow(entry, type === "official", names, state)).join("")}</div></section>`);
+  if (!catalog) {
+    const heading = state.storeDetail ? '<h1 id="store-heading" tabindex="-1">插件详情</h1>' : "";
+    const message = state.storeReadError
+      ? '<div class="official-loading" role="alert">无法读取插件目录 <button type="button" class="btn small" data-store-retry>重试</button></div>'
+      : '<p class="official-loading" role="status">正在读取插件目录…</p>';
+    return heading + message;
   }
-  return sections.join("") || '<p class="panel store-empty">暂无收录的插件</p>';
+  return state.storeDetail ? detail(state, catalog) : results(state, catalog);
 }
 
 export function renderStore(app) {
   const state = app.state, current = state.storeView || "all";
   const catalog = state.publishedStore || state.bundledStore;
+  const hideSort = current === "official" || !(catalog?.community.length > 1);
   return `<div id="plugin-store">
-    <header class="page-heading plugin-hub-heading"><h1>插件商店</h1>
-      <button type="button" class="btn" data-store-submit>提交插件</button></header>
-    <div class="store-toolbar"><nav aria-label="插件分类">${Object.entries(views).map(([key, name]) =>
+    ${state.storeDetail ? "" : `<header class="store-page-heading"><h1 id="store-heading" tabindex="-1">插件商店</h1>
+      <button type="button" class="btn small" data-store-submit>提交插件</button></header>
+    <div class="store-toolbar"><nav data-store-views aria-label="插件分类">${Object.entries(views).map(([key, name]) =>
       `<button type="button" data-store-view="${key}" aria-pressed="${current === key}">${name}</button>`).join("")}</nav>
-      <label class="store-sort"${current === "official" || !(catalog?.community.length > 1) ? " hidden" : ""}>社区排序
-      <select data-store-sort><option value="stars">GitHub 星标</option><option value="date"${state.storeSort === "date" ? " selected" : ""}>最近收录</option></select></label></div>
-    <div data-official-read-status role="status"></div>
-    <div data-store-results>${results(state)}</div>
-    <footer class="store-footer">交流 QQ 群 <span>962935021</span></footer></div>`;
+      <label class="store-search">${icon("search")}<input type="search" data-store-search aria-label="搜索插件" placeholder="搜索插件" value="${e(state.storeSearch || "")}"></label>
+      <label class="store-sort"${hideSort ? " hidden" : ""}>社区排序
+      <select data-store-sort><option value="stars">GitHub 星标</option><option value="date"${state.storeSort === "date" ? " selected" : ""}>最近收录</option></select></label></div>`}
+    <div data-official-read-status role="status">${state.officialReadError ? e(state.officialReadError) + ' <button class="btn small" type="button" data-official-retry>重试</button>' : ""}</div>
+    <div class="store-scroll${state.storeDetail ? " store-detail" : ""}" data-store-scroll>
+      <div data-store-results>${storeBody(state)}</div>
+      ${state.storeDetail ? "" : `<footer class="store-footer">${icon("chat")} 交流 QQ 群 · 962935021</footer>`}</div></div>`;
 }
 
 export async function loadStoreCatalog(app, onChange) {
@@ -113,40 +158,56 @@ export async function loadStoreCatalog(app, onChange) {
   }
 }
 
-export function bindStore(app) {
-  const root = app.content.querySelector("#plugin-store");
+export function bindStore(app, container = app.content, opening = true) {
+  const root = container.querySelector("#plugin-store");
   const state = app.state;
   const listing = root.querySelector("[data-store-results]");
+  const scroll = root.querySelector("[data-store-scroll]");
   const controls = root.querySelectorAll("[data-store-view]");
   const sort = root.querySelector("[data-store-sort]");
   function paint() {
     if (!root.isConnected) return;
     const active = root.ownerDocument.activeElement;
-    const row = listing.contains(active) ? active.closest("[data-store-entry]") : null;
-    const selector = active?.closest("summary") ? "summary" : active?.closest("[data-official-action]") ? "[data-official-action]" : null;
+    const focusedId = active?.closest("[data-store-entry]")?.dataset.storeEntry;
+    const focusedDetail = state.storeDetail && listing.contains(active);
     const catalog = state.publishedStore || state.bundledStore;
     const current = state.storeView || "all";
     for (const button of controls) button.setAttribute("aria-pressed", String(button.dataset.storeView === current));
-    sort.closest("label").hidden = current === "official" || !(catalog?.community.length > 1);
-    listing.innerHTML = results(state);
-    if (row && selector) {
-      const entry = [...listing.querySelectorAll("[data-store-entry]")].find(el => el.dataset.storeEntry === row.dataset.storeEntry);
-      entry?.querySelector(selector)?.focus({ preventScroll: true });
+    if (sort) sort.closest("label").hidden = current === "official" || !(catalog?.community.length > 1);
+    listing.innerHTML = storeBody(state);
+    if (focusedId) {
+      [...listing.querySelectorAll("[data-store-entry]")].find(el => el.dataset.storeEntry === focusedId)?.focus({ preventScroll: true });
+    } else if (focusedDetail) {
+      const next = active.matches("a") ? [...listing.querySelectorAll("a")].find(link => link.href === active.href)
+        : active.hasAttribute("data-official-action") ? listing.querySelector("[data-official-action]:enabled") : null;
+      (next || listing.querySelector("#store-heading"))?.focus({ preventScroll: true });
     }
   }
-  for (const button of controls) button.onclick = () => { state.storeView = button.dataset.storeView; paint(); };
-  sort.onchange = () => { state.storeSort = sort.value; paint(); };
-  root.querySelector("[data-store-submit]").onclick = () => app.dialog("提交社区插件",
+  // Official plan reads and public catalog reads can finish in either order.
+  // A plan refresh only changes the list badges; the installer updates its own detail slot.
+  app.storeOfficialChange = () => {
+    if (!state.storeDetail) paint();
+    else if (root.isConnected) {
+      const version = listing.querySelector(".store-card-version");
+      const entry = (state.publishedStore || state.bundledStore)?.official.find(item => item.id === state.storeDetail);
+      const plan = entry && localPlan(state, entry, true);
+      const number = plan?.installed ? plan.installedVersion : plan?.version;
+      if (version) version.textContent = number ? "v" + number : "";
+    }
+  };
+  for (const button of controls) button.onclick = () => { state.storeView = button.dataset.storeView; paint(); scroll.scrollTop = 0; };
+  if (sort) sort.onchange = () => { state.storeSort = sort.value; paint(); scroll.scrollTop = 0; };
+  const search = root.querySelector("[data-store-search]");
+  if (search) search.oninput = () => { state.storeSearch = search.value; paint(); scroll.scrollTop = 0; };
+  const submit = root.querySelector("[data-store-submit]");
+  if (submit) submit.onclick = () => app.dialog("提交社区插件",
     `<p>在 WhaleLife 主仓提一条 GitHub Issue，附上公开 GitHub 仓库链接和一句话介绍。维护者核对后会在同一条 Issue 回复。</p>
      <p class="official-help">${externalLink(submissionURL, "填写收录申请")}</p>`);
-  listing.addEventListener("toggle", event => {
-    if (!listing.contains(event.target) || event.target.tagName !== "DETAILS") return;
-    const id = event.target.closest("[data-store-entry]").dataset.storeEntry;
-    state.storeExpanded ??= new Set();
-    if (event.target.open) state.storeExpanded.add(id); else state.storeExpanded.delete(id);
-  }, true);
-  bindOfficialActions(app);
-
-  listing.onclick = event => { if (event.target.closest("[data-store-retry]")) void loadStoreCatalog(app, paint); };
-  void loadStoreCatalog(app, paint);
+  listing.onclick = event => {
+    const card = event.target.closest("[data-store-entry]");
+    if (card) app.showStoreDetail(card.dataset.storeEntry);
+    else if (event.target.closest("[data-store-retry]")) void loadStoreCatalog(app, paint);
+  };
+  bindOfficialActions(app, root, opening);
+  if (opening || !state.bundledStore || app.storePublishedRead) void loadStoreCatalog(app, paint);
 }

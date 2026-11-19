@@ -40,8 +40,7 @@ export function renderManageSlot(state, runtimeId) {
   return `<span class="official-manage-slot" data-official-manage-slot="${e(runtimeId)}">${removeButton(state, runtimeId)}</span>`;
 }
 
-function paint(app) {
-  const { content, state } = app;
+function paintSlots(content, state) {
   for (const slot of content.querySelectorAll("[data-official-store-slot], [data-official-manage-slot]")) {
     const focused = slot.contains(content.ownerDocument.activeElement);
     slot.innerHTML = slot.hasAttribute("data-official-manage-slot")
@@ -51,6 +50,15 @@ function paint(app) {
   for (const slot of content.querySelectorAll("[data-official-read-status]")) {
     slot.innerHTML = state.officialReadError
       ? `${e(state.officialReadError)} <button class="btn small" type="button" data-official-retry>重试</button>` : "";
+  }
+}
+
+function paint(app) {
+  paintSlots(app.content, app.state);
+  const drawer = app.content.ownerDocument.getElementById("store-drawer");
+  if (drawer?.open) {
+    paintSlots(drawer, app.state);
+    app.storeOfficialChange?.();
   }
 }
 
@@ -72,7 +80,10 @@ async function refresh(app, redraw = false) {
     if (app.officialRead === read) {
       try {
         // Rebind against this snapshot so rendering the page does not start another disk scan.
-        if (redraw && (app.state.page === "market" || app.state.page === "plugins")) app.render();
+        if (redraw && (app.state.page === "plugins" || app.state.page === "overview")) {
+          if (app.content.ownerDocument.getElementById("store-drawer")?.open) app.storeNeedsRefresh = true;
+          else app.render();
+        }
         paint(app);
       } finally {
         app.officialRead = null;
@@ -86,7 +97,8 @@ function openDialog(app, plugin, title, body, submit, label, danger) {
   app.dialog(title, body, submit, label, danger);
   doc.getElementById("dialog")?.addEventListener("close", () => {
     if (app.state.page !== page || (doc.activeElement?.isConnected && doc.activeElement !== doc.body)) return;
-    const buttons = app.content.querySelectorAll("[data-official-action]:enabled");
+    const drawer = doc.getElementById("store-drawer");
+    const buttons = (drawer?.open ? drawer : app.content).querySelectorAll("[data-official-action]:enabled");
     [...buttons].find(b => b.dataset.officialId === plugin.id)?.focus({ preventScroll: true });
   }, { once: true });
 }
@@ -156,9 +168,9 @@ async function handleClick(app, event) {
   }
 }
 
-export function bindOfficialActions(app) {
-  // content survives hash navigation. Delegation also covers catalog cards added after the initial read.
+export function bindOfficialActions(app, root = app.content, readPlan = true) {
+  // Delegate from either the management page or the open store.
   app.officialActionClick ??= event => handleClick(app, event);
-  app.content.addEventListener("click", app.officialActionClick);
-  void refresh(app);
+  root.addEventListener("click", app.officialActionClick);
+  if (readPlan) void refresh(app);
 }
