@@ -3,6 +3,7 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import type { Logger } from "./logger.ts";
+import type { ModelTool } from "./plugin-api.ts";
 import {
   modelConfigurationError,
   validateModelParameters,
@@ -19,6 +20,15 @@ export function thinkingToolHistory(provider: any, tools: unknown[]) {
   try { host = new URL(provider.base_url).hostname.toLowerCase(); } catch { /* validated before transport */ }
   return provider.parameters?.thinking?.type === "enabled" ||
     host === "api.deepseek.com" || /^deepseek[-/]/i.test(provider.model ?? "");
+}
+function orderedRequestTools(tools: ModelTool[]) {
+  // Provider-specific tool shapes may depend on their original order.
+  if (!Array.isArray(tools) || !tools.every(tool => tool?.type === "function" && typeof tool.function?.name === "string"))
+    return tools;
+  return tools.toSorted((a, b) => {
+    const left = a.function.name, right = b.function.name;
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
 }
 export class LLM {
   logger: Logger;
@@ -79,7 +89,7 @@ export class LLM {
           messages: encodeReasoningMessages(opts.messages, compatibility),
           stream: true,
           stream_options: { include_usage: true },
-          ...(opts.tools?.length ? { tools: opts.tools } : {}),
+          ...(opts.tools?.length ? { tools: orderedRequestTools(opts.tools) } : {}),
           ...(opts.tool_choice === "none" ? { tool_choice: "none" } : {}),
         },
         async (response, trace) => {

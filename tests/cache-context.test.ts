@@ -4,6 +4,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Memory } from "../core/memory.ts";
 import { MemoryEngine, estimateTokens } from "../core/memory-engine.ts";
+import { LLM } from "../core/llm.ts";
 import { Sessions } from "../core/session.ts";
 import { supportsContextPrefix } from "../core/context-material.ts";
 import { promptText } from "../core/tool-content.ts";
@@ -45,6 +46,32 @@ async function fixture(t: TestContext) {
     respond: (value: typeof respond) => { respond = value; },
     recall: (text: string) => { recalled = [{ id: text, kind: "experience", text, source: "plugin", ts: "2026-11-02T00:00:00Z", origin: { plugin: "probe" } }]; } };
 }
+
+test("outbound function definitions stay byte-identical after re-registration", async t => {
+  const requests: any[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: URL, init: RequestInit) => {
+    requests.push(JSON.parse(String(init.body)));
+    return new Response("data: [DONE]\n\n");
+  });
+  const llm = new LLM({ info() {}, error() {} } as any);
+  const provider = { model: "synthetic", base_url: "http://127.0.0.1:1/v1" };
+  const send = (tools: unknown[]) => llm.chat({ provider, messages: [], tools });
+  const tool = (name: string) => ({ type: "function", function: {
+    name, description: name, parameters: { type: "object", properties: { q: { type: "string" } } },
+  } });
+  const [upper, lower, last] = ["Search", "search", "search_web"].map(tool);
+  const original = [last, lower, upper];
+  Object.freeze(original);
+  await send(original);
+  await send([lower, upper, last]);
+  assert.deepEqual(requests[0].tools, [upper, lower, last]);
+  assert.equal(JSON.stringify(requests[0].tools), JSON.stringify(requests[1].tools));
+  const mixed = [last, { type: "custom", name: "custom" }, upper];
+  await send(mixed);
+  assert.deepEqual(requests[2].tools, mixed);
+  await send([]);
+  assert.equal(Object.hasOwn(requests[3], "tools"), false);
+});
 
 test("only the verified official endpoint enables a trailing system block", () => {
   for (const base_url of ["https://api.deepseek.com", "https://api.deepseek.com/v1/", "https://API.DEEPSEEK.COM:443/v1"])
