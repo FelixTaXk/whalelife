@@ -2,13 +2,14 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
-export async function api(path, data) {
+export async function api(path, data, signal) {
   const response = await fetch(
     path,
     data === undefined
-      ? { cache: "no-store" }
+      ? { cache: "no-store", signal }
       : {
           method: "POST",
+          signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(data),
         },

@@ -12,6 +12,7 @@ import { conversationRows } from "./channel-history.ts";
 import { PluginWebRegistry } from "./plugin-web.ts";
 import { WebClientDisconnectedError } from "./web-errors.ts";
 import { OfficialPlugins } from "./official-plugins.ts";
+import { CacheDiagnostics } from "./cache-diagnostics.ts";
 
 const marketFiles = new Map([
   ["index.html", "text/html"],
@@ -34,6 +35,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
   const tokens = new Set<string>();
   const routes = new PluginWebRegistry();
   const official = new OfficialPlugins(runtime);
+  const cacheDiagnostics = new CacheDiagnostics(services.modelConfig, services.executionArchive?.root);
   const lifetime = new AbortController();
   const register = (method: string, path: string, handler: any) => routes.register("", lifetime.signal, method, path, handler);
   let origin = `http://${host}:${port}`;
@@ -350,6 +352,23 @@ export async function startWeb(config: any, services: any, runtime: any) {
       }
       if (req.url === "/api/model-config" && req.method === "GET")
         return send(200, services.modelConfig.snapshot());
+      if (pathname === "/api/cache-diagnostics" && req.method === "GET")
+        return send(200, await cacheDiagnostics.check(memoryUrl.searchParams.get("model") ?? ""));
+      if ((pathname === "/api/cache-diagnostics/test" || pathname === "/api/cache-diagnostics/apply") && req.method === "POST") {
+        if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
+          return send(415, { error: "请使用 JSON 提交操作" });
+        const input = await body(req, 4096);
+        if (pathname.endsWith("/apply")) return send(200, await cacheDiagnostics.apply(input));
+        const cancellation = new AbortController();
+        const cancel = () => { if (!res.writableEnded) cancellation.abort(); };
+        res.once("close", cancel);
+        try {
+          if (res.destroyed) return;
+          const result = await cacheDiagnostics.test(input, AbortSignal.any([cancellation.signal, lifetime.signal]));
+          if (!res.destroyed) send(200, result);
+          return;
+        } finally { res.off("close", cancel); }
+      }
       if (req.url === "/api/model-config" && req.method === "POST") {
         const value = await services.modelConfig.save(await body(req));
         services.llm.providers = config.providers;
