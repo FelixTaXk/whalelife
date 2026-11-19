@@ -85,5 +85,18 @@
       "dependencies": []
     }
   ],
-  "community": []
+  "community": [
+    {
+      "id": "color-note",
+      "name": "颜色便签",
+      "author": "iinukami",
+      "description": "社区投稿测试插件。保存一条带颜色的本地便签，重启后可继续查看。",
+      "repository": "https://github.com/iinukami/whalelife-community-color-note",
+      "installation": "https://github.com/iinukami/whalelife-community-color-note/blob/main/README.md#手动安装",
+      "feedback": "https://github.com/iinukami/whalelife-community-color-note/issues",
+      "dependencies": [],
+      "collected": "2026-11-20",
+      "stars": 0
+    }
+  ]
 }

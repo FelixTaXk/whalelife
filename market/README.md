@@ -21,7 +21,9 @@
 
 ## 社区插件
 
-目前还没有收录的社区插件。
+| 插件 | 作者 | 用途 | 必需插件 | 相关链接 |
+| --- | --- | --- | --- | --- |
+| 颜色便签 | iinukami | 社区投稿测试插件。保存一条带颜色的本地便签，重启后可继续查看。 | — | [安装说明](<https://github.com/iinukami/whalelife-community-color-note/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-community-color-note>) · [反馈](<https://github.com/iinukami/whalelife-community-color-note/issues>) |
 
 作者可以[提交 GitHub 收录申请](https://github.com/iinukami/whalelife/issues/new?template=submit-plugin.yml)，附上公开仓库链接和一句话介绍。维护者核对后在原 Issue 回复。社区插件由原作者维护，安装与反馈请使用对应条目中的链接。
 
