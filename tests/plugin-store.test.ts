@@ -44,6 +44,22 @@ test("the drawer filters cards by official name, ID and author without changing 
   assert.match(renderStore({ state: { ...state, storeDetail: "retired" } }), /未找到这个插件/);
 });
 
+test("the store labels official cards and details by catalog section, including before local plans load", () => {
+  const community = { ...popular, name: first.name, author: first.author };
+  const state = { bundledStore: { official: [first], community: [community] } };
+  const badge = /class="store-official-badge">官方<\/span>/g;
+  for (const storeView of ["all", "official", "community"]) {
+    const html = renderStore({ state: { ...state, storeView } });
+    const cards = [...html.matchAll(/data-store-entry="([^"]+)"([\s\S]*?)<\/button>/g)];
+    assert.ok(cards.length);
+    for (const [, id, card] of cards) assert.equal([...card.matchAll(badge)].length, id === first.id ? 1 : 0);
+  }
+  for (const entry of [first, community]) {
+    const html = renderStore({ state: { ...state, storeDetail: entry.id } });
+    assert.equal([...html.matchAll(badge)].length, entry === first ? 1 : 0);
+  }
+});
+
 test("the storefront exposes install only for matching local identities and never offers uninstall", () => {
   const plans = [
     { ...first, installed: true, installedVersion: "1.2.3", version: "1.3.0" },

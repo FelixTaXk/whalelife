@@ -24,6 +24,7 @@ function externalLink(url, text) {
 }
 
 const artNames = new Set(["qq", "qzone", "autonomy", "gallery", "surf", "bilibili", "vision"]);
+const officialBadge = '<span class="store-official-badge">官方</span>';
 
 function bundledIdentity(state, entry) {
   return state.bundledStore?.official.some(item => item.id === entry.id && item.repository === entry.repository && item.name === entry.name);
@@ -45,7 +46,8 @@ function card(state, entry, official) {
   const plan = localPlan(state, entry, official);
   const status = plan?.installed ? icon("check") + "已安装" : plan?.action === "install" ? "可安装" : "";
   return `<button type="button" class="store-card" data-store-entry="${e(entry.id)}">
-    ${art(entry, official, plan)}<span class="store-card-body"><span class="store-card-line"><strong>${e(entry.name)}</strong>
+    ${art(entry, official, plan)}<span class="store-card-body"><span class="store-card-line">
+    <span class="store-name-line"><strong>${e(entry.name)}</strong>${official ? officialBadge : ""}</span>
     <span class="store-card-status"${plan?.installed ? " data-installed" : ""}>${status}</span></span>
     <span class="store-description">${e(entry.description)}</span></span></button>`;
 }
@@ -91,8 +93,9 @@ function detail(state, catalog) {
     externalLink(entry.feedback, "反馈问题"),
   ].join("");
   return `${art(entry, !!officialEntry, localPlan(state, entry, !!officialEntry))}
-    <div class="store-detail-body"><small class="store-kind">${officialEntry ? "WhaleLife 官方插件" : "社区插件"}</small>
-      <h1 id="store-heading" tabindex="-1">${e(entry.name)}</h1><p class="store-description">${e(entry.description)}</p>
+    <div class="store-detail-body">${officialEntry ? "" : '<small class="store-kind">社区插件</small>'}
+      <div class="store-name-line"><h1 id="store-heading" tabindex="-1">${e(entry.name)}</h1>${officialEntry ? officialBadge : ""}</div>
+      <p class="store-description">${e(entry.description)}</p>
       <dl class="store-facts"><div><dt>作者</dt><dd>${e(entry.author)}</dd></div>
         <div><dt>插件依赖</dt><dd>${e(dependencies || "无")}</dd></div></dl>
       <div class="store-actions">${action}</div>

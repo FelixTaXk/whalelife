@@ -930,6 +930,19 @@ html:has(#store-drawer[open]) { overflow: hidden; }
 .store-card:hover { border-color: #a29ab6; box-shadow: 0 3px 12px #29203913; }
 .store-card-body { display: block; padding: 10px 14px 12px; }
 .store-card-line { align-items: center; flex-wrap: wrap; }
+.store-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; min-width: 0; overflow-wrap: anywhere; }
+.store-official-badge {
+  display: inline-block;
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
 .store-card-line strong { font-size: 16px; line-height: 1.4; letter-spacing: -.025em; }
 .store-card-status {
   color: #59516f;
@@ -952,7 +965,8 @@ html:has(#store-drawer[open]) { overflow: hidden; }
 .store-detail .store-card-version { left: 18px; bottom: 13px; font-size: 12px; }
 .store-detail-body { padding-block: 20px; }
 .store-kind { font-size: 12px; color: var(--store-muted); }
-.store-detail h1 { margin-top: 5px; font-size: clamp(28px, 2.4vw, 36px); }
+.store-detail .store-name-line { gap: 5px 9px; margin-top: 5px; }
+.store-detail h1 { margin: 0; font-size: clamp(28px, 2.4vw, 36px); }
 .store-detail .store-description { margin-top: 9px; font-size: 15px; line-height: 1.7; }
 .store-facts { margin: 23px 0; border-top: 1px solid var(--store-line); }
 .store-facts div { display: flex; gap: 20px; padding: 11px 0; border-bottom: 1px solid var(--store-line); font-size: 13px; }
