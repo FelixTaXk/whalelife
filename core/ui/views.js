@@ -199,7 +199,13 @@ export function bindBindings(app) {
 export function renderPlugins(app) {
   const plugins = extensionPlugins(app.state.status);
   const cards = visiblePluginCards(app.state.status);
-  return `<div class="page-heading"><div><h1>插件管理</h1><p>插件开关会保存，重启后保持选择；依赖恢复后会自动恢复原本启用的插件。</p></div><span class="badge">${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</span></div><div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
+  return `<div class="page-heading">
+    <div><h1>插件管理</h1><p>插件开关会保存，重启后保持选择；依赖恢复后会自动恢复原本启用的插件。</p></div>
+    <div class="heading-actions">
+      <span class="badge">${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</span>
+      <a class="btn primary" href="/market/">发现插件</a>
+    </div>
+  </div><div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
 }
 export function bindPlugins(app) {
   bindPluginActions(app);

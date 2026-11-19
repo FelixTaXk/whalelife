@@ -1,0 +1,18 @@
+name: 提交社区插件
+description: 申请将你的 WhaleLife 插件收录进公开目录。
+title: "[收录] "
+body:
+  - type: input
+    id: repository
+    attributes:
+      label: 插件的公开 GitHub 仓库
+      placeholder: https://github.com/作者/插件仓库
+    validations:
+      required: true
+  - type: textarea
+    id: introduction
+    attributes:
+      label: 一句话介绍
+      description: 说说插件能做什么。如果有偏好的署名或单独的安装文档，也可以写在这里。
+    validations:
+      required: true

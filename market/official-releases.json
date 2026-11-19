@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "id": "qq",
+      "name": "QQ",
+      "repository": "https://github.com/iinukami/whalelife-plugin-qq",
+      "parentId": null,
+      "requiredPlugins": [],
+      "verifiedReleases": []
+    },
+    {
+      "id": "qzone",
+      "name": "QQ 空间",
+      "repository": "https://github.com/iinukami/whalelife-plugin-qzone",
+      "parentId": "qq",
+      "requiredPlugins": [
+        "qq"
+      ],
+      "verifiedReleases": []
+    },
+    {
+      "id": "autonomy",
+      "name": "自主性",
+      "repository": "https://github.com/iinukami/whalelife-plugin-autonomy",
+      "parentId": null,
+      "requiredPlugins": [],
+      "verifiedReleases": []
+    },
+    {
+      "id": "gallery",
+      "name": "图库",
+      "repository": "https://github.com/iinukami/whalelife-plugin-gallery",
+      "parentId": null,
+      "requiredPlugins": [],
+      "verifiedReleases": []
+    },
+    {
+      "id": "surf",
+      "name": "网上冲浪",
+      "repository": "https://github.com/iinukami/whalelife-plugin-surf",
+      "parentId": null,
+      "requiredPlugins": [],
+      "verifiedReleases": []
+    },
+    {
+      "id": "bilibili",
+      "name": "B 站",
+      "repository": "https://github.com/iinukami/whalelife-plugin-bilibili",
+      "parentId": "surf",
+      "requiredPlugins": [
+        "surf"
+      ],
+      "verifiedReleases": []
+    },
+    {
+      "id": "vision",
+      "name": "视听理解",
+      "repository": "https://github.com/iinukami/whalelife-plugin-vision",
+      "parentId": null,
+      "requiredPlugins": [],
+      "verifiedReleases": []
+    }
+  ]
+}

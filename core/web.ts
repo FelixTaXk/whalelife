@@ -11,6 +11,19 @@ import { Channels } from "./channels.ts";
 import { conversationRows } from "./channel-history.ts";
 import { PluginWebRegistry } from "./plugin-web.ts";
 import { WebClientDisconnectedError } from "./web-errors.ts";
+
+const marketFiles = new Map([
+  ["index.html", "text/html"],
+  ["catalog.json", "application/json"],
+  ["official-releases.json", "application/json"],
+  ["assets/catalog.js", "text/javascript"],
+  ["assets/catalog-validation.js", "text/javascript"],
+  ["assets/symbols.js", "text/javascript"],
+  ["assets/market.js", "text/javascript"],
+  ["assets/market.css", "text/css"],
+  ["assets/whale.svg", "image/svg+xml"],
+]);
+
 export async function startWeb(config: any, services: any, runtime: any) {
   const { logger, memory, sessions } = services;
   const channels = services.channels ?? new Channels(memory, sessions, config);
@@ -82,6 +95,26 @@ export async function startWeb(config: any, services: any, runtime: any) {
     };
     try {
       if (!allowedOrigin(req)) return send(403, { error: "来源无效" });
+      const pathname = req.url?.split("?", 1)[0] ?? "";
+      if (req.method === "GET" && pathname === "/market") {
+        res.writeHead(308, { Location: "/market/" + req.url!.slice(pathname.length) });
+        return res.end();
+      }
+      if (req.method === "GET" && pathname.startsWith("/market/")) {
+        const file = pathname.slice("/market/".length) || "index.html";
+        const type = marketFiles.get(file);
+        if (!type) return send(404, { error: "文件不存在" });
+        const content = await readFile(new URL("../market/" + file, import.meta.url));
+        res.writeHead(200, {
+          "Content-Type": type + "; charset=utf-8",
+          "Cache-Control": "no-cache",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY",
+          "Content-Security-Policy":
+            "default-src 'self'; connect-src 'self' https://raw.githubusercontent.com; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        });
+        return res.end(content);
+      }
       if (req.method === "GET" && req.url?.startsWith("/ui/")) {
         const asset = req.url.slice(4);
         if (!assets.has(asset)) return send(404, { error: "文件不存在" });
