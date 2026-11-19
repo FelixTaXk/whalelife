@@ -123,7 +123,8 @@ export class OfficialPlugins {
       steps.map(s => { const p = items.get(s.id)!; return [s, p.enabled, p.active, (p.existing ?? p.target)?.sha256]; })])).digest("hex") : "";
     return { id: item.entry.id, runtimeId: item.pathId, name: item.entry.name, description: card?.description, repository: item.entry.repository,
       installation: card?.installation, version: item.target?.version ?? item.installedVersion ?? null,
-      installedVersion: item.installedVersion ?? null, installed: item.installed, enabled: item.installed && item.enabled,
+      installedVersion: item.installedVersion ?? null, installed: item.installed, recognized: Boolean(item.existing),
+      enabled: item.installed && item.enabled,
       status: this.runtime.records.get(item.pathId)?.status ?? null,
       action, label, steps, reason, upgradeUrl, planKey };
   }

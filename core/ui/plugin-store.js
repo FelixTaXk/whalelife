@@ -4,7 +4,7 @@
  */
 import { escapeHTML as e } from "./api.js";
 import { icon } from "./icons.js";
-import { bindOfficialActions, renderStoreInstall } from "./official-plugins.js";
+import { bindOfficialActions, officialBadge, renderStoreInstall } from "./official-plugins.js";
 
 const bundledURL = "/market/catalog.json";
 const publishedURL = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json";
@@ -24,7 +24,6 @@ function externalLink(url, text) {
 }
 
 const artNames = new Set(["qq", "qzone", "autonomy", "gallery", "surf", "bilibili", "vision"]);
-const officialBadge = '<span class="store-official-badge">官方</span>';
 
 function bundledIdentity(state, entry) {
   return state.bundledStore?.official.some(item => item.id === entry.id && item.repository === entry.repository && item.name === entry.name);

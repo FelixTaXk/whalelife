@@ -4,7 +4,7 @@
  */
 import { api, escapeHTML as e, extensionPlugins } from "./api.js";
 import { icon } from "./icons.js";
-import { bindOfficialActions, renderManageSlot } from "./official-plugins.js";
+import { bindOfficialActions, renderManageBadgeSlot, renderManageSlot } from "./official-plugins.js";
 export const extensionKey = (path) => "extension:" + encodeURIComponent(path);
 export const pluginKey = (id) => "plugin:" + encodeURIComponent(id);
 export const extensionEntries = (status) => (status?.pluginPages ?? []).filter((p) => status.plugins?.some((plugin) => plugin.id === p.owner && plugin.status === "active"));
@@ -73,8 +73,8 @@ export function pluginCard(status, p, state) {
   const grouped = pluginGroup(status, p.id)?.id === p.id;
   const children = plugins(status).filter(c => c.id !== p.id && belongs(c.id, p.id));
   const childMenu = grouped && children.length ? `<details class="plugin-card-children"><summary>${children.length} 个子插件</summary>
-    ${children.map(child => `<div class="plugin-card-child"><a href="#${pluginKey(child.id)}">${e(child.name || child.id)}</a>${renderManageSlot(state, child.id)}</div>`).join("")}</details>` : "";
-  return `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon("puzzle")}<h3>${e(p.name || p.id)}</h3><div class="spacer"></div>${badge(p)}</div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "扩展插件")}</p><footer>${grouped ? `<a class="btn small" href="#${pluginKey(p.id)}">${icon("sliders")}打开 / 管理</a>` : extensionSettings(status, p.id)}${actions(p)}${renderManageSlot(state, p.id)}${!grouped && p.id.includes("/") ? '<small class="plugin-child-count">子插件</small>' : ""}</footer>${childMenu}</article>`;
+    ${children.map(child => `<div class="plugin-card-child"><span class="store-name-line"><a href="#${pluginKey(child.id)}">${e(child.name || child.id)}</a>${renderManageBadgeSlot(state, child.id)}</span>${renderManageSlot(state, child.id)}</div>`).join("")}</details>` : "";
+  return `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon("puzzle")}<div class="store-name-line"><h3>${e(p.name || p.id)}</h3>${renderManageBadgeSlot(state, p.id)}</div><div class="spacer"></div>${badge(p)}</div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "扩展插件")}</p><footer>${grouped ? `<a class="btn small" href="#${pluginKey(p.id)}">${icon("sliders")}打开 / 管理</a>` : extensionSettings(status, p.id)}${actions(p)}${renderManageSlot(state, p.id)}${!grouped && p.id.includes("/") ? '<small class="plugin-child-count">子插件</small>' : ""}</footer>${childMenu}</article>`;
 }
 export function bindPluginActions(app) {
   if (app.state) bindOfficialActions(app);

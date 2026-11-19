@@ -5,6 +5,7 @@
 import { api, escapeHTML as e } from "./api.js";
 
 const stepNames = { install: "安装", enable: "启用", reuse: "沿用", uninstall: "卸载" };
+export const officialBadge = '<span class="store-official-badge">官方</span>';
 
 function upgradeLink(url) {
   try {
@@ -31,9 +32,21 @@ export function renderStoreInstall(state, id) {
   return versionTag + (plugin.installed ? '<span class="official-installed">已安装</span>' : actionButton(state, plugin, "install"));
 }
 
+function installedPlugin(state, runtimeId) {
+  return state?.officialPlugins?.find(item => item.installed && item.runtimeId === runtimeId);
+}
+
 function removeButton(state, runtimeId) {
-  const plugin = state?.officialPlugins?.find(item => item.installed && item.runtimeId === runtimeId);
+  const plugin = installedPlugin(state, runtimeId);
   return plugin ? actionButton(state, plugin, "uninstall") : "";
+}
+
+function installedBadge(state, runtimeId) {
+  return installedPlugin(state, runtimeId)?.recognized ? officialBadge : "";
+}
+
+export function renderManageBadgeSlot(state, runtimeId) {
+  return `<span data-official-badge-slot="${e(runtimeId)}">${installedBadge(state, runtimeId)}</span>`;
 }
 
 export function renderManageSlot(state, runtimeId) {
@@ -41,6 +54,9 @@ export function renderManageSlot(state, runtimeId) {
 }
 
 function paintSlots(content, state) {
+  for (const slot of content.querySelectorAll("[data-official-badge-slot]")) {
+    slot.innerHTML = installedBadge(state, slot.dataset.officialBadgeSlot);
+  }
   for (const slot of content.querySelectorAll("[data-official-store-slot], [data-official-manage-slot]")) {
     const focused = slot.contains(content.ownerDocument.activeElement);
     slot.innerHTML = slot.hasAttribute("data-official-manage-slot")

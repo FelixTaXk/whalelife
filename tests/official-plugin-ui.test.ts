@@ -77,6 +77,24 @@ test("management shows uninstall for the exact installed runtime, including grou
   assert.doesNotMatch(detail, /aria-label="卸载 网上冲浪"/);
 });
 
+test("management labels only recognized installed plugins beside their names, including grouped children", () => {
+  const parent = { id: "surf", name: "网上冲浪", status: "active", console: { groupChildren: true } };
+  const child = { id: "surf/bilibili", name: "B 站", status: "stopped" };
+  const lookalike = { ...child, id: "surf/mirror" };
+  const status = { plugins: [parent, child, lookalike] };
+  const officialPlugins = [
+    { runtimeId: parent.id, installed: true, recognized: true, action: null },
+    { runtimeId: child.id, installed: true, recognized: true },
+    { runtimeId: lookalike.id, installed: true, recognized: false },
+  ];
+  const html = pluginCard(status, parent, { officialPlugins });
+  assert.match(html, /网上冲浪<\/h3><span data-official-badge-slot="surf"><span class="store-official-badge">官方/);
+  assert.match(html, /B 站<\/a><span data-official-badge-slot="surf\/bilibili"><span class="store-official-badge">官方/);
+  assert.match(html, /B 站<\/a><span data-official-badge-slot="surf\/mirror"><\/span>/);
+  assert.equal(html.match(/class="store-official-badge"/g)?.length, 2);
+  assert.doesNotMatch(pluginCard(status, parent, {}), /class="store-official-badge"/);
+});
+
 test("store exposes versioned installation and marks installed releases without uninstall options", () => {
   const html = shelfHtml(dependent);
   assert.match(html, /v1\.2\.0/);
