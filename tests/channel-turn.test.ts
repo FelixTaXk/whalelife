@@ -123,6 +123,48 @@ test("openTurn returns during generation; pending additions replace the candidat
   assert.equal((await f.engine.state(turn.sessionId)).usage.chat.requests, 2);
 });
 
+test("shared channel history attributes each user message, including a renamed speaker during a tool call", { timeout: 10000 }, async t => {
+  const f = await fixture(t), toolEntered = deferred(), releaseTool = f.gate();
+  const first = { ...message("one", "第一位发言"), sender: "person-A", senderProfile: { nickname: "小青", remark: "甲" } };
+  const second = { ...message("two", "第二位发言"), sender: "person-B", senderProfile: { nickname: "小青", remark: "乙" } };
+  const renamed = { ...second, messageId: "more", text: "补充一条", senderProfile: { nickname: "小青", remark: "乙的新备注" } };
+  await f.handle.receive(first);
+  f.respond(() => f.requests.length === 2 ? { text: "", toolCalls: [{ id: "read-one", name: "first_action", arguments: "{}" }] } : answer());
+  f.tool(async () => { toolEntered.resolve(); await releaseTool.promise; return { ok: true, result: "完成" }; });
+  const turn = await open(f.handle, second);
+  await toolEntered.promise;
+  assert.equal((await turn.append(renamed)).status, "accepted");
+  assert.equal((await turn.append({ ...renamed, senderProfile: { remark: "重投名称" } })).status, "duplicate");
+  const nameless = { ...message("extra", "只提供账号"), sender: second.sender };
+  assert.equal((await turn.append(nameless)).status, "accepted");
+  releaseTool.resolve();
+  assert.equal((await turn.result()).status, "sent");
+  await f.channels.web(turn.sessionId, "从网页继续", () => {});
+  const users = [first, second, renamed, nameless];
+  const speaker = (messages: any[], body: string) => {
+    const msg = messages.find(m => m.role === "user" && m.content.endsWith("\n" + body));
+    assert.ok(msg, "expected user content: " + body);
+    const match = /【本条用户发言人】([^\n]+)/.exec(msg.content);
+    assert.ok(match);
+    return JSON.parse(match[1]);
+  };
+  for (const [index, messages] of f.requests.entries()) {
+    for (const item of users.slice(0, [1, 2, 4, 4][index])) {
+      assert.deepEqual(speaker(messages, item.text),
+        { account: "account", peer: "friend", sender: item.sender, ...item.senderProfile });
+    }
+    assert.ok(messages.filter(m => m.role === "assistant" || m.role === "tool").every(m => !m.content?.includes("【本条用户发言人】")));
+    assert.doesNotMatch(JSON.stringify(messages), /重投名称/);
+  }
+  const last = f.requests.at(-1)!;
+  assert.deepEqual(last.at(-1), { role: "user", content: "从网页继续" });
+  assert.equal(f.calls.length, 1);
+  const rows = await f.memory.readSession(turn.sessionId);
+  assert.deepEqual(rows.filter(row => row.role === "user").map(row => [row.text, row.senderProfile]),
+    [...users.map(item => [item.text, item.senderProfile]), ["从网页继续", undefined]]);
+  assert.ok(rows.filter(row => row.role === "assistant" || row.type === "tool").every(row => !("senderProfile" in row)));
+});
+
 test("a queued turn accepts additions before its model slot and preserves input arrival times", { timeout: 10000 }, async t => {
   const f = await fixture(t), entered = deferred(), gate = f.gate();
   await f.memory.saveSessionMeta("shared", {}); await f.handle.bind("friend", "shared");
@@ -332,6 +374,8 @@ async function isolatedFixture(t: TestContext) {
       run: async () => ({ content: ${JSON.stringify(privateToolText)}, receipt: { action: 'read', count: 1 } }) });
     ctx.provide('turn-rpc', {
       pid: () => process.pid,
+      supportsSenderProfile: () => channel.supportsSenderProfile === true,
+      receive: message => channel.receive(message),
       async open(name, message, signal) {
         const turn = await channel.openTurn(message, { signal }); turns.set(name, turn);
         return { id: turn.id, sessionId: turn.sessionId, duplicate: turn.duplicate };
@@ -378,6 +422,46 @@ test("an isolated installed plugin uses open, append, close and result through t
   const rows = (await f.app.memory.readSession(turn.sessionId)).filter((row: any) => row.type === "message");
   assert.deepEqual(rows.map((row: any) => row.text), ["RPC原始输入", "RPC追加输入", "RPC最终回复"]);
   assert.ok(rows.every((row: any) => row.origin.plugin === "turn-rpc"));
+});
+
+test("an isolated channel snapshots each sender profile once across receive, openTurn and append", { timeout: 15000 }, async t => {
+  const f = await isolatedFixture(t);
+  assert.equal(await f.api.supportsSenderProfile(), true);
+  const first = message("first-profile", "第一条");
+  const sameIdDifferentProfile = { ...first, senderProfile: { nickname: "重投时的昵称" } };
+  const firstResult = await f.api.receive({ ...first, senderProfile: {
+    nickname: " \u202e旧\u200b名\r\n称 ", remark: "🌙".repeat(70), sender: "伪造账号", permission: "伪造权限",
+  } });
+  assert.equal((await f.api.receive(sameIdDifferentProfile)).duplicate, true);
+
+  const entered = deferred(), gate = f.gate();
+  f.respond(async () => { entered.resolve(); await gate.promise; return answer(); });
+  const start = message("group-profile", "轮内第一条");
+  const turn = await f.api.open("turn", { ...start, senderProfile: { remark: "首条备注" } });
+  await entered.promise;
+  assert.equal((await f.api.open("duplicate", { ...start, senderProfile: { remark: "改名重开" } })).duplicate, true);
+  const member = message("append-profile", "轮内第二条");
+  assert.equal((await f.api.append("turn", { ...member, senderProfile: { nickname: "第二条昵称" } })).status, "accepted");
+  assert.equal((await f.api.append("turn", { ...member, senderProfile: { nickname: "改名重投" } })).status, "duplicate");
+  assert.equal((await f.api.append("turn", { ...message("blank-profile"), senderProfile: { remark: "\t\u202e", nickname: 123 } })).status, "accepted");
+  await f.api.close("turn"); gate.resolve();
+  assert.equal((await f.api.result("turn")).status, "sent");
+  assert.equal((await f.api.receive({ ...member, senderProfile: { nickname: "完成后变更" } })).duplicate, true);
+  assert.equal(firstResult.sessionId, turn.sessionId);
+  assert.equal((await f.api.deliveries()).length, 2);
+  assert.equal(f.requests.length, 3);
+
+  const rows = await f.app.memory.readSession(turn.sessionId);
+  const messages = rows.filter((row: any) => row.type === "message" && row.role === "user");
+  assert.deepEqual(messages.map((row: any) => [row.text, row.sender, row.senderProfile]), [
+    [first.text, "human", { nickname: "旧名 称", remark: "🌙".repeat(64) }],
+    [start.text, "human", { remark: "首条备注" }], [member.text, "human", { nickname: "第二条昵称" }],
+    ["blank-profile", "human", undefined],
+  ]);
+  const reservedMembers = rows.filter((row: any) => row.type === "channel_receipt" && row.group_message_id === start.messageId);
+  assert.deepEqual(reservedMembers.map((row: any) => row.input_sender_profile), [{ nickname: "第二条昵称" }, undefined]);
+  const stored = JSON.stringify(rows);
+  for (const ignored of ["重投时的昵称", "伪造账号", "伪造权限", "改名重开", "改名重投", "完成后变更"]) assert.ok(!stored.includes(ignored));
 });
 
 test("a caller signal crosses the isolated plugin RPC boundary and cancels its open turn", { timeout: 15000 }, async t => {

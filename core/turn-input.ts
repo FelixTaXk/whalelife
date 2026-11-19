@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
-export type TurnMessage = { messageId: string; text: string; receivedAt: string; timezone: string };
+import type { SenderProfile } from "./plugin-api.ts";
+
+export type TurnMessage = { messageId: string; text: string; senderProfile?: SenderProfile; receivedAt: string; timezone: string };
 export type TurnAppendResult = { status: "accepted" | "duplicate" | "closed" | "full" | "cancelled"; messageId: string };
 type Entry = { message: TurnMessage; saved: boolean; commit?: Promise<void> };
 
@@ -18,7 +20,7 @@ export class TurnInput {
   constructor(initial: TurnMessage, signal: AbortSignal) {
     this.validate(initial);
     this.signal = signal;
-    const message = { ...initial };
+    const message = structuredClone(initial);
     this.seen.set(message.messageId, { message, saved: true });
     this.characters = message.text.length;
   }
@@ -32,7 +34,7 @@ export class TurnInput {
 
   async append(message: TurnMessage, persist: () => Promise<void>): Promise<TurnAppendResult> {
     this.validate(message);
-    const snapshot = { ...message }, messageId = snapshot.messageId;
+    const snapshot = structuredClone(message), messageId = snapshot.messageId;
     if (this.signal.aborted) return { status: "cancelled", messageId };
     const previous = this.seen.get(messageId);
     if (previous) {
@@ -77,7 +79,7 @@ export class TurnInput {
       });
       this.signal.throwIfAborted();
     }
-    const rows = this.pending.filter(entry => entry.saved).map(entry => ({ ...entry.message }));
+    const rows = this.pending.filter(entry => entry.saved).map(entry => structuredClone(entry.message));
     this.pending = [];
     return rows;
   }

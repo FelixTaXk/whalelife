@@ -72,6 +72,26 @@ export async function apply(ctx: Context) {
 
 `ctx.channels.send({channel,account,peer,messageId,text}, options?)` 是同插件已注册账号的直接发送便捷入口。它不能使用其他插件的账号。`send` 不是授权机制：插件须在自己的工具权限与业务授权范围内调用。
 
+## 入站发言人
+
+注册账号后检测 `channel.supportsSenderProfile === true`。支持时，`receive`、`openTurn` 和轮次的 `append` 都接受同一个可选字段：
+
+```ts
+await channel.receive({
+  peer: event.conversationId,
+  sender: event.senderId,
+  messageId: event.stableMessageId,
+  text: event.text,
+  ...(channel.supportsSenderProfile === true && {
+    senderProfile: { nickname: event.nickname, remark: event.contactRemark },
+  }),
+});
+```
+
+`sender` 是适配器验证过的平台账号 ID。`nickname` 是对方当时的昵称，`remark` 是联系人备注，称呼优先取备注，其次昵称，最后取发言人 ID。两项都可省略。主干将每个显示字段规整为单行、最多 64 个 Unicode 码点。适配器负责取得资料，查不到时照常接收消息。显示资料只帮助模型区分和称呼发言人，账号验证和白名单仍由适配器完成。
+
+每条被接纳的来信保留自己的快照。换昵称、改备注从下一条新消息起生效；同一消息重投沿用首次记录。同一个人在一轮里补充消息时也可提供新快照。消息正文原样保存。共用 WhaleLife 会话时，模型能按注册渠道、账号、对话对象及发言人区分历史来信；相同昵称没有跨账号或跨平台关联含义。旧记录可用其已存的账号 ID，未提供的历史称呼留空。旧宿主没有能力标识时，插件仍可沿用原有入站调用。
+
 ## 轮内追加输入（2026-11-08兼容新增）
 
 插件显式使用 `channel.openTurn(message, {signal?})`，才会得到允许后续真人消息加入的轮次。`receive` 仍是一条入站对应一次独立生成；`sessions.run/runTransient/enqueue/enqueueTransient` 的忙碌、排队、保存和返回语义不变。主干不会按文本、平台或时间间隔猜测哪些消息应合并，插件负责决定何时使用同一个轮次。

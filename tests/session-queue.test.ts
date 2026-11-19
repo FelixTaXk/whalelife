@@ -165,7 +165,10 @@ test("Web, two channel messages and plugin share one lane; arrival, history, sou
   await first;
   const result = await Promise.all([one, two, api.result("plugin")]);
   assert.equal(result[0].status, "sent"); assert.equal(result[1].status, "sent"); assert.equal(result[2].ok, true);
-  assert.deepEqual(f.requests.map(x => x.at(-1).content), ["网页先发", "渠道第一句", "渠道第二句", f.requests[3].at(-1).content]);
+  const speaker = '【本条用户发言人】{"account":"test","peer":"friend","sender":"human"}\n';
+  assert.deepEqual(f.requests.slice(0, 3).map(x => x.at(-1).content),
+    ["网页先发", speaker + "渠道第一句", speaker + "渠道第二句"]);
+  assert.doesNotMatch(f.requests[3].at(-1).content, /【本条用户发言人】/);
   assert.match(f.requests[3].at(-1).content, /临时机会TOKEN998/);
   assert.match(JSON.stringify(f.requests[3]), /渠道第二句/);
   const rows = await f.app.memory.readSession(f.id), state = await f.app.memoryEngine.state(f.id);

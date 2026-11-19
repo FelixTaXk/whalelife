@@ -4,7 +4,7 @@
  */
 import { estimateTokens } from "./memory-engine.ts";
 import { memoryWindow, type ContextPolicy } from "./session-context.ts";
-import { collectOrigins, originOf } from "./provenance.ts";
+import { collectOrigins, originOf, speakerOf, SPEAKER_MEMORY_GUIDANCE } from "./provenance.ts";
 import { timezone, messageTime, timestamp, collectTimes, TIME_GUIDANCE } from "./time.ts";
 
 export const SHORT_SUMMARY_CHARS = 200;
@@ -25,9 +25,10 @@ export function nextBatch(source: any[], checkpoint: any, fullSource = source, z
   let lastId = checkpoint.last_id, lastOffset = offset;
   while (rowIndex < source.length && batch.length < 20) {
     const row = source[rowIndex], chars = Array.from(String(row.text));
+    const speaker = speakerOf(row);
     const entry = { id: row.id, role: row.role, text: chars.slice(offset, offset + 1000).join(""),
       ...(zone ? { ts: timestamp(row.ts) === null ? null : row.ts, message_time: messageTime(row, zone) } : {}),
-      ...(originOf(row) ? { origin: originOf(row) } : {}),
+      ...(originOf(row) ? { origin: originOf(row) } : {}), ...(speaker ? { speaker } : {}),
       offset, total_chars: chars.length };
     if (batch.length && estimateTokens(JSON.stringify([...batch, entry])) > 4000) break;
     batch.push(entry);
@@ -164,6 +165,7 @@ export async function compressShort(options: Options & { rows: any[]; overflow: 
       { role: "user", content: JSON.stringify({ previous: trim(checkpoint.text || "", 200),
         previous_origins: checkpoint.origins, previous_time_range: checkpoint.time_range, timezone: zone, episodes: work.batch }) },
     ];
+    if (work.batch.some(row => row.speaker)) messages[0].content += SPEAKER_MEMORY_GUIDANCE;
     messages[0].content += TIME_GUIDANCE;
     // Failure also consumes this turn's one-maintenance-call allowance.
     const result = await request(options, messages, "short").catch((error) => { attempted = true; throw error; });
@@ -207,6 +209,7 @@ async function prepareLong(options: LongOptions) {
         previous_time_range: checkpoint.time_range, timezone: zone,
         candidates: candidates.map(({ revision: _revision, ...item }: any) => item) }) },
     ];
+    if (work.batch.some(row => row.speaker)) messages[0].content += SPEAKER_MEMORY_GUIDANCE;
     messages[0].content += TIME_GUIDANCE;
     return { checkpoint, work, candidates, previous, messages };
 }

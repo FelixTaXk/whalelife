@@ -11,7 +11,8 @@ import { validateOrigin, type Origin } from "./provenance.ts";
 import type { ToolTurn } from "./tool-retention.ts";
 import { TurnInput } from "./turn-input.ts";
 import { outgoingMessage } from "./channel-history.ts";
-import type { ChannelTurn, TurnAppendResult } from "./plugin-api.ts";
+import type { ChannelTurn, IncomingMessageData, SenderProfile, TurnAppendResult } from "./plugin-api.ts";
+import { normalizeSenderProfile } from "./sender-profile.ts";
 import { channelFailureReason } from "./channel-errors.ts";
 
 export type ChannelRoute = {
@@ -19,6 +20,7 @@ export type ChannelRoute = {
   account: string;
   peer: string;
   sender?: string;
+  senderProfile?: SenderProfile;
   messageId?: string;
   persona: string;
   permission: Permission;
@@ -28,12 +30,7 @@ export type ChannelRoute = {
   receivedAt?: string;
   timezone?: string;
 };
-export type IncomingMessage = {
-  peer: string;
-  sender: string;
-  messageId: string;
-  text: string;
-};
+export type IncomingMessage = IncomingMessageData;
 export type OutgoingMessage = {
   channel: string;
   account: string;
@@ -71,6 +68,7 @@ export type RebindOptions = {
   sessionId?: string;
 };
 export interface ChannelHandle {
+  readonly supportsSenderProfile?: true;
   receive(message: IncomingMessage, options?: ReceiveOptions): Promise<ChannelResult>;
   openTurn?(message: IncomingMessage, options?: ReceiveOptions): Promise<ChannelTurn>;
   bind(peer: string, sessionId: string): Promise<string>;
@@ -109,6 +107,7 @@ type Receipt = {
   /** Durable evidence of accepted input, including a cancelled/queued execution. Never auto-replayed. */
   input_text?: string;
   input_sender?: string;
+  input_sender_profile?: SenderProfile;
   received_at?: string;
   /** Captured before the first attempt; retries never substitute today's persona. */
   conversation?: Record<string, any>;
@@ -181,6 +180,7 @@ export class Channels {
     return {
       channel: reg.adapter.id, account: reg.adapter.account, peer,
       sender: message?.sender, messageId: message?.messageId,
+      ...(message?.senderProfile && { senderProfile: message.senderProfile }),
       origin: { plugin: reg.owner, channel: reg.adapter.id, platform: reg.adapter.name ?? reg.adapter.id },
       ...this.policy(reg.adapter), signal,
     };
@@ -438,7 +438,8 @@ export class Channels {
     this.validateInput(input);
     const peer = identifier(input.peer, "peer"), messageId = identifier(input.messageId, "messageId"), text = messageText(input.text);
     const sender = direction === "in" ? identifier((input as IncomingMessage).sender, "sender") : undefined;
-    const message = { peer, sender: sender ?? reg.adapter.account, messageId, text };
+    const senderProfile = direction === "in" ? normalizeSenderProfile((input as IncomingMessage).senderProfile) : undefined;
+    const message = { peer, sender: sender ?? reg.adapter.account, senderProfile, messageId, text };
     const fingerprint = hash([sender, text]);
     const signal = AbortSignal.any([reg.controller.signal, ...(options.signal ? [options.signal] : [])]);
     const route = this.sessions.captureRoute(peer, this.route(reg, peer, message, signal));
@@ -491,12 +492,15 @@ export class Channels {
     for (const key of ["persona", "permission", "session", "sessionId", "owner", "channel", "account", "origin", "platform", "action"])
       if (Object.hasOwn(input, key)) throw Error("消息不能指定路由策略：" + key);
   }
+  private turnMessage(input: IncomingMessage): IncomingMessage {
+    this.validateInput(input);
+    return { peer: identifier(input.peer, "peer"), sender: identifier(input.sender, "sender"),
+      senderProfile: normalizeSenderProfile(input.senderProfile), messageId: identifier(input.messageId, "messageId"), text: messageText(input.text) };
+  }
   /** Explicit input group. Admission is separate from waiting for its final delivery. */
   private openTurn(reg: Registration, input: IncomingMessage, options: ReceiveOptions): Promise<ChannelTurn> {
     this.alive(reg, options.signal);
-    this.validateInput(input);
-    const message = { peer: identifier(input.peer, "peer"), sender: identifier(input.sender, "sender"),
-      messageId: identifier(input.messageId, "messageId"), text: messageText(input.text) };
+    const message = this.turnMessage(input);
     const key = this.key(reg, message.peer), groupKey = hash([key, message.messageId, "in"]);
     const fingerprint = hash([message.sender, message.text]);
     const groups = this.inputTurns.get(reg) ?? new Map<string, { fingerprint: string; promise: Promise<ChannelTurn> }>();
@@ -513,9 +517,7 @@ export class Channels {
     const signal = AbortSignal.any(sourceSignals);
     const route = this.sessions.captureRoute(message.peer, this.route(reg, message.peer, message, signal));
     const checkMember = (value: IncomingMessage) => {
-      this.validateInput(value);
-      const next = { peer: identifier(value.peer, "peer"), sender: identifier(value.sender, "sender"),
-        messageId: identifier(value.messageId, "messageId"), text: messageText(value.text) };
+      const next = this.turnMessage(value);
       if (next.peer !== message.peer || next.sender !== message.sender) throw Error("追加输入必须来自同一渠道对象和发送者");
       return next;
     };
@@ -545,13 +547,14 @@ export class Channels {
         const groupId = "turn_" + hash([key, message.messageId]);
         let receipt: Receipt = { type: "channel_receipt", channel_key: key, external_message_id: message.messageId,
           direction: "in", fingerprint, delivery_id: "delivery_" + hash([key, message.messageId, "in"]), status: "pending",
-          group_id: groupId, input_text: message.text, input_sender: message.sender, received_at: route.receivedAt };
+          group_id: groupId, input_text: message.text, input_sender: message.sender,
+          ...(message.senderProfile && { input_sender_profile: message.senderProfile }), received_at: route.receivedAt };
         const reserved = await this.save(id, route, receipt, "reserve");
         if (reserved) {
           if (reserved.receipt.fingerprint !== fingerprint) throw Error("相同消息 ID 的内容不一致");
           return closed(reserved);
         }
-        const inbox = new TurnInput({ messageId: message.messageId, text: message.text,
+        const inbox = new TurnInput({ messageId: message.messageId, text: message.text, senderProfile: message.senderProfile,
           receivedAt: route.receivedAt!, timezone: route.timezone! }, route.signal!);
         let toolTurn: ToolTurn | undefined;
         let failureStage = "等待执行阶段";
@@ -589,7 +592,7 @@ export class Channels {
           append: async (value: IncomingMessage): Promise<TurnAppendResult> => {
             const next = checkMember(value);
             const arrival = new Date().toISOString();
-            return inbox.append({ messageId: next.messageId, text: next.text, receivedAt: arrival, timezone: route.timezone! }, async () => {
+            return inbox.append({ messageId: next.messageId, text: next.text, senderProfile: next.senderProfile, receivedAt: arrival, timezone: route.timezone! }, async () => {
               this.alive(reg, route.signal);
               let previous: StoredReceipt | undefined;
               try { previous = await this.receipt(key, next.messageId, "in"); }
@@ -600,7 +603,8 @@ export class Channels {
               }
               const member: Receipt = { type: "channel_receipt", channel_key: key, external_message_id: next.messageId, direction: "in",
                 fingerprint: hash([next.sender, next.text]), delivery_id: receipt.delivery_id, status: "pending", group_id: groupId,
-                group_message_id: message.messageId, input_text: next.text, input_sender: next.sender, received_at: arrival };
+                group_message_id: message.messageId, input_text: next.text, input_sender: next.sender,
+                ...(next.senderProfile && { input_sender_profile: next.senderProfile }), received_at: arrival };
               let existing: StoredReceipt | undefined;
               try { existing = await this.save(id, route, member, "reserve"); }
               catch (error) { failure.abort(Error("追加输入保存失败")); throw error; }
@@ -646,6 +650,7 @@ export class Channels {
     if (this.registrations.has(key)) throw Error("渠道账号已注册");
     const reg = { adapter: { ...adapter }, owner, controller: new AbortController() } as Registration;
     const handle: ChannelHandle = {
+      supportsSenderProfile: true,
       receive: (message, options = {}) => this.incoming(reg, message, options, "in"),
       openTurn: (message, options = {}) => this.openTurn(reg, message, options),
       send: (message, options = {}) => this.incoming(reg, message, options, "out"),

@@ -193,6 +193,8 @@ export interface SessionAPI {
 export interface MemoryEvent {
   id?: string; ts?: string; session?: string; type?: string;
   role?: string; text?: string; name?: string; origin?: Origin;
+  /** Display snapshot on external user messages, if supplied when the message arrived. */
+  senderProfile?: SenderProfile;
   persona_id?: string; persona_name?: string; persona_revision?: string;
   [field: string]: unknown;
 }
@@ -236,7 +238,9 @@ export interface MemoryAPI {
   saveDocument<Data = unknown>(sessionId: string, input: DocumentWrite<Data>): Promise<SessionDocument<Data>>;
 }
 
-export type IncomingMessageData = { peer: string; sender: string; messageId: string; text: string };
+/** Optional platform display data for this message, independent of sender identity and permission. */
+export type SenderProfile = { nickname?: string; remark?: string };
+export type IncomingMessageData = { peer: string; sender: string; senderProfile?: SenderProfile; messageId: string; text: string };
 export type OutgoingMessage = { channel: string; account: string; peer: string; sessionId: string; text: string; deliveryId: string; replyTo?: string; transient?: true };
 export type ChannelAdapter = {
   id: string; name?: string; account: string; persona?: string; permission?: Permission;
@@ -263,6 +267,7 @@ export interface ChannelTurn {
 export type SendMessage = { peer: string; messageId: string; text: string };
 export type RebindOptions = { expectedSessionId: string | null; sessionId?: string };
 export interface ChannelHandle {
+  readonly supportsSenderProfile?: true;
   receive(message: IncomingMessageData, options?: ReceiveOptions): Promise<ChannelResult>;
   openTurn?(message: IncomingMessageData, options?: ReceiveOptions): Promise<ChannelTurn>;
   bind(peer: string, sessionId: string): Promise<string>;

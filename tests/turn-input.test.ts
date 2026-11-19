@@ -110,11 +110,13 @@ test("message and character limits include initial and consumed messages", async
 test("input snapshots cannot be mutated after acceptance or consumption", async () => {
   const first = message("initial"), input = new TurnInput(first, new AbortController().signal);
   first.text = "mutated initial";
-  const next = message("next"), saving = input.append(next, async () => {});
+  const next = { ...message("next"), senderProfile: { nickname: "original" } }, saving = input.append(next, async () => {});
   next.text = "mutated pending";
+  next.senderProfile.nickname = "updated elsewhere";
   await saving;
   const rows = await input.take();
   assert.equal(rows[0].text, "next");
+  assert.deepEqual(rows[0].senderProfile, { nickname: "original" });
   rows[0].text = "mutated consumed";
   assert.equal((await input.append(message("initial"), async () => {})).status, "duplicate");
   assert.equal((await input.append(message("next"), async () => {})).status, "duplicate");

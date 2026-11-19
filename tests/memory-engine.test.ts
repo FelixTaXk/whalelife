@@ -7,6 +7,7 @@ import { Memory } from "../core/memory.ts";
 import { MemoryEngine, charCount } from "../core/memory-engine.ts";
 import { Tools } from "../core/tools.ts";
 import { registerMemoryTools } from "../core/memory-tools.ts";
+import { recalledMaterial } from "../core/context-material.ts";
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "whale-memory-engine-"));
@@ -105,6 +106,39 @@ test("AI tools cannot write shared or another session's facts even with full per
   assert.equal((await engine.localFacts("one")).text, "");
   dispose();
   assert.equal(tools.entries.has("remember_fact"), false);
+});
+
+test("automatic and tool recall keep speaker data per local user message and leave private address book details out of shared references", async t => {
+  const { engine, memory, logger } = await fixture(t);
+  const route = { channel: "local-chat", account: "bot-account", peer: "conversation-id",
+    origin: { channel: "local-chat", platform: "Example" } };
+  for (const event of [
+    { id: "contact", role: "user", sender: "person-id", senderProfile: { nickname: "同名", remark: "通讯录备注" } },
+    { id: "other-contact", role: "user", sender: "another-id", senderProfile: { nickname: "同名" } },
+    { id: "reply", role: "assistant", sender: "trigger-only", senderProfile: { remark: "触发者" } },
+  ]) await memory.appendEvent({ ...route, ...event, type: "message", session: "one", text: "鲸歌", ts: new Date().toISOString() });
+  const hits = await engine.search("one", "鲸歌", { persistTrace: false });
+  const tools = new Tools(logger);
+  t.after(registerMemoryTools(tools, engine));
+  const recall = async (id: string) => {
+    const result = await tools.call("recall_memory", { query: "鲸歌" }, { id, permission: "full" });
+    assert.equal(result.ok, true);
+    return result.result;
+  };
+  for (const items of [recalledMaterial(hits.items, "Asia/Shanghai"), await recall("one")]) {
+    assert.equal(items.length, 3);
+    const speakers = new Map(items.map((x: any) => [x.id, x.speaker]));
+    assert.deepEqual(speakers.get("contact"), { sender: "person-id", account: "bot-account", peer: "conversation-id",
+      nickname: "同名", remark: "通讯录备注" });
+    assert.deepEqual(speakers.get("other-contact"), { sender: "another-id", account: "bot-account", peer: "conversation-id", nickname: "同名" });
+    assert.equal(speakers.get("reply"), undefined);
+  }
+  const space = await engine.createSpace("同行");
+  for (const id of ["one", "other"]) await engine.settings(id, (await engine.state(id)).settings, [space.id]);
+  await engine.change("one", "contact", "share", space.id);
+  const shared = await recall("other");
+  assert.deepEqual(shared.map((x: any) => x.id), ["contact"]);
+  assert.doesNotMatch(JSON.stringify(shared), /person-id|another-id|bot-account|conversation-id|同名|通讯录备注/);
 });
 
 test("shared memories require explicit publication and membership, which is revocable", async (t) => {

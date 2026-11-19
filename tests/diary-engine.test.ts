@@ -13,6 +13,7 @@ import { MemoryAdmin } from "../core/memory-admin.ts";
 import { TOOL_TEXT_NOTICE } from "../core/tool-protocol-text.ts";
 import { diaryContext, diaryRequestPlan, diarySourceRevision, writeDiary, type DiaryEntry } from "../core/memory-diary.ts";
 import { collectTimes } from "../core/time.ts";
+import { nextBatch } from "../core/memory-lifecycle.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
 
 async function fixture(t: TestContext, count = 6) {
@@ -258,6 +259,37 @@ test("semantic scopes and sessions reuse only their own diary entries", async t 
   assert.equal((await diaryContext(f.engine, "other", "persona:revision-a", f.rows)).entries.length, 0);
   await f.engine.commitDiary("one", entry(f.rows.slice(0, 2)));
   assert.equal((await f.engine.state("one")).diaries.length, 2, "separate explicit history scopes own independent projections");
+});
+
+test("summarization distinguishes same-name speakers and preserves legacy sender IDs without attributing assistant or tool work to them", async t => {
+  const f = await fixture(t, 0);
+  const common = { session: "one", type: "message", channel: "letters", account: "mailbox", peer: "room",
+    origin: { plugin: "letters", channel: "letters", platform: "Mailbox" }, ts: "2020-01-03T08:00:00.000Z" };
+  for (const message of [
+    { role: "user", sender: "friend-a", senderProfile: { nickname: "同名", remark: "甲" }, text: "我想读诗。".repeat(40) },
+    { role: "user", sender: "friend-b", senderProfile: { nickname: "同名", remark: "乙" }, text: "我想画画。".repeat(40) },
+    { role: "user", sender: "legacy-id", text: "我的旧消息。" },
+    { role: "assistant", sender: "trigger-only", senderProfile: { remark: "触发者" }, persona_name: "鲸鲸", text: "我的回答。" },
+    { role: "tool", sender: "trigger-only", senderProfile: { remark: "触发者" }, text: "已完成查询。" },
+  ]) await f.memory.appendEvent({ ...common, ...message });
+  const rows = await f.memory.readSession("one");
+  const result = await writeDiary({ ...f.options, rows });
+  assert.equal(result.status, "written", result.reason);
+  const [instruction, material] = f.requests[0].messages;
+  assert.match(instruction.content, /同名/);
+  const records = JSON.parse(material.content).records;
+  assert.equal(records[3].persona_name, "鲸鲸");
+  const expected = [
+    { sender: "friend-a", account: "mailbox", peer: "room", nickname: "同名", remark: "甲" },
+    { sender: "friend-b", account: "mailbox", peer: "room", nickname: "同名", remark: "乙" },
+    { sender: "legacy-id", account: "mailbox", peer: "room" }, undefined, undefined,
+  ];
+  for (const projected of [records, nextBatch(rows, {})!.batch]) {
+    assert.deepEqual(projected.map((row: any) => row.speaker), expected);
+    assert.doesNotMatch(JSON.stringify(projected), /trigger-only|触发者/);
+    assert.deepEqual(projected.map((row: any) => row.text), rows.map(row => row.text));
+  }
+  assert.deepEqual(await f.memory.readSession("one"), rows);
 });
 
 test("imported tool messages retain role and fingerprint while independent tool work records stay outside diaries", async t => {

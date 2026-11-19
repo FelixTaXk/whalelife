@@ -71,6 +71,7 @@ export function registerMemoryTools(tools: any, engine: MemoryEngine) {
           kind: x.kind,
           text: x.text,
           source: x.source,
+          ...(x.speaker ? { speaker: x.speaker } : {}),
           ...attribution(x),
           ts: x.ts,
           outcome: x.outcome,

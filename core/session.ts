@@ -14,7 +14,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { estimateTokens } from "./memory-engine.ts";
 import type { ChannelRoute } from "./channels.ts";
 import { shortSummaryKey, shortContext, compressShort, consolidateLong, shouldDeferShortToLong } from "./memory-lifecycle.ts";
-import { attribution, historyTail, originNote, originOf, renderHistory } from "./provenance.ts";
+import { attribution, historyTail, originNote, originOf, renderHistory, speakerOf, speakerText } from "./provenance.ts";
+import { normalizeSenderProfile } from "./sender-profile.ts";
 import { SessionQueue, type QueuePolicy } from "./session-queue.ts";
 import { TRANSIENT_REPLY, type ToolTurn } from "./tool-retention.ts";
 import type { TurnInput } from "./turn-input.ts";
@@ -267,6 +268,7 @@ export class Sessions {
   captureRoute(id: string, route?: ChannelRoute): ChannelRoute {
     const initial = route ?? { ...this.config.channels.web, channel: "web", account: "local", peer: id };
     return { ...initial, origin: initial.origin ? { ...initial.origin } : undefined,
+      senderProfile: initial.sender ? normalizeSenderProfile(initial.senderProfile) : undefined,
       receivedAt: initial.receivedAt ?? new Date().toISOString(), timezone: initial.timezone ?? timezone(this.config.timezone),
       signal: AbortSignal.any([this.controller.signal, ...(initial.signal ? [initial.signal] : [])]) };
   }
@@ -412,16 +414,19 @@ export class Sessions {
         revision: p.revision.slice(0, 12),
         contextReset,
       });
-      if (!transient) await memory.appendEvent({
+      const userRow = {
         type: "message",
         ...source,
+        ...(route?.senderProfile ? { senderProfile: route.senderProfile } : {}),
         origin: { ...source.origin, action: "接收消息" },
         session: id,
         role: "user",
         text,
         ts: receivedAt,
         ...context,
-      });
+      };
+      if (!transient) await memory.appendEvent(userRow);
+      const currentText = transient ? text : speakerText(speakerOf(userRow), text);
       const cfg = { ...this.config.memory, ...policy };
       const allFacts = policy.include_facts ? [...new Set<string>(await memory.readFacts())] : [];
       const facts = allFacts.slice(-(cfg.facts_max_lines ?? 100));
@@ -469,7 +474,7 @@ export class Sessions {
         const frame = contextFrame(materials(compressed), rows, historyReference, timing(), stablePrefix);
         frame.messages.push(transient
           ? { role: "user", content: "【本轮插件临时输入，不是真人发言，不作为经历保存】\n来源：" + JSON.stringify(source.origin) + "\n" + text }
-          : { role: "user", content: text });
+          : { role: "user", content: currentText });
         return frame;
       };
       const assembled = (rows = recent, compressed = shortSummary) => assemble(rows, compressed).messages;
@@ -560,11 +565,12 @@ export class Sessions {
           // A real person's additions remain history even after transient tools.
           const row = { type: "message", ...source, ...context,
             origin: { ...source.origin, action: "接收消息" }, session: id, role: "user",
+            ...(message.senderProfile ? { senderProfile: message.senderProfile } : {}),
             text: message.text, external_message_id: message.messageId,
             ts: message.receivedAt, timezone: message.timezone };
           await memory.appendEvent(row);
           messages.push({ role: "user", content: "【本轮用户补充；消息时间 " + messageTime(row, zone) +
-            "；来源 " + JSON.stringify(source.origin) + "】\n" + message.text });
+            "；来源 " + JSON.stringify(source.origin) + "】\n" + speakerText(speakerOf(row), message.text) });
           diagnostics?.event("context.change", { operation: "append", source: "user_input", after: messages.at(-1) });
           await execution?.write("input_appended", { message_id: message.messageId,
             received_at: message.receivedAt, timezone: message.timezone });

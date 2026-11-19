@@ -8,7 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { atomic, safeId, type Memory } from "./memory.ts";
 import { occurrence, collectTimes, timestamp } from "./time.ts";
 import { applyCognitions, cognitionRevision, undoCognition, type CognitionMaintenance } from "./cognition.ts";
-import { attribution, collectOrigins, originOf, pluginOrigin, validateAttribution, validateOrigin } from "./provenance.ts";
+import { attribution, collectOrigins, originOf, pluginOrigin, speakerOf, validateAttribution, validateOrigin } from "./provenance.ts";
 import type { DocumentWrite, SessionDocument } from "./plugin-api.ts";
 import { TRANSIENT_REPLY } from "./tool-retention.ts";
 import { conversationRows } from "./channel-history.ts";
@@ -666,11 +666,13 @@ export class MemoryEngine {
     for (const row of rows) {
       if (row.type !== "message" || !row.text) continue;
       const rid = row.id || hash(JSON.stringify(row)).slice(0, 32);
+      const speaker = speakerOf(row);
       items.push({
         id: rid,
         kind: "episode",
         text: row.text,
         source: row.role === "user" ? "user" : "assistant",
+        ...(speaker ? { speaker } : {}),
         ...(originOf(row) ? { origin: originOf(row) } : {}),
         ts: row.ts,
         ...(row.timezone ? { timezone: row.timezone } : {}),
@@ -703,7 +705,9 @@ export class MemoryEngine {
           sources.set(ref.session, await this.candidates(ref.session));
         const item = sources.get(ref.session)!.find((x) => x.id === ref.record);
         if (item) {
-          items.push({ ...item, shared_space: space.name });
+          // An existing shared record reference grants access to the experience, not its private contact details.
+          const { speaker: _localContact, ...shared } = item;
+          items.push({ ...shared, shared_space: space.name });
           seen.add(key);
         }
       }
@@ -797,6 +801,7 @@ export class MemoryEngine {
         id: item.id,
         kind: item.kind,
         source: item.source,
+        ...(item.speaker ? { speaker: item.speaker } : {}),
         ...attribution(item),
         ts: item.ts,
         ...(item.occurred_at ? { occurred_at: item.occurred_at } : {}),
