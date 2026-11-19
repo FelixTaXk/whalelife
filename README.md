@@ -12,6 +12,17 @@ WhaleLife 交流 QQ 群：**962935021**
 
 ## 开始使用
 
+### 新手推荐：让 DSH 帮你安装
+
+1. 从 [DeepSeek 官网](https://www.deepseek.com/download/) 下载并安装页面上方的 **DeepSeek Harness（DSH）桌面版**。
+2. 配置好 DSH 后，新建对话，把下面这段话发给它。
+
+   ```text
+   请帮我安装 WhaleLife，只装主干。项目地址是 https://github.com/iinukami/whalelife 。装好后帮我启动，把控制台的网址发给我。
+   ```
+
+### 手动安装
+
 1. 下载本仓库源码，安装 **Node.js 24 或更新版本**，用 `node --version` 确认版本。
 2. 在项目目录打开终端，执行 `npm ci` 安装依赖。
 3. 首次使用时创建 `config` 文件夹，将根目录的 `config.example.json` 复制为 `config/config.json`。升级已有安装时保留原配置。
