@@ -170,10 +170,11 @@ async function handleClick(app, event) {
     return;
   }
   const steps = plugin.steps || [];
-  if (action === "uninstall" || steps.some(step => step.id !== plugin.id)) {
+  const components = plugin.components || [];
+  if (action === "uninstall" || components.length || steps.some(step => step.id !== plugin.id)) {
     const body = action === "uninstall"
       ? '<p class="official-dialog-text">只移除这个插件的程序文件。配置和用户资料会保留，重新安装后可以继续使用。</p>'
-      : `<ul class="official-plan">${steps.map(step => `<li><span>${e(stepNames[step.action])}</span><strong>${e(step.name)}</strong><small>v${e(step.version)}</small></li>`).join("")}</ul>`;
+      : `<ul class="official-plan">${steps.map(step => `<li><span>${e(stepNames[step.action])}</span><strong>${e(step.name)}</strong><small>v${e(step.version)}</small></li>`).join("")}${components.map(part => `<li><span>从上游下载并校验</span><strong>${e(part.name)}</strong><small>v${e(part.version)}</small></li>`).join("")}</ul>`;
     openDialog(app, plugin, verb + " " + plugin.name, body, async () => {
       try { await apply(app, plugin); } catch (error) { throw Error(failureMessage(error)); }
     }, e(plugin.label || verb), action === "uninstall");

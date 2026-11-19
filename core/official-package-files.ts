@@ -47,7 +47,7 @@ function isPersistent(path: string, preserve: readonly string[]) {
   while (parts[offset] === "sub" && parts.length > offset + 2) offset += 2;
   return persistent.has(parts[offset]) || parts[offset].startsWith(".env.");
 }
-function inventoryOf(header: Buffer): Inventory {
+export function inventoryOf(header: Buffer): Inventory {
   const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(header));
   if (value?.format !== 1 || !Array.isArray(value.files) || value.files.length > 150_000) throw Error("发行包清单格式错误");
   const byPath = new Map<string, PackageFile>(), directories = new Set<string>(), spellings = new Map<string, string>();
@@ -137,7 +137,7 @@ async function fileStamp(path: string) {
   if (!info.isFile()) throw Error(`不是普通文件或使用了链接：${path}`);
   return { size: info.size, key: [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join("/") };
 }
-async function digestFile(path: string, expectedSize?: number, fresh = false) {
+export async function digestFile(path: string, expectedSize?: number, fresh = false) {
   const stamp = await fileStamp(path);
   if (expectedSize !== undefined && stamp.size !== BigInt(expectedSize)) return "";
   const previous = digestCache.get(path);
@@ -153,7 +153,7 @@ async function digestFile(path: string, expectedSize?: number, fresh = false) {
 }
 
 // Check every ancestor before crossing it. readdir also detects case aliases on case-insensitive volumes.
-async function directoryAt(root: string, relative: string, create = false, made?: Set<string>) {
+export async function directoryAt(root: string, relative: string, create = false, made?: Set<string>) {
   let parent = root;
   const rootInfo = await lstat(parent);
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw Error("宿主目录不是普通目录");

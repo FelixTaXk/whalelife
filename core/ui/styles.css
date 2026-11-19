@@ -1282,6 +1282,30 @@ html:has(#store-drawer[open]) { overflow: hidden; }
   box-shadow: 6px -4px 0 #e5ddf4,12px 2px 0 #edddfb,18px -6px 0 #decaef,24px -2px 0 #d2c2e6,30px -3px 0 #d6d6e4,36px -7px 0 #e8e6f4;
   transform: rotate(-5deg);
 }
+.store-art[data-art="computer"] {
+  color: #3c566d;
+  background: linear-gradient(110deg, #dce6ef, #b0cadb 67%, #d5e1e8);
+}
+.store-art[data-art="computer"] .store-object i {
+  inset: 12px 22px 18px;
+  border: 4px solid #45556c;
+  border-bottom-width: 6px;
+  border-radius: 5px;
+  background: linear-gradient(145deg, #c8edec, #8cb6c5);
+  box-shadow: 3px 3px #52657a2c;
+  transform: rotate(-4deg);
+}
+.store-art[data-art="computer"] .store-object em {
+  left: 41px; top: 44px; width: 18px; height: 6px;
+  border-bottom: 3px solid #45556c;
+  background: linear-gradient(90deg, transparent 34%, #45556c 34% 66%, transparent 66%);
+  transform: rotate(-4deg);
+}
+.store-art[data-art="computer"] .store-object u {
+  left: 57px; top: 32px; width: 23px; height: 17px;
+  border: 2px solid #c29745; border-radius: 3px;
+  background: #f7db93; transform: rotate(6deg);
+}
 .store-card:hover .store-object { transform: translateY(-2px) rotate(-3deg); }
 .store-art[data-art="generic"] { color: #4f4569; background: linear-gradient(110deg, #eee3da, #d0bedb 67%, #decfed); }
 .store-art[data-art="generic"] .store-object i {

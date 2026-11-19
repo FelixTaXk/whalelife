@@ -6,6 +6,7 @@ import { installLogOutputGuards, writeLogOutput } from "./log-output.ts";
 
 interface ProcessApplication {
   close(): void | Promise<void>;
+  pendingPackageCommit?(): Promise<void> | undefined;
   logger: { error(message: string, extra?: unknown): void };
 }
 
@@ -37,15 +38,23 @@ export function installProcessLifecycle(app: ProcessApplication, options: Lifecy
     clearTimeout(deadline);
     process.exit(failed ? 1 : 0);
   };
+  const onDeadline = async () => {
+    const commit = app.pendingPackageCommit?.();
+    if (commit) {
+      // A multi-plugin commit can still need to undo an earlier dependency while a later step is running.
+      await commit;
+      deadline = setTimeout(onDeadline, timeoutMs);
+      return;
+    }
+    failed = true;
+    writeLogOutput("WhaleLife 关闭超时，强制退出", "stderr");
+    finish();
+  };
   const shutdown = () => {
     if (closing) return;
     // Set the guard and deadline before calling any application or logger code.
     closing = true;
-    deadline = setTimeout(() => {
-      failed = true;
-      writeLogOutput("WhaleLife 关闭超时，强制退出", "stderr");
-      finish();
-    }, timeoutMs);
+    deadline = setTimeout(onDeadline, timeoutMs);
     // A synchronous throw and a rejected close() share the same rejection handler.
     void Promise.resolve().then(() => app.close()).then(finish, () => {
       failed = true;

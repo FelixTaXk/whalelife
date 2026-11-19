@@ -74,12 +74,39 @@ for (const [index, plugin] of manifest.plugins.entries()) {
       assert.equal(release.delivery, "inventory");
       assert.equal(release.inventoryPath, "market/inventories/" + release.sha256 + ".json");
       assert.deepEqual(checkInventory(release.sha256, preserved), { sizeBytes: release.sizeBytes, fileCount: release.fileCount });
-    } else if (release.assetUrl) {
-      const asset = new URL(release.assetUrl);
-      assert.equal(asset.origin, repo.origin);
-      assert.ok(asset.pathname.startsWith(repo.pathname + "/releases/download/"));
+    } else if (release.delivery === "github-release") {
+      assert.equal(checkInventory(release.inventorySha256, preserved).fileCount, release.fileCount);
+      const base = repo.href + "/releases/download/v" + release.version + "/" +
+        [plugin.id, release.version, release.platform, release.arch].join("-");
+      if (release.composition) {
+        const { packagePart, zipPart, name, version } = release.composition;
+        assert.ok(name?.trim() && version?.trim());
+        assert.equal(release.assetUrl, undefined);
+        assert.equal(packagePart.repository, plugin.repository);
+        assert.equal(packagePart.assetUrl, base + "-plugin-only.wlpkg.gz");
+        for (const part of [packagePart, zipPart]) {
+          assert.match(part.sha256, /^[a-f0-9]{64}$/);
+          assert.ok(Number.isSafeInteger(part.sizeBytes) && part.sizeBytes > 0);
+        }
+        assert.match(zipPart.repository, /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/);
+        const prefix = zipPart.repository + "/releases/download/";
+        assert.ok(zipPart.assetUrl.startsWith(prefix) && /^[\w.-]+\/[\w.-]+\.zip$/.test(zipPart.assetUrl.slice(prefix.length)));
+        const inventory = JSON.parse(read("../inventories/" + release.inventorySha256 + ".json"));
+        const files = new Set(inventory.files.map(file => file.path));
+        assert.ok(Array.isArray(zipPart.files) && zipPart.files.length > 0);
+        const members = new Set();
+        for (const { path, member } of zipPart.files) {
+          assert.ok(files.delete(path), "Missing or duplicate component file");
+          assert.ok(typeof member === "string" && member.split("/").every(part => /^[A-Za-z0-9_-][\w.-]*$/.test(part)));
+          assert.ok(!members.has(member), "Duplicate upstream ZIP member");
+          members.add(member);
+        }
+      } else {
+        assert.equal(release.assetUrl, base + ".wlpkg.gz");
+      }
     } else {
       assert.equal(release.delivery, "local-build");
+      assert.ok(!release.assetUrl && !release.composition);
     }
     assert.ok(release.dependencies && typeof release.dependencies === "object" && !Array.isArray(release.dependencies));
     for (const [dep, range] of Object.entries(release.dependencies)) {

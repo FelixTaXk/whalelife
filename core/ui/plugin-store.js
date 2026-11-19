@@ -23,7 +23,7 @@ function externalLink(url, text) {
   return `<a href="${e(url)}" target="_blank" rel="noopener noreferrer">${e(text)}</a>`;
 }
 
-const artNames = new Set(["qq", "qzone", "autonomy", "gallery", "surf", "bilibili", "vision"]);
+const artNames = new Set(["qq", "qzone", "autonomy", "gallery", "surf", "bilibili", "vision", "computer"]);
 
 function bundledIdentity(state, entry) {
   return state.bundledStore?.official.some(item => item.id === entry.id && item.repository === entry.repository && item.name === entry.name);

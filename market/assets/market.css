@@ -70,6 +70,7 @@ h1 { font-size: clamp(2.25rem, 4.1vw, 3.3rem); line-height: 1.2; letter-spacing:
 .card[data-plugin="surf"] .glyph { background: #e4f2f7; color: #2a7388; }
 .card[data-plugin="bilibili"] .glyph { background: #fae8f1; color: #a64875; }
 .card[data-plugin="vision"] .glyph { background: #eaeefe; color: #5268ad; }
+.card[data-plugin="computer"] .glyph { background: #e1edf1; color: #426479; }
 .kind { color: #686077; background: #f5f3f9; font-size: .77rem; font-weight: 550; padding: .2rem .55rem; border-radius: 20px; }
 .card h2 { font-size: 1.34rem; line-height: 1.45; letter-spacing: -.025em; }
 .author { margin-top: 1px; color: var(--muted); font-size: .83rem; line-height: 1.6; }

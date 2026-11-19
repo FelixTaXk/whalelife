@@ -168,6 +168,18 @@ test("the install dialog previews each dependency and sends the approved plan on
   assert.deepEqual(ui.posts, [{ id: row.id, action: "install", planKey: row.planKey }]);
 });
 
+test("installing an external component shows its name and version before sending the request", async t => {
+  const row = { ...gallery, components: [{ name: "FFmpeg", version: "9.0.2" }] };
+  const ui = controller(t, row);
+  await ui.click();
+  assert.deepEqual(ui.posts, []);
+  const dialog = ui.dialogs[0];
+  assert.match(text(dialog.body), /上游下载并校验.*FFmpeg.*9\.0\.2/s);
+  assert.ok(dialog.confirm);
+  await dialog.confirm();
+  assert.deepEqual(ui.posts, [{ id: row.id, action: "install", planKey: row.planKey }]);
+});
+
 test("uninstall requires confirmation and a failed operation reports the step and rollback inside it", async t => {
   const error = "移除图库失败：文件已更改", rolledBack = ["已恢复图库原启停状态", "已撤回 <临时更改>"];
   const ui = controller(t, installed, { error, rolledBack });

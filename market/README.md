@@ -17,6 +17,7 @@
 | 网上冲浪 | iinukami 和贡献者 | 搜索公开网页，阅读正文，沿文中的链接继续浏览，也能按需取图。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-surf/blob/main/README.md#%E5%BC%80%E5%8F%91%E4%B8%8E%E5%8F%91%E8%A1%8C>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-surf>) · [反馈](<https://github.com/iinukami/whalelife-plugin-surf/issues>) |
 | B 站 | iinukami 和贡献者 | 搜索 B 站视频、读字幕和关注动态，按你的设置参与评论等互动。 | 网上冲浪 | [安装说明](<https://github.com/iinukami/whalelife-plugin-bilibili/blob/main/README.md#%E4%BD%BF%E7%94%A8%E6%B5%81%E7%A8%8B>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-bilibili>) · [反馈](<https://github.com/iinukami/whalelife-plugin-bilibili/issues>) |
 | 视听理解 | iinukami 和贡献者 | 从图片、视频片段和音频提取画面与声音信息，供伙伴理解和讨论。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-vision/blob/main/README.md#%E5%BC%80%E5%8F%91%E9%AA%8C%E8%AF%81%E5%92%8C%E5%8F%91%E8%A1%8C>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-vision>) · [反馈](<https://github.com/iinukami/whalelife-plugin-vision/issues>) |
+| 电脑与文件 | iinukami 和贡献者 | 按授权查找和编辑 Windows 本地文件、生成文档，在隔离环境中运行离线脚本。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-computer/blob/main/README.md#%E5%BC%80%E5%8F%91%E6%A3%80%E6%9F%A5%E4%B8%8E%E6%9E%84%E5%BB%BA>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-computer>) · [反馈](<https://github.com/iinukami/whalelife-plugin-computer/issues>) |
 
 ## 社区插件
 
@@ -29,7 +30,7 @@
 
 条目资料在 [catalog.json](catalog.json) 维护。在主仓根目录运行 `node market/tools/generate-catalog.mjs` 更新这个页面与随主干提供的离线快照。提交前运行 `node market/tools/generate-catalog.mjs --check` 检查生成物和[官方插件发行清单](official-releases.json)。
 
-官方插件按宿主版本、操作系统和架构匹配。七款插件均提供本机安装包的固定摘要；准备新实例时可按[官方安装包构建说明](official-builds.md)生成缓存。`parentId` 记录父插件，`requiredPlugins` 记录直接依赖。
+官方插件按宿主版本、操作系统和架构匹配。每个可安装版本都在发行清单中固定包的大小和 SHA-256。维护者可按[官方安装包构建说明](official-builds.md)核验发行物。`parentId` 记录父插件，`requiredPlugins` 记录直接依赖。
 
 | 字段 | 说明 |
 | --- | --- |

@@ -161,7 +161,7 @@ export async function boot(
     })().then(resolveClose, rejectClose);
     return closing;
   };
-  return { config, ...services, runtime, close };
+  return { config, ...services, runtime, close, pendingPackageCommit: () => runtime.pendingPackageCommit };
 }
 if (
   process.argv[1] &&

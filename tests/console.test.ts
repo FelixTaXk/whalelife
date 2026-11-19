@@ -42,7 +42,7 @@ test("plugin management opens the store drawer and public catalog links still wo
     ["assets/whale.svg", "image/svg+xml"], ["catalog.json", "application/json"],
     ["official-releases.json", "application/json"],
   ]);
-  const ids = ["qq", "qzone", "autonomy", "gallery", "surf", "bilibili", "vision"];
+  const ids = ["qq", "qzone", "autonomy", "gallery", "surf", "bilibili", "vision", "computer"];
   for (const [file, mime] of paths) {
     const asset = await fetch(new URL(file + "?cache=1", market));
     assert.equal(asset.status, 200, file);

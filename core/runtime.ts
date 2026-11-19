@@ -25,7 +25,10 @@ export class Runtime {
   events: PluginEvents;
   private actions: Promise<unknown> = Promise.resolve();
   private closing = false;
-  private managementClosing = false;
+  private managementLifetime = new AbortController();
+  get packageSignal() { return this.managementLifetime.signal; }
+  private packageCommit?: Promise<void>;
+  get pendingPackageCommit() { return this.packageCommit; }
   private processOptions: ReturnType<typeof pluginRuntimeOptions>;
   private optionalServices: OptionalServices;
   beginClose() {
@@ -99,15 +102,21 @@ export class Runtime {
     return entries.includes("plugin.yaml") || entries.includes("index.ts");
   }
   async managePackages<T>(task: () => Promise<T>) {
-    if (this.managementClosing) throw Error("核心正在关闭");
+    this.packageSignal.throwIfAborted();
     return this.serial(async () => {
       if (this.closing) throw Error("核心正在关闭");
       return task();
     });
   }
   async finishManagement() {
-    this.managementClosing = true;
+    this.managementLifetime.abort(Error("核心正在关闭"));
     await this.actions;
+  }
+  // managePackages serializes callers. Protect the entire multi-plugin commit, including its rollback.
+  beginPackageCommit() {
+    let finish!: () => void;
+    this.packageCommit = new Promise<void>(resolve => { finish = resolve; });
+    return () => { this.packageCommit = undefined; finish(); };
   }
   private lookup(record: any, name: string) {
     let at = record;
@@ -534,7 +543,7 @@ export class Runtime {
     return record.stopping;
   }
   async action(id: string, action: string) {
-    if (this.managementClosing) throw Error("核心正在关闭");
+    this.packageSignal.throwIfAborted();
     return this.serial(async () => {
       if (this.closing) throw Error("核心正在关闭");
       if (!validPluginId(id)) throw Error("插件 ID 无效");

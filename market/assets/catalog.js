@@ -78,6 +78,16 @@ window.WHALELIFE_CATALOG = {
       "installation": "https://github.com/iinukami/whalelife-plugin-vision/blob/main/README.md#开发验证和发行",
       "feedback": "https://github.com/iinukami/whalelife-plugin-vision/issues",
       "dependencies": []
+    },
+    {
+      "id": "computer",
+      "name": "电脑与文件",
+      "author": "iinukami 和贡献者",
+      "description": "按授权查找和编辑 Windows 本地文件、生成文档，在隔离环境中运行离线脚本。",
+      "repository": "https://github.com/iinukami/whalelife-plugin-computer",
+      "installation": "https://github.com/iinukami/whalelife-plugin-computer/blob/main/README.md#开发检查与构建",
+      "feedback": "https://github.com/iinukami/whalelife-plugin-computer/issues",
+      "dependencies": []
     }
   ],
   "community": []

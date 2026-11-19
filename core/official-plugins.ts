@@ -5,10 +5,13 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { inspectOfficialFiles, installOfficialFiles, uninstallOfficialFiles } from "./official-package-files.ts";
+import { ensureOfficialPackage } from "./official-package-download.ts";
 import type { Runtime } from "./runtime.ts";
 
 type Release = {
   version: string; hostRange: string; platform: string; arch: string; sha256: string;
+  assetUrl?: string; sizeBytes?: number; inventorySha256?: string;
+  composition?: Pick<Parameters<typeof import("./official-package-composition.ts").ensureComposedOfficialPackage>[1], "packagePart" | "zipPart"> & { name: string; version: string };
   dependencies: Record<string, string>; bundledPluginIds?: string[]; recognitionOnly?: boolean;
 };
 type Entry = { id: string; name: string; repository: string; parentId: string | null; requiredPlugins: string[]; preserve?: string[]; verifiedReleases: Release[] };
@@ -28,6 +31,10 @@ const compare = (left: string, right: string) => {
 const matches = (version: string, verifiedVersion: string) => version === verifiedVersion;
 const spec = (item: Item, release: Release) => ({ directory: "plugins/" + item.pathId.split("/").join("/sub/"),
   sha256: release.sha256, recognitionOnly: release.recognitionOnly, preserve: item.entry.preserve });
+function inventorySpec(item: Item, release: Release) {
+  const files = spec(item, release);
+  return release.inventorySha256 ? { ...files, sha256: release.inventorySha256, recognitionOnly: true } : files;
+}
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 export class OfficialPlugins {
@@ -56,7 +63,7 @@ export class OfficialPlugins {
       return item;
     }
     for (const candidate of candidates) try {
-      const inspection = await inspectOfficialFiles(runtime.root, spec(item, candidate));
+      const inspection = await inspectOfficialFiles(runtime.root, inventorySpec(item, candidate));
       if (inspection.state === "installed") {
         item.installed = true;
         item.installedVersion = candidate.version;
@@ -122,6 +129,10 @@ export class OfficialPlugins {
       try { visit(item); } catch (error) { reason = errorText(error); steps.length = 0; }
     }
     const action = reason || !steps.length ? null : item.installed ? "uninstall" : "install";
+    const components = steps.flatMap(step => {
+      const parts = step.action === "install" && items.get(step.id)?.target?.composition;
+      return parts ? [{ name: parts.name, version: parts.version, repository: parts.zipPart.repository }] : [];
+    });
     const verbs = { install: "安装", uninstall: "卸载", enable: "启用", reuse: "沿用" };
     const label = steps.filter(s => s.action !== "reuse").map(s =>
       verbs[s.action] + (/^[A-Za-z]/.test(s.name) ? " " : "") + s.name + (s.id === "bilibili" ? "插件" : "")).join("并");
@@ -132,7 +143,7 @@ export class OfficialPlugins {
       installedVersion: item.installedVersion ?? null, installed: item.installed, recognized: Boolean(item.existing),
       enabled: item.installed && item.enabled,
       status: this.runtime.records.get(item.pathId)?.status ?? null,
-      action, label, steps, reason, upgradeUrl, planKey };
+      action, label, steps, components, reason, upgradeUrl, planKey };
   }
 
   private async snapshot() {
@@ -160,6 +171,8 @@ export class OfficialPlugins {
   }
   async apply(input: { id?: unknown; action?: unknown; planKey?: unknown }) {
     return this.runtime.managePackages(async () => {
+      const signal = this.runtime.packageSignal;
+      signal.throwIfAborted();
       const runtime = this.runtime, items = await this.snapshot();
       const item = typeof input?.id === "string" && items.get(input.id);
       if (!item) throw Error("请选择官方目录内的插件。");
@@ -168,6 +181,7 @@ export class OfficialPlugins {
         throw Object.assign(Error(plan.reason || "安装状态已变化，请刷新并确认新的操作。"), { status: 409 });
       const undo: Array<{ label: string; run: () => Promise<void> }> = [];
       let stage = "";
+      let finishCommit: (() => void) | undefined;
       const stop = async (p: Item) => { if (runtime.records.has(p.pathId)) await runtime.stop(p.pathId); };
       const activate = async (p: Item) => {
         const loaded = await runtime.loadPath(p.pathId);
@@ -177,7 +191,30 @@ export class OfficialPlugins {
         for (const id of [p.pathId, ...(release.bundledPluginIds ?? [])]) runtime.records.delete(id);
       };
       try {
+        // Acquire all missing packages before enabling dependencies or touching the plugin directories.
         for (const step of plan.steps) {
+          if (step.action !== "install") continue;
+          const p = items.get(step.id)!;
+          const target = p.target!;
+          if (target.composition) {
+            stage = step.name + " · 下载并校验发行包和 " + target.composition.name;
+            if (!target.sizeBytes || !target.inventorySha256 || !/^[a-f0-9]{64}$/.test(target.inventorySha256))
+              throw Error("发行清单缺少完整安装包的校验信息。");
+            const inventory = readFileSync(new URL("../market/inventories/" + target.inventorySha256 + ".json", import.meta.url));
+            if (createHash("sha256").update(inventory).digest("hex") !== target.inventorySha256) throw Error("发行文件清单校验失败。");
+            const { ensureComposedOfficialPackage } = await import("./official-package-composition.ts");
+            await ensureComposedOfficialPackage(runtime.root, { ...target.composition, inventory, sha256: target.sha256, sizeBytes: target.sizeBytes }, signal);
+          } else if (target.assetUrl) {
+            stage = step.name + " · 下载并校验发行包";
+            if (!target.sizeBytes) throw Error("发行清单缺少安装包大小。");
+            await ensureOfficialPackage(runtime.root, { repository: p.entry.repository, assetUrl: target.assetUrl,
+              sha256: target.sha256, sizeBytes: target.sizeBytes }, signal);
+          }
+        }
+        signal.throwIfAborted();
+        finishCommit = runtime.beginPackageCommit();
+        for (const step of plan.steps) {
+          signal.throwIfAborted();
           if (step.action === "reuse") continue;
           const p = items.get(step.id)!;
           const release = (p.existing ?? p.target)!;
@@ -186,7 +223,7 @@ export class OfficialPlugins {
           if (step.action === "uninstall") {
             if (p.active) undo.push({ label: "恢复启用" + step.name, run: () => activate(p) });
             await stop(p);
-            await uninstallOfficialFiles(runtime.root, files);
+            await uninstallOfficialFiles(runtime.root, inventorySpec(p, release));
             forget(p, release);
             continue;
           }
@@ -209,7 +246,9 @@ export class OfficialPlugins {
             } });
           }
           stage = step.name + " · 启用插件";
+          signal.throwIfAborted();
           await activate(p);
+          signal.throwIfAborted();
         }
         if (plan.action === "install") await runtime.resumeBlocked();
         return { ok: true, message: item.entry.name + (plan.action === "install" ? "已安装并启用。" : "已卸载，配置和数据已保留。") };
@@ -221,6 +260,8 @@ export class OfficialPlugins {
         }
         const detail = failed.length ? "。以下改动未能自动撤回：" + failed.join("；") : "";
         throw Object.assign(Error(stage + "失败：" + errorText(error) + detail), { rolledBack });
+      } finally {
+        finishCommit?.();
       }
     });
   }

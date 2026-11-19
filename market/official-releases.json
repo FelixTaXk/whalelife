@@ -15,14 +15,16 @@
           "arch": "x64",
           "dependencies": {},
           "sourceCommit": "10d046ece6895f6f4136d029d9778db32f8d57c7",
-          "delivery": "local-build",
+          "delivery": "github-release",
           "verification": "market/official-builds.md",
           "bundledPluginIds": [
             "qq/gallery"
           ],
           "sha256": "b1a5e0bc03cdbc7b2376040283297c62dbb339303d668338428d798eb618e741",
           "fileCount": 2925,
-          "sizeBytes": 235658116
+          "sizeBytes": 235658116,
+          "inventorySha256": "136c1315ac2342c8825b02dfba8ca6d9cdf345b66b6ba1b31d55974d6712c461",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-qq/releases/download/v0.22.0/qq-0.22.0-win32-x64.wlpkg.gz"
         },
         {
           "version": "0.22.0",
@@ -86,14 +88,16 @@
             "qq": "0.22.0"
           },
           "sourceCommit": "107882f05eb1c8b9c49d3ac9684070ccedf0ae25",
-          "delivery": "local-build",
+          "delivery": "github-release",
           "verification": "market/official-builds.md",
           "bundledPluginIds": [
             "qq/qzone/gallery"
           ],
           "sha256": "8aa3553b4b32dbed467f0d613443eb1d405157a24c8154c04b536ce2d47f68e8",
           "fileCount": 136,
-          "sizeBytes": 8887306
+          "sizeBytes": 8887306,
+          "inventorySha256": "c76a16af2d52b3962e5b92250c8b91a0831dafad52d0b4a6403d8f40616f9d23",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-qzone/releases/download/v0.5.2/qzone-0.5.2-win32-x64.wlpkg.gz"
         },
         {
           "version": "0.5.2",
@@ -151,11 +155,13 @@
           "arch": "x64",
           "dependencies": {},
           "sourceCommit": "e9c29f4e903c58cec5e1c309db06a328e0d65f84",
-          "delivery": "local-build",
+          "delivery": "github-release",
           "verification": "market/official-builds.md",
           "sha256": "a1c8eb5eaaeee4c36dd68b350724c1681f92d0caed8349358b8cc086b74c7022",
           "fileCount": 16,
-          "sizeBytes": 66436
+          "sizeBytes": 66436,
+          "inventorySha256": "8c161995d56496515e9c3765f9336c6f298af51206b12f4f59c48824bc450f6b",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-autonomy/releases/download/v0.6.3/autonomy-0.6.3-win32-x64.wlpkg.gz"
         },
         {
           "version": "0.6.3",
@@ -203,11 +209,13 @@
           "arch": "x64",
           "dependencies": {},
           "sourceCommit": "ad22986cf691eb1c60f8d17db91836c48c65c948",
-          "delivery": "local-build",
+          "delivery": "github-release",
           "verification": "market/official-builds.md",
           "sha256": "eba7500513b67fa3e17ec17c3d312b1dbc05ad5ca2e68109562fad73459a9b89",
           "fileCount": 381,
-          "sizeBytes": 9368872
+          "sizeBytes": 9368872,
+          "inventorySha256": "10fb246eae2c4d13b813209de0d50f5a7a1276a757b29810311781c4fda57f2a",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-gallery/releases/download/v0.1.2/gallery-0.1.2-win32-x64.wlpkg.gz"
         },
         {
           "version": "0.1.2",
@@ -255,11 +263,13 @@
           "arch": "x64",
           "dependencies": {},
           "sourceCommit": "47d39017f7947dc07f85cb47bfe5368e874c6ff4",
-          "delivery": "local-build",
+          "delivery": "github-release",
           "verification": "market/official-builds.md",
           "sha256": "851e379f224dee49b4b1f87ae7c7a75147f28ff66c2965a5b7a5accd1b5640e2",
           "fileCount": 1239,
-          "sizeBytes": 1626976
+          "sizeBytes": 1626976,
+          "inventorySha256": "e948cff416d68e1bae953feee2264b23127c5a59479ff0c7092338738ea7e9c1",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-surf/releases/download/v0.1.1/surf-0.1.1-win32-x64.wlpkg.gz"
         },
         {
           "version": "0.1.1",
@@ -296,11 +306,13 @@
             "surf": "0.1.1"
           },
           "sourceCommit": "258a5b863c5d08908c5fd86457598872260323a7",
-          "delivery": "local-build",
+          "delivery": "github-release",
           "verification": "market/official-builds.md",
           "sha256": "b6e2de7b87721295168ef763fe31d568002401382d331dcc232683e6fa8fd23d",
           "fileCount": 335,
-          "sizeBytes": 526335
+          "sizeBytes": 526335,
+          "inventorySha256": "c28e9f9097cb69da1ae8a00969cf932cf01adf250af5d51682e3222b503b20e9",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-bilibili/releases/download/v0.2.8/bilibili-0.2.8-win32-x64.wlpkg.gz"
         },
         {
           "version": "0.2.8",
@@ -335,11 +347,46 @@
           "arch": "x64",
           "dependencies": {},
           "sourceCommit": "c95330d3a8323debd6684113222c729b6418e5fa",
-          "delivery": "local-build",
+          "delivery": "github-release",
           "verification": "market/official-builds.md",
           "sha256": "d5a0e8331722fefdd930c33465a29a6362a8d2961d10a241cab38d73558cf9dc",
           "fileCount": 386,
-          "sizeBytes": 88664256
+          "sizeBytes": 88664256,
+          "inventorySha256": "2c54ea817813f91374dbcad21d26f62bfb6f048c1fc9752fe6e38903283c4448",
+          "composition": {
+            "name": "FFmpeg",
+            "version": "9.0.2",
+            "packagePart": {
+              "repository": "https://github.com/iinukami/whalelife-plugin-vision",
+              "assetUrl": "https://github.com/iinukami/whalelife-plugin-vision/releases/download/v0.5.0/vision-0.5.0-win32-x64-plugin-only.wlpkg.gz",
+              "sha256": "015965a39816c9b62d764a991a93846d1bc196a5b469e34b546e136852f4e0f7",
+              "sizeBytes": 9418271
+            },
+            "zipPart": {
+              "repository": "https://github.com/GyanD/codexffmpeg",
+              "assetUrl": "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip",
+              "sha256": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
+              "sizeBytes": 114768076,
+              "files": [
+                {
+                  "path": "runtime/ffmpeg/win32-x64/ffmpeg.exe",
+                  "member": "ffmpeg-9.0.2-essentials_build/bin/ffmpeg.exe"
+                },
+                {
+                  "path": "runtime/ffmpeg/win32-x64/ffprobe.exe",
+                  "member": "ffmpeg-9.0.2-essentials_build/bin/ffprobe.exe"
+                },
+                {
+                  "path": "runtime/ffmpeg/win32-x64/LICENSE",
+                  "member": "ffmpeg-9.0.2-essentials_build/LICENSE"
+                },
+                {
+                  "path": "runtime/ffmpeg/win32-x64/README.txt",
+                  "member": "ffmpeg-9.0.2-essentials_build/README.txt"
+                }
+              ]
+            }
+          }
         },
         {
           "version": "0.5.0",
@@ -357,16 +404,45 @@
           "inventoryPath": "market/inventories/d5c117bcbd2269b429da7e4dfa602983223b0f908c290dc89fb9a877db9da10d.json"
         }
       ]
-    }
-  ],
-  "installedBuilds": [
+    },
     {
-      "runtimeId": "computer",
-      "version": "0.1.0",
-      "platform": "win32",
-      "arch": "x64",
-      "sourceCommit": "c05d81d4828e4040d30a7915582ebcc43b2fbbcc",
-      "sha256": "cfc4f3208c155a05f4d5e1b034d0e056f55a753b348960474281bb5ef8af66e0"
+      "id": "computer",
+      "name": "电脑与文件",
+      "repository": "https://github.com/iinukami/whalelife-plugin-computer",
+      "parentId": null,
+      "requiredPlugins": [],
+      "verifiedReleases": [
+        {
+          "version": "0.1.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "c05d81d4828e4040d30a7915582ebcc43b2fbbcc",
+          "delivery": "github-release",
+          "verification": "market/official-builds.md",
+          "sha256": "5ba819e797d526f7bceb889e0342466972257cf3d7d18e34fda7c0998bfcfaba",
+          "fileCount": 22,
+          "sizeBytes": 79880,
+          "inventorySha256": "cfc4f3208c155a05f4d5e1b034d0e056f55a753b348960474281bb5ef8af66e0",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-computer/releases/download/v0.1.0/computer-0.1.0-win32-x64.wlpkg.gz"
+        },
+        {
+          "version": "0.1.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "c05d81d4828e4040d30a7915582ebcc43b2fbbcc",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "cfc4f3208c155a05f4d5e1b034d0e056f55a753b348960474281bb5ef8af66e0",
+          "fileCount": 22,
+          "sizeBytes": 2522,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/cfc4f3208c155a05f4d5e1b034d0e056f55a753b348960474281bb5ef8af66e0.json"
+        }
+      ]
     }
   ]
 }
