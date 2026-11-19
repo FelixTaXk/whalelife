@@ -20,6 +20,30 @@ const ids = Array.from(official, plugin => plugin.id);
 assert.equal(new Set(ids).size, ids.length, "Duplicate official plugin id");
 assert.deepEqual(manifest.plugins.map(plugin => plugin.id), ids, "Catalog and manifest order differ");
 
+function checkInventory(digest, preserved = []) {
+  assert.match(digest, /^[a-f0-9]{64}$/);
+  const raw = readFileSync(new URL("../inventories/" + digest + ".json", import.meta.url));
+  assert.equal(createHash("sha256").update(raw).digest("hex"), digest);
+  const inventory = JSON.parse(raw);
+  assert.equal(inventory.format, 1);
+  assert.ok(Array.isArray(inventory.files) && inventory.files.length > 0);
+  const paths = new Set();
+  for (const { path, size, sha256 } of inventory.files) {
+    assert.ok(typeof path === "string" && path.length <= 4096 && path.normalize("NFC") === path &&
+      !/[\\<>:"|?*\x00-\x1f]/u.test(path) && path.split("/").every(part => part && !/[. ]$/.test(part) &&
+        !/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part) && !/~\d+(?:\.|$)/.test(part)));
+    const lower = path.toLowerCase();
+    assert.ok(!paths.has(lower), "Duplicate inventory path");
+    assert.ok(!/^(?:sub\/[^/]+\/)*(?:data|config|config\.(?:json|ya?ml)|settings\.json|\.env(?:\.[^/]*)?)(?:\/|$)/.test(lower) &&
+      !preserved.some(p => lower === p.toLowerCase() || lower.startsWith(p.toLowerCase() + "/")), "Persistent file in inventory");
+    paths.add(lower);
+    assert.ok(Number.isSafeInteger(size) && size >= 0);
+    assert.match(sha256, /^[a-f0-9]{64}$/);
+  }
+  assert.ok(inventory.files.some(file => file.path === "plugin.yaml"), "Missing plugin.yaml");
+  return { sizeBytes: raw.length, fileCount: inventory.files.length };
+}
+
 for (const [index, plugin] of manifest.plugins.entries()) {
   const card = official[index];
   assert.equal(plugin.name, card.name);
@@ -49,22 +73,7 @@ for (const [index, plugin] of manifest.plugins.entries()) {
     if (release.recognitionOnly === true) {
       assert.equal(release.delivery, "inventory");
       assert.equal(release.inventoryPath, "market/inventories/" + release.sha256 + ".json");
-      const raw = readFileSync(new URL("../../" + release.inventoryPath, import.meta.url));
-      assert.equal(createHash("sha256").update(raw).digest("hex"), release.sha256);
-      const inventory = JSON.parse(raw);
-      assert.equal(inventory.format, 1);
-      assert.equal(raw.length, release.sizeBytes);
-      assert.equal(inventory.files.length, release.fileCount);
-      const paths = new Set();
-      for (const { path, size, sha256 } of inventory.files) {
-        assert.ok(typeof path === "string" && !/[\\:\x00-\x1f]/u.test(path) &&
-          path.split("/").every(part => part && part !== "." && part !== ".."));
-        assert.ok(!paths.has(path.toLowerCase()), "Duplicate inventory path");
-        assert.ok(!preserved.includes(path), "Persistent file in release inventory");
-        paths.add(path.toLowerCase());
-        assert.ok(Number.isSafeInteger(size) && size >= 0);
-        assert.match(sha256, /^[a-f0-9]{64}$/);
-      }
+      assert.deepEqual(checkInventory(release.sha256, preserved), { sizeBytes: release.sizeBytes, fileCount: release.fileCount });
     } else if (release.assetUrl) {
       const asset = new URL(release.assetUrl);
       assert.equal(asset.origin, repo.origin);
@@ -78,5 +87,20 @@ for (const [index, plugin] of manifest.plugins.entries()) {
     }
     assert.deepEqual(Object.keys(release.dependencies).sort(), [...plugin.requiredPlugins].sort());
   }
+}
+const managedIds = new Set(manifest.plugins.map(p => p.parentId ? p.parentId + "/" + p.id : p.id));
+const builds = new Set();
+assert.ok(Array.isArray(manifest.installedBuilds ?? []));
+for (const build of manifest.installedBuilds ?? []) {
+  assert.match(build.runtimeId, /^[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/);
+  assert.ok(!managedIds.has(build.runtimeId), "Installed build duplicates a managed plugin");
+  for (const field of ["version", "platform", "arch"]) {
+    assert.ok(typeof build[field] === "string" && build[field].length && build[field] === build[field].trim());
+  }
+  assert.match(build.sourceCommit, /^[a-f0-9]{40}$/);
+  checkInventory(build.sha256);
+  const key = JSON.stringify([build.runtimeId, build.version, build.platform, build.arch, build.sha256]);
+  assert.ok(!builds.has(key), "Duplicate installed build");
+  builds.add(key);
 }
 console.log("Official entries checked:", ids.join(", "));

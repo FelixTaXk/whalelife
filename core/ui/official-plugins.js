@@ -42,7 +42,8 @@ function removeButton(state, runtimeId) {
 }
 
 function installedBadge(state, runtimeId) {
-  return installedPlugin(state, runtimeId)?.recognized ? officialBadge : "";
+  const recognized = state?.recognizedRuntimeIds?.includes(runtimeId) ?? installedPlugin(state, runtimeId)?.recognized;
+  return recognized ? officialBadge : "";
 }
 
 export function renderManageBadgeSlot(state, runtimeId) {
@@ -83,14 +84,16 @@ async function refresh(app, redraw = false) {
   const read = api("/api/official-plugins");
   app.officialRead = read;
   try {
-    const { plugins } = await read;
+    const { plugins, recognizedRuntimeIds } = await read;
     if (app.officialRead !== read) return;
     if (!Array.isArray(plugins)) throw Error("官方插件状态格式有误");
     app.state.officialPlugins = plugins;
+    app.state.recognizedRuntimeIds = Array.isArray(recognizedRuntimeIds) ? recognizedRuntimeIds : null;
     app.state.officialReadError = "";
   } catch (error) {
     if (app.officialRead !== read) return;
     app.state.officialPlugins = null;
+    app.state.recognizedRuntimeIds = null;
     app.state.officialReadError = "无法读取本机插件版本。" + error.message;
   } finally {
     if (app.officialRead === read) {
@@ -142,6 +145,7 @@ async function apply(app, plugin) {
     const workspace = content.querySelector(".plugin-workspace");
     if (applied && plugin.action === "uninstall" && workspace?.dataset.runtimeId === plugin.runtimeId) {
       state.officialPlugins = null;
+      state.recognizedRuntimeIds = null;
       content.ownerDocument.defaultView.location.hash = "#plugins";
     } else await refresh(app, true);
   }

@@ -358,5 +358,15 @@
         }
       ]
     }
+  ],
+  "installedBuilds": [
+    {
+      "runtimeId": "computer",
+      "version": "0.1.0",
+      "platform": "win32",
+      "arch": "x64",
+      "sourceCommit": "c05d81d4828e4040d30a7915582ebcc43b2fbbcc",
+      "sha256": "cfc4f3208c155a05f4d5e1b034d0e056f55a753b348960474281bb5ef8af66e0"
+    }
   ]
 }

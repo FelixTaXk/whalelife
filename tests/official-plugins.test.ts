@@ -2,8 +2,9 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { temporaryDirectory } from "./temporary-directory.ts";
 import { Runtime } from "../core/runtime.ts";
 import { OfficialPlugins } from "../core/official-plugins.ts";
@@ -59,6 +60,7 @@ test("install previews missing dependencies, rejects stale plans, and uninstalls
   assert.match(parent.reason, /依赖.*bilibili/);
   assert.equal(parent.recognized, true);
   assert.equal((await f.get("bilibili")).recognized, true);
+  assert.deepEqual((await f.manager.list()).recognizedRuntimeIds.sort(), ["surf", "surf/bilibili"]);
   await f.apply("bilibili");
   assert.equal(f.runtime.records.get("surf").status, "active");
   assert.equal(f.runtime.records.has("surf/bilibili"), false);
@@ -97,6 +99,40 @@ test("manual releases are recognized, dependency upgrades require user action, a
   await assert.rejects(f.manager.apply(old));
   assert.equal(await readFile(script, "utf8"), "// locally edited");
   assert.equal(f.runtime.records.get("surf").status, "active");
+});
+
+test("a separately distributed official build identifies its installed runtime without granting package actions", async t => {
+  const f = await fixture(t);
+  await f.apply("surf");
+  // Inventories are resolved relative to the host module. Keep the synthetic registry and its files in this test's host.
+  const core = join(f.root, "core"), market = join(f.root, "market");
+  await mkdir(core);
+  await mkdir(join(market, "inventories"), { recursive: true });
+  for (const file of ["official-plugins.ts", "official-package-files.ts"]) {
+    await copyFile(new URL("../core/" + file, import.meta.url), join(core, file));
+  }
+  const inventory = Buffer.from(JSON.stringify({ format: 1,
+    files: f.parentFiles.map(file => ({ path: file.path, size: file.bytes.length, sha256: hash(file.bytes) })),
+  }));
+  const build = { runtimeId: "surf", version: "1.0.0", platform: process.platform, arch: process.arch,
+    sourceCommit: "1".repeat(40), sha256: hash(inventory) };
+  await writeFile(join(market, "inventories", build.sha256 + ".json"), inventory);
+  await writeFile(join(market, "official-releases.json"), JSON.stringify({ plugins: [], installedBuilds: [build] }));
+  await writeFile(join(market, "catalog.json"), JSON.stringify({ official: [], community: [] }));
+  await writeFile(join(f.root, "package.json"), JSON.stringify({ type: "module", version: "0.1.0" }));
+  const { OfficialPlugins: LocalManager }: typeof import("../core/official-plugins.ts") =
+    await import(pathToFileURL(join(core, "official-plugins.ts")).href);
+  const manager = new LocalManager(f.runtime);
+  assert.deepEqual(await manager.list(), { plugins: [], recognizedRuntimeIds: ["surf"] });
+  for (const action of ["install", "uninstall"]) {
+    await assert.rejects(manager.apply({ id: "surf", action, planKey: "" }), /请选择官方目录内的插件/);
+  }
+  for (const variant of [{ runtimeId: "other/surf" }, { version: "0.9.0" }]) {
+    const mismatched = new LocalManager(f.runtime, [], [{ ...build, ...variant }]);
+    assert.deepEqual((await mismatched.list()).recognizedRuntimeIds, []);
+  }
+  await writeFile(join(f.root, "plugins/surf/index.ts"), "// changed by local user");
+  assert.deepEqual((await manager.list()).recognizedRuntimeIds, []);
 });
 
 test("official plugin operations require a logged-in same-origin console and JSON mutation", async t => {

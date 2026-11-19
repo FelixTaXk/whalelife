@@ -12,11 +12,12 @@ type Release = {
   dependencies: Record<string, string>; bundledPluginIds?: string[]; recognitionOnly?: boolean;
 };
 type Entry = { id: string; name: string; repository: string; parentId: string | null; requiredPlugins: string[]; preserve?: string[]; verifiedReleases: Release[] };
+type InstalledBuild = { runtimeId: string; version: string; platform: string; arch: string; sha256: string; sourceCommit: string };
 type Card = { id: string; description: string; installation: string };
 type Step = { action: "install" | "enable" | "reuse" | "uninstall"; id: string; name: string; version: string };
 type Item = { entry: Entry; pathId: string; target?: Release; existing?: Release; installedVersion?: string; installed: boolean; reason: string; enabled: boolean; active: boolean };
 const read = (file: string) => JSON.parse(readFileSync(new URL(file, import.meta.url), "utf8"));
-const registry: Entry[] = read("../market/official-releases.json").plugins;
+const registry: { plugins: Entry[]; installedBuilds?: InstalledBuild[] } = read("../market/official-releases.json");
 const cards: Card[] = read("../market/catalog.json").official;
 const hostVersion: string = read("../package.json").version;
 const compare = (left: string, right: string) => {
@@ -32,7 +33,12 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 export class OfficialPlugins {
   private runtime: Runtime;
   private entries: Entry[];
-  constructor(runtime: Runtime, entries = registry) { this.runtime = runtime; this.entries = entries; }
+  private installedBuilds: InstalledBuild[];
+  constructor(runtime: Runtime, entries = registry.plugins, installedBuilds = registry.installedBuilds ?? []) {
+    this.runtime = runtime;
+    this.entries = entries;
+    this.installedBuilds = installedBuilds;
+  }
 
   private async inspect(entry: Entry): Promise<Item> {
     const runtime = this.runtime;
@@ -137,7 +143,19 @@ export class OfficialPlugins {
   async list() {
     return this.runtime.managePackages(async () => {
       const items = await this.snapshot();
-      return { plugins: [...items.values()].map(item => this.plan(item, items)) };
+      const plugins = [...items.values()].map(item => this.plan(item, items));
+      const recognized = new Set(plugins.filter(p => p.installed && p.recognized).map(p => p.runtimeId));
+      // Manually distributed builds can prove authorship without supplying a package management plan.
+      for (const build of this.installedBuilds) {
+        const record = this.runtime.records.get(build.runtimeId);
+        if (!record || record.manifest.version !== build.version || build.platform !== process.platform ||
+          build.arch !== process.arch || recognized.has(build.runtimeId)) continue;
+        const files = await inspectOfficialFiles(this.runtime.root, {
+          directory: "plugins/" + build.runtimeId.split("/").join("/sub/"), sha256: build.sha256, recognitionOnly: true,
+        });
+        if (files.state === "installed") recognized.add(build.runtimeId);
+      }
+      return { plugins, recognizedRuntimeIds: [...recognized] };
     });
   }
   async apply(input: { id?: unknown; action?: unknown; planKey?: unknown }) {

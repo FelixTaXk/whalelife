@@ -95,6 +95,17 @@ test("management labels only recognized installed plugins beside their names, in
   assert.doesNotMatch(pluginCard(status, parent, {}), /class="store-official-badge"/);
 });
 
+test("management marks the exact individually recognized runtime without adding a store action", () => {
+  const computer = { id: "computer", name: "电脑与文件", status: "active", version: "0.1.0" };
+  const other = { ...computer, id: "custom/computer" };
+  const status = { plugins: [computer, other] };
+  const state = { officialPlugins: [], recognizedRuntimeIds: ["computer"] };
+  const card = pluginCard(status, computer, state);
+  assert.match(card, /电脑与文件<\/h3><span data-official-badge-slot="computer"><span class="store-official-badge">官方/);
+  assert.doesNotMatch(card, /data-official-action/);
+  assert.doesNotMatch(pluginCard(status, other, state), /class="store-official-badge"/);
+});
+
 test("store exposes versioned installation and marks installed releases without uninstall options", () => {
   const html = shelfHtml(dependent);
   assert.match(html, /v1\.2\.0/);
