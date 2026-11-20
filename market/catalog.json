@@ -97,6 +97,18 @@
       "dependencies": [],
       "collected": "2026-11-20",
       "stars": 0
+    },
+    {
+      "id": "schedule",
+      "name": "日程",
+      "author": "FelixTaXk",
+      "description": "按作息生成每日日程，可查看、编辑并保存。公开版 WhaleLife 支持这些功能。若要在每轮聊天中自动加入当前和下一项日程，需要作者提供的宿主补丁。",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-schedule",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-schedule/blob/main/README.md#手动安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-schedule/issues",
+      "dependencies": [],
+      "collected": "2026-11-21",
+      "stars": 0
     }
   ]
 }
