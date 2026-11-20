@@ -7,6 +7,7 @@ window.WHALELIFE_CATALOG = {
   "official": [
     {
       "id": "qq",
+      "version": "0.22.0",
       "name": "QQ",
       "author": "iinukami 和贡献者",
       "description": "在 QQ 私聊里延续 WhaleLife 的对话，和白名单好友收发消息。",
@@ -17,6 +18,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "qzone",
+      "version": "0.5.2",
       "name": "QQ 空间",
       "author": "iinukami 和贡献者",
       "description": "浏览好友的空间动态，发表说说，并按白名单设置点赞、评论。",
@@ -29,6 +31,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "autonomy",
+      "version": "0.6.3",
       "name": "自主性",
       "author": "iinukami 和贡献者",
       "description": "让伙伴记下未完成的念头和约定，在你允许的时段主动接续对话。",
@@ -39,6 +42,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "gallery",
+      "version": "0.1.2",
       "name": "图库",
       "author": "iinukami 和贡献者",
       "description": "在本地收藏图片和表情，编辑描述与标签，按含义找回需要的那张图。",
@@ -49,6 +53,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "surf",
+      "version": "0.1.1",
       "name": "网上冲浪",
       "author": "iinukami 和贡献者",
       "description": "搜索公开网页，阅读正文，沿文中的链接继续浏览，也能按需取图。",
@@ -59,6 +64,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "bilibili",
+      "version": "0.2.10",
       "name": "B 站",
       "author": "iinukami 和贡献者",
       "description": "搜索 B 站视频、读字幕和关注动态，按你的设置参与评论等互动。",
@@ -71,6 +77,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "vision",
+      "version": "0.5.0",
       "name": "视听理解",
       "author": "iinukami 和贡献者",
       "description": "从图片、视频片段和音频提取画面与声音信息，供伙伴理解和讨论。",
@@ -81,6 +88,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "computer",
+      "version": "0.1.2",
       "name": "电脑与文件",
       "author": "iinukami 和贡献者",
       "description": "按授权查找和编辑 Windows 本地文件、生成文档，在隔离环境中运行离线脚本。",
@@ -93,6 +101,7 @@ window.WHALELIFE_CATALOG = {
   "community": [
     {
       "id": "color-note",
+      "version": "0.1.0",
       "name": "颜色便签",
       "author": "iinukami",
       "description": "社区投稿测试插件。保存一条带颜色的本地便签，重启后可继续查看。",
@@ -105,6 +114,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "schedule",
+      "version": "0.4.0",
       "name": "日程",
       "author": "FelixTaXk",
       "description": "按作息生成每日日程，可查看、编辑并保存。公开版 WhaleLife 支持这些功能。若要在每轮聊天中自动加入当前和下一项日程，需要作者提供的宿主补丁。",
@@ -132,6 +142,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "meme",
+      "version": "0.2.1",
       "name": "表情包工坊",
       "author": "FelixTaXk",
       "description": "需要先在本机安装 Python 和 Pillow。给图片加字幕、气泡或描边，成品可收藏到官方图库。商店会一并安装缺少的图库插件。",
@@ -160,6 +171,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "voice",
+      "version": "0.9.4",
       "name": "语音模块",
       "author": "FelixTaXk",
       "description": "管理音色库，合成语音并转换歌声。一键安装包含说话和唱歌两个子插件。使用本机语音引擎时，还需在插件设置中单独部署。",

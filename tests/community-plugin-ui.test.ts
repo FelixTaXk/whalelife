@@ -28,7 +28,8 @@ test("安装按钮仅用于相同社区仓库的已审核计划，手动安装�
   const installed = renderStore({state: {...state, communityPlugins: [{...plan, action: "installed", installedVersion: "1.1.0"}]}});
   assert.match(installed, /v1\.1\.0/);
   assert.match(installed, /已安装/);
-  assert.doesNotMatch(installed, /data-community-install|v1\.2\.0/);
+  assert.match(installed, /收录版本 v1\.2\.0 · 已装 v1\.1\.0/);
+  assert.doesNotMatch(installed, /data-community-install/);
   const blocked = renderStore({state: {...state, communityPlugins: [{...plan, action: "blocked", reason: "请先升级墨盒"}]}});
   assert.match(blocked, /查看安装条件/);
   assert.doesNotMatch(blocked, /请先升级墨盒/);

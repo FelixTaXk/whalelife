@@ -13,7 +13,15 @@ const context = { window: {}, URL };
 runInNewContext(read("../assets/catalog-validation.js"), context);
 export const catalog = JSON.parse(read("../catalog.json"));
 assert.ok(context.window.isWhaleLifeCatalog(catalog), "Invalid plugin catalog");
-reviewedCommunityEntries(catalog);
+const reviewedCommunity = reviewedCommunityEntries(catalog);
+function checkDisplayVersion(card, releases) {
+  const versions = releases.filter(release => !release.recognitionOnly).map(release => release.version);
+  if (versions.length) assert.equal(card.version, versions.sort((a, b) => b.localeCompare(a, "en", { numeric: true }))[0],
+    card.id + ": catalog display version differs from the newest reviewed release");
+}
+for (const entry of reviewedCommunity) {
+  checkDisplayVersion(catalog.community.find(card => card.id === entry.id), entry.verifiedReleases);
+}
 const { official } = catalog;
 const manifest = JSON.parse(read("../official-releases.json"));
 
@@ -61,6 +69,7 @@ for (const [index, plugin] of manifest.plugins.entries()) {
       path.split("/").every(part => part && part !== "." && part !== ".."));
   }
   assert.ok(Array.isArray(plugin.verifiedReleases));
+  checkDisplayVersion(card, plugin.verifiedReleases);
   const hashes = new Set();
   for (const release of plugin.verifiedReleases) {
     for (const key of ["version", "hostRange", "platform", "arch", "verification"]) {

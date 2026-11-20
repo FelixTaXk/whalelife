@@ -19,6 +19,8 @@ function makeCard(plugin, isOfficial, pluginNames) {
     ? glyphs[plugin.id] : glyphs.generic;
   card.querySelector(".kind").textContent = isOfficial ? "官方" : "社区";
   card.querySelector("h2").textContent = plugin.name;
+  const version = window.whaleLifeCatalogVersion(plugin, window.WHALELIFE_CATALOG[isOfficial ? "official" : "community"]);
+  card.querySelector(".version").textContent = version ? "收录版本 v" + version : "版本未提供";
   card.querySelector(".author").textContent = "作者 · " + plugin.author;
   card.querySelector(".description").textContent = plugin.description;
   if (plugin.dependencies?.length) {

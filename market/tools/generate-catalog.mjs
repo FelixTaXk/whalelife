@@ -23,7 +23,7 @@ function destination(url) {
 
 const names = new Map([...catalog.official, ...catalog.community].map(entry => [entry.id, entry.name]));
 function table(entries) {
-  const rows = ["| 插件 | 作者 | 用途 | 必需插件 | 相关链接 |", "| --- | --- | --- | --- | --- |"];
+  const rows = ["| 插件 | 收录版本 | 作者 | 用途 | 必需插件 | 相关链接 |", "| --- | --- | --- | --- | --- | --- |"];
   for (const entry of entries) {
     const dependencies = entry.dependencies.map(id => names.get(id) || id).join("、") || "—";
     const links = [
@@ -31,7 +31,7 @@ function table(entries) {
       "[原仓库 · 加星](" + destination(entry.repository) + ")",
       "[反馈](" + destination(entry.feedback) + ")",
     ];
-    const cells = [entry.name, entry.author, entry.description, dependencies].map(markdownText);
+    const cells = [entry.name, entry.version ? "v" + entry.version : "版本未提供", entry.author, entry.description, dependencies].map(markdownText);
     rows.push("| " + [...cells, links.join(" · ")].join(" | ") + " |");
   }
   return rows.join("\n");
@@ -51,6 +51,7 @@ const readme = [
   "社区插件由原作者维护。控制台为通过审核且兼容的发行包提供一键安装，其他条目可查看作者的安装说明。作者可以[提交 GitHub 收录申请](https://github.com/iinukami/whalelife/issues/new?template=submit-plugin.yml)，附上公开仓库链接和一句话介绍。希望开通一键安装的作者可在原 Issue 提交发行附件。[社区插件打包与审核说明](community-packages.md)",
   "<details>\n<summary>维护目录</summary>",
   "条目资料在 [catalog.json](catalog.json) 维护。在主仓根目录运行 `node market/tools/generate-catalog.mjs` 更新这个页面与随主干提供的离线快照。提交前运行 `node market/tools/generate-catalog.mjs --check` 检查生成物和[官方插件发行清单](official-releases.json)。",
+  "商店显示条目的 `version`。提供一键安装的条目填写最新已审核发行包的版本，仅提供安装说明的条目可填写已核对的作者发布版本。暂无记录时省略该字段，商店会显示「版本未提供」。",
   "官方插件按宿主版本、操作系统和架构匹配。每个可安装版本都在发行清单中固定包的大小和 SHA-256。维护者可按[官方安装包构建说明](official-builds.md)核验发行物。`parentId` 记录父插件，`requiredPlugins` 记录直接依赖。",
   [
     "| 字段 | 说明 |",
