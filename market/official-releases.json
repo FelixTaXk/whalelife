@@ -447,6 +447,36 @@
       "requiredPlugins": [],
       "verifiedReleases": [
         {
+          "version": "0.1.2",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "f928185d70f0c28fa728bf803cbad2309d9f0e81",
+          "delivery": "github-release",
+          "verification": "market/official-builds.md",
+          "sha256": "9f64e96987572d54ef680a60243f5fc72e9c9c6cfa2cc80161d41dbb68697073",
+          "fileCount": 22,
+          "sizeBytes": 82895,
+          "inventorySha256": "f246e5e07fece4fc98e0596bbd93d577f24eb33c8fc61a661acce78373269eca",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-computer/releases/download/v0.1.2/computer-0.1.2-win32-x64.wlpkg.gz"
+        },
+        {
+          "version": "0.1.2",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "f928185d70f0c28fa728bf803cbad2309d9f0e81",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "f246e5e07fece4fc98e0596bbd93d577f24eb33c8fc61a661acce78373269eca",
+          "fileCount": 22,
+          "sizeBytes": 2522,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/f246e5e07fece4fc98e0596bbd93d577f24eb33c8fc61a661acce78373269eca.json"
+        },
+        {
           "version": "0.1.0",
           "hostRange": "0.1.0",
           "platform": "win32",
