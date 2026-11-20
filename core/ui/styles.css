@@ -522,6 +522,45 @@ main {
   color: #a0a5b1;
   margin-top: 7px;
 }
+.host-update {
+  margin-bottom: 18px;
+  padding: 13px 18px;
+}
+.host-update-line, .host-update-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.host-update-icon {
+  display: grid;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  color: #636d83;
+  background: var(--bg);
+}
+.host-update-icon.available {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.host-update-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.host-update-copy strong { font-size: 14px; }
+.host-update-copy small { margin-inline-start: 9px; color: var(--muted); font-size: 12px; }
+.host-update-result { margin-top: 3px; font-size: 12px; }
+.host-update-result.ok { color: #287c60; }
+.host-update-result.warning { color: #916118; }
+.host-update-actions { flex: none; }
+.host-release-link { color: var(--accent); font-size: 12px; }
+.host-confirm-note { margin-top: 12px; color: var(--muted); }
+@media (max-width: 640px) {
+  .host-update { padding: 12px; }
+  .host-update-line { flex-wrap: wrap; gap: 8px; }
+  .host-update-copy small { display: block; margin-inline-start: 0; }
+  .host-update-actions { flex-wrap: wrap; gap: 6px; }
+  .host-update-actions:has(.host-release-link) { width: 100%; justify-content: flex-end; }
+}
 .overview-grid {
   display: grid;
   grid-template-columns: 1.5fr 1fr;

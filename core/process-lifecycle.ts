@@ -77,6 +77,7 @@ export function installProcessLifecycle(app: ProcessApplication, options: Lifecy
   process.on("SIGTERM", shutdown);
   process.on("uncaughtException", onException);
   process.on("unhandledRejection", onRejection);
+  return shutdown;
 }
 
 export async function runMain(start: () => Promise<ProcessApplication>, options: LifecycleOptions = {}) {
