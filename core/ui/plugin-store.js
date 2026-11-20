@@ -5,6 +5,7 @@
 import { escapeHTML as e } from "./api.js";
 import { icon } from "./icons.js";
 import { bindOfficialActions, officialBadge, renderStoreInstall } from "./official-plugins.js";
+import { storeUpdate, updateBadge, updateDetails } from "./plugin-updates.js";
 
 const bundledURL = "/market/catalog.json";
 const publishedURL = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json";
@@ -43,11 +44,13 @@ function art(entry, official, plan) {
 
 function card(state, entry, official) {
   const plan = localPlan(state, entry, official);
-  const status = plan?.installed ? icon("check") + "已安装" : plan?.action === "install" ? "可安装" : "";
+  const update = storeUpdate(state, entry, official ? "official" : "community");
+  const installed = plan?.installed || !!update;
+  const status = installed ? icon("check") + "已安装" : plan?.action === "install" ? "可安装" : "";
   return `<button type="button" class="store-card" data-store-entry="${e(entry.id)}">
     ${art(entry, official, plan)}<span class="store-card-body"><span class="store-card-line">
-    <span class="store-name-line"><strong>${e(entry.name)}</strong>${official ? officialBadge : ""}</span>
-    <span class="store-card-status"${plan?.installed ? " data-installed" : ""}>${status}</span></span>
+    <span class="store-name-line"><strong>${e(entry.name)}</strong>${official ? officialBadge : ""}${updateBadge(update)}</span>
+    <span class="store-card-status"${installed ? " data-installed" : ""}>${status}</span></span>
     <span class="store-description">${e(entry.description)}</span></span></button>`;
 }
 
@@ -83,6 +86,7 @@ function detail(state, catalog) {
   const names = new Map([...catalog.official, ...catalog.community].map(item => [item.id, item.name]));
   const dependencies = entry.dependencies.map(id => names.get(id) || id).join("、");
   const local = officialEntry && bundledIdentity(state, entry);
+  const update = storeUpdate(state, entry, officialEntry ? "official" : "community");
   const action = local
     ? `<span class="store-action" data-official-store-slot="${e(entry.id)}">${renderStoreInstall(state, entry.id)}</span>`
     : externalLink(entry.installation, "安装说明");
@@ -93,10 +97,11 @@ function detail(state, catalog) {
   ].join("");
   return `${art(entry, !!officialEntry, localPlan(state, entry, !!officialEntry))}
     <div class="store-detail-body">${officialEntry ? "" : '<small class="store-kind">社区插件</small>'}
-      <div class="store-name-line"><h1 id="store-heading" tabindex="-1">${e(entry.name)}</h1>${officialEntry ? officialBadge : ""}</div>
+      <div class="store-name-line"><h1 id="store-heading" tabindex="-1">${e(entry.name)}</h1>${officialEntry ? officialBadge : ""}${updateBadge(update)}</div>
       <p class="store-description">${e(entry.description)}</p>
       <dl class="store-facts"><div><dt>作者</dt><dd>${e(entry.author)}</dd></div>
         <div><dt>插件依赖</dt><dd>${e(dependencies || "无")}</dd></div></dl>
+      ${updateDetails(update)}
       <div class="store-actions">${action}</div>
       <nav class="store-links" aria-label="${e(entry.name)}相关链接">${links}</nav></div>`;
 }
@@ -185,6 +190,7 @@ export function bindStore(app, container = app.content, opening = true) {
       (next || listing.querySelector("#store-heading"))?.focus({ preventScroll: true });
     }
   }
+  root.addEventListener("plugin-updates", paint);
   // Official plan reads and public catalog reads can finish in either order.
   // A plan refresh only changes the list badges; the installer updates its own detail slot.
   app.storeOfficialChange = () => {

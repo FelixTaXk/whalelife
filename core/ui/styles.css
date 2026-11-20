@@ -932,7 +932,8 @@ html:has(#store-drawer[open]) { overflow: hidden; }
 .store-card-line { align-items: center; flex-wrap: wrap; }
 .store-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; min-width: 0; overflow-wrap: anywhere; }
 .store-name-line > [data-official-badge-slot] { display: contents; }
-.store-official-badge {
+.plugin-update-slot { display: contents; }
+.store-official-badge, .plugin-update-badge {
   display: inline-block;
   flex: none;
   padding: 1px 5px;
@@ -944,6 +945,10 @@ html:has(#store-drawer[open]) { overflow: hidden; }
   line-height: 16px;
   white-space: nowrap;
 }
+.plugin-update-badge { background: #fff1d6; color: #785015; }
+.plugin-update-link { color: var(--accent-hover); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.plugin-update-detail { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px; color: var(--store-ink); font-size: 13px; }
+.plugin-update-detail .plugin-update-link { margin-inline-start: 5px; }
 .store-card-line strong { font-size: 16px; line-height: 1.4; letter-spacing: -.025em; }
 .store-card-status {
   color: #59516f;

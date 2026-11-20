@@ -12,6 +12,7 @@ import { conversationRows } from "./channel-history.ts";
 import { PluginWebRegistry } from "./plugin-web.ts";
 import { WebClientDisconnectedError } from "./web-errors.ts";
 import { OfficialPlugins } from "./official-plugins.ts";
+import { PluginUpdates } from "./plugin-updates.ts";
 import { CacheDiagnostics } from "./cache-diagnostics.ts";
 
 const marketFiles = new Map([
@@ -37,6 +38,20 @@ export async function startWeb(config: any, services: any, runtime: any) {
   const official = new OfficialPlugins(runtime);
   const cacheDiagnostics = new CacheDiagnostics(services.modelConfig, services.executionArchive?.root);
   const lifetime = new AbortController();
+  const pluginUpdates = new PluginUpdates(lifetime.signal);
+  let officialRead: ReturnType<typeof official.list> | undefined;
+  let lastOfficial: { time: number; result: Awaited<ReturnType<typeof official.list>> } | undefined;
+  function officialList(forNotice = false) {
+    if (officialRead) return officialRead;
+    // A concurrently opened management page already checks file ownership. Brief reuse
+    // is only for advisory badges. Every package change still revalidates its own plan.
+    if (forNotice && lastOfficial && Date.now() - lastOfficial.time < 30_000) return Promise.resolve(lastOfficial.result);
+    officialRead = official.list().then(result => {
+      lastOfficial = { time: Date.now(), result };
+      return result;
+    }).finally(() => { officialRead = undefined; });
+    return officialRead;
+  }
   const register = (method: string, path: string, handler: any) => routes.register("", lifetime.signal, method, path, handler);
   let origin = `http://${host}:${port}`;
   const assets = new Set([
@@ -49,6 +64,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
     "views.js",
     "official-plugins.js",
     "plugin-store.js",
+    "plugin-updates.js",
     "personas.js",
     "memory.js",
     "context.js",
@@ -169,11 +185,15 @@ export async function startWeb(config: any, services: any, runtime: any) {
         return send(200, { ok: true });
       }
       if (!authorized(req)) return send(401, { error: "请先登录" });
-      if (pathname === "/api/official-plugins" && req.method === "GET") return send(200, await official.list());
+      if (pathname === "/api/plugin-updates" && req.method === "GET") {
+        return send(200, await pluginUpdates.list(runtime.list(), () => officialList(true)));
+      }
+      if (pathname === "/api/official-plugins" && req.method === "GET") return send(200, await officialList());
       if (pathname === "/api/official-plugins/apply" && req.method === "POST") {
         if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
           return send(415, { error: "请使用 JSON 提交操作。" });
-        return send(200, await official.apply(await body(req, 4096)));
+        try { return send(200, await official.apply(await body(req, 4096))); }
+        finally { lastOfficial = undefined; }
       }
       const memoryUrl = new URL(req.url!, origin);
       if (memoryUrl.pathname === "/api/session/list" && req.method === "GET") {
