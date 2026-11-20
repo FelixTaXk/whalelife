@@ -13,12 +13,51 @@ import { gzipSync } from "node:zlib";
 import { decodeHostArchive, hostAssetName, hostProgramPath, hostReleaseRootFiles } from "../core/host-release.ts";
 
 const project = fileURLToPath(new URL("../", import.meta.url));
+const officialRepository = "https://github.com/iinukami/whalelife.git";
+const initialHostVersion = "0.1.0";
+const programPaths = [...hostReleaseRootFiles, "core", "market"];
+const gitArgs = source => ["-c", "safe.directory=" + source.replaceAll("\\", "/"), "-C", source];
+const compareVersions = (a, b) => a.localeCompare(b, "en", { numeric: true });
+
+function releaseCommit(source) {
+  const opts = { encoding: "utf8", windowsHide: true };
+  const args = gitArgs(source);
+  const commit = execFileSync("git", [...args, "rev-parse", "--verify", "HEAD^{commit}"], opts).trim();
+  if (execFileSync("git", [...args, "status", "--porcelain", "--untracked-files=no", "--", ...programPaths], opts).trim())
+    throw Error("正式打包前请先提交待发布的程序文件");
+  return commit;
+}
+
+function checkReleaseVersion(source, commit, version) {
+  if (compareVersions(version, initialHostVersion) <= 0)
+    throw Error(`正式本体版本 v${version} 必须高于已使用的基线 v${initialHostVersion}`);
+  const args = gitArgs(source);
+  let refs;
+  try {
+    refs = execFileSync("git", [...args, "ls-remote", "--refs", officialRepository, "refs/heads/main", "refs/tags/v*"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000, windowsHide: true,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  } catch { throw Error("无法核对 GitHub 主干和正式版本标签，请恢复连接后重新打包"); }
+  let main = "", highest = initialHostVersion;
+  for (const line of refs.trim().split(/\r?\n/)) {
+    const [oid, ref] = line.split("\t");
+    if (ref === "refs/heads/main") main = oid;
+    const match = /^refs\/tags\/v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/.exec(ref);
+    if (match && compareVersions(match[1], highest) > 0) highest = match[1];
+  }
+  if (compareVersions(version, highest) <= 0)
+    throw Error(`正式本体版本 v${version} 必须高于主仓已使用的 v${highest}`);
+  if (!/^[0-9a-f]{40}$/.test(main)) throw Error("无法确定 GitHub 主干提交");
+  try { execFileSync("git", [...args, "merge-base", "--is-ancestor", commit, main], { stdio: "pipe", windowsHide: true }); }
+  catch { throw Error("请同步 GitHub main 的历史，并确认待发布提交已经合入公开主干"); }
+}
 
 // Read Git blobs, independent of local line endings, ignored credentials or development files.
-function trackedFiles(source) {
-  const args = ["-c", "safe.directory=" + source.replaceAll("\\", "/"), "-C", source];
-  const entries = execFileSync("git", [...args, "ls-files", "--stage", "-z", "--",
-    ...hostReleaseRootFiles, "core", "market"], { encoding: "utf8" }).split("\0").filter(Boolean);
+function trackedFiles(source, commit) {
+  const args = gitArgs(source);
+  const list = commit ? ["ls-tree", "-r", "-z", "--format=%(objectmode) %(objectname) 0%x09%(path)", commit]
+    : ["ls-files", "--stage", "-z"];
+  const entries = execFileSync("git", [...args, ...list, "--", ...programPaths], { encoding: "utf8" }).split("\0").filter(Boolean);
   const blobs = [];
   for (const entry of entries) {
     const match = /^(100644|100755) ([a-f0-9]+) 0\t(.+)$/.exec(entry);
@@ -74,10 +113,13 @@ async function productionDependencies(files, work) {
   await collect("node_modules");
 }
 
-export async function buildHostRelease(sourceRoot, outputDirectory) {
-  const files = trackedFiles(resolve(sourceRoot));
+async function build(sourceRoot, outputDirectory, official) {
+  const source = resolve(sourceRoot);
+  const commit = official ? releaseCommit(source) : null;
+  const files = trackedFiles(source, commit);
   if (!files.has("package.json") || !files.has("package-lock.json")) throw Error("需在主仓中跟踪 package.json 和锁文件");
   const version = JSON.parse(files.get("package.json")).version, name = hostAssetName(version);
+  if (commit) checkReleaseVersion(source, commit, version);
   const work = await mkdtemp(join(tmpdir(), "whalelife-host-build-"));
   try {
     await productionDependencies(files, work);
@@ -90,17 +132,22 @@ export async function buildHostRelease(sourceRoot, outputDirectory) {
     const output = join(resolve(outputDirectory), name);
     await mkdir(dirname(output), { recursive: true });
     await writeFile(output, archive, { flag: "wx" });
-    return output;
+    return { path: output, ...(commit ? { tag: "v" + version, commit } : {}) };
   } finally {
     if (dirname(work) !== resolve(tmpdir())) throw Error("临时依赖目录路径无效");
     await rm(work, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 }
 
+export async function buildHostRelease(sourceRoot, outputDirectory) {
+  return (await build(sourceRoot, outputDirectory, false)).path;
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [out, source = project] = process.argv.slice(2);
-  if (!out) throw Error("用法：node tools/build-host-release.mjs <输出目录> [源码目录]");
-  const path = await buildHostRelease(source, out);
-  const bytes = await readFile(path);
-  console.log(JSON.stringify({ path, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }));
+  const argv = process.argv.slice(2), official = argv[0] === "--release";
+  const [out, source = project, extra] = official ? argv.slice(1) : argv;
+  if (!out || out.startsWith("--") || extra) throw Error("用法：node tools/build-host-release.mjs [--release] <输出目录> [源码目录]");
+  const result = await build(source, out, official);
+  const bytes = await readFile(result.path);
+  console.log(JSON.stringify({ ...result, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }));
 }
