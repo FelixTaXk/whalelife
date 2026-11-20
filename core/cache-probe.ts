@@ -9,7 +9,7 @@ import type { Diagnostics } from "./diagnostics.ts";
 import { LLM } from "./llm.ts";
 import type { Logger } from "./logger.ts";
 import { ModelRequestError } from "./model-http.ts";
-import { modelUsageDetails, type CacheUsage } from "./model-usage.ts";
+import { isMiraRouterEndpoint, modelUsageDetails } from "./model-usage.ts";
 import { timeContext } from "./time.ts";
 
 export const CACHE_TEST_PLAN = Object.freeze({
@@ -26,8 +26,6 @@ const miraRates = new Map<string, { input: number; cache: number; output: number
   ["deepseek-v4-flash-0731", { input: 0.12, cache: 0.012, output: 0.24 }],
   ["deepseek-v4.1-flash", { input: 0.135, cache: 0.0035, output: 0.54 }],
 ]);
-const mira = (provider: any) => provider?.base_url?.replace(/\/+$/, "") === "https://api.mirarouter.com/v1" &&
-  (provider.protocol ?? "openai-compatible") === "openai-compatible";
 type Cost = {
   currency: string; basis: "reference" | "reported"; min: number; max: number; amount: number | null;
   price_date?: string; source?: string;
@@ -90,7 +88,7 @@ export function cacheTestPlan(provider: any) {
   const output = CACHE_TEST_PLAN.max_requests * maximum;
   let estimated_cost: Cost | null = null;
   if (reason) return { ...plan, estimated_cost };
-  const rates = mira(provider) && miraRates.get(provider.model);
+  const rates = isMiraRouterEndpoint(provider) && miraRates.get(provider.model);
   if (rates) {
     estimated_cost = { currency: "USD", basis: "reference", amount: null, price_date: "2026-11-20", source: miraCatalog,
       min: input * rates.cache / 1e6, max: (input * rates.input + output * rates.output) / 1e6 };
@@ -111,20 +109,15 @@ type Sample = {
   miss_tokens: number | null; hit_percent: number | null; cost: Cost | null;
 };
 type Verdict = "better" | "keep" | "inconclusive";
-const supportedCurrencies = new Set<string>(Intl.supportedValuesOf("currency"));
 const count = (value: unknown): number | null => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
 
-function sampleCost(raw: any, provider: any, cache: CacheUsage, reference: ReturnType<typeof modelUsageDetails>["cost"]): Cost | null {
-  if (typeof raw?.cost === "number" && Number.isFinite(raw.cost) && raw.cost >= 0) {
-    const currencies = [raw.cost_currency, raw.currency].filter(value => value !== undefined);
-    const currency = currencies.length ? currencies[0] : mira(provider) ? "USD" : null;
-    if (supportedCurrencies.has(currency) && currencies.every(value => value === currency))
-      return { basis: "reported", currency, amount: raw.cost, min: raw.cost, max: raw.cost };
-  }
+function sampleCost(raw: any, provider: any, details: ReturnType<typeof modelUsageDetails>): Cost | null {
+  const { reported_cost: reported, cache, cost: reference } = details;
+  if (reported) return { basis: "reported", ...reported, min: reported.amount, max: reported.amount };
   if (raw?.cost != null) return null;
   if (reference) return { basis: "reference", currency: reference.currency, amount: reference.amount,
     min: reference.min, max: reference.max, price_date: reference.price_date, source: deepSeekPricing };
-  const rates = mira(provider) && miraRates.get(provider.model);
+  const rates = isMiraRouterEndpoint(provider) && miraRates.get(provider.model);
   const input = count(raw?.prompt_tokens), output = count(raw?.completion_tokens);
   if (!rates || input === null || output === null) return null;
   const cached = cache.hit_tokens !== null && cache.miss_tokens !== null;
@@ -152,6 +145,19 @@ function summarize(samples: Sample[]) {
     hit_tokens: hits, miss_tokens: sum("miss_tokens"), hit_percent: input && hits !== null ? 100 * hits / input : null, cost };
 }
 
+function costComparisonIssue(standard: Sample, stable: Sample) {
+  if (standard.cost?.basis !== "reported" || stable.cost?.basis !== "reported" ||
+      standard.cost.currency !== stable.cost.currency)
+    return "两种排列缺少同币种的接口回传费用，无法确认实际节省。";
+  if (!standard.output_tokens || !stable.output_tokens)
+    return "缺少有效的输出 token 计量，无法排除回复长短对费用的影响。";
+  if (stable.cost.max < standard.cost.min && stable.output_tokens < standard.output_tokens)
+    return "稳定前缀的费用较低，但本轮输出 token 也较少，无法确认差价来自输入缓存。";
+  if (stable.cost.min > standard.cost.max && stable.output_tokens > standard.output_tokens)
+    return "稳定前缀的费用较高，但本轮输出 token 也较多，无法单独判断输入缓存的影响。";
+  return null;
+}
+
 function evaluate(standard: Sample[], stable: Sample[]): [Verdict, string] {
   const pairs = standard.map((a, i) => ({ a, b: stable[i] }));
   if (pairs.length !== CACHE_TEST_PLAN.measured_per_layout || stable.length !== pairs.length ||
@@ -166,12 +172,11 @@ function evaluate(standard: Sample[], stable: Sample[]): [Verdict, string] {
     b.hit_percent! - a.hit_percent! >= 10 && a.miss_tokens! - b.miss_tokens! >= 128;
   const improved = pairs.every(({ a, b }) => advantage(a, b));
   const first = pairs[0].a.cost;
-  if (!first || ![...standard, ...stable].every(s => s.cost?.currency === first.currency &&
-      s.cost.basis === first.basis && s.cost.price_date === first.price_date))
+  if (!first || ![...standard, ...stable].every(s => s.cost?.basis === "reported" && s.cost.currency === first.currency))
     return ["inconclusive", improved ? "稳定前缀在两轮都减少了未命中输入，但缺少币种和口径一致的费用，无法确认节省。"
       : "两种布局没有足够的可比费用数据，无法确认切换后会更省。"];
   const cheaper = pairs.every(({ a, b }) => b.cost!.max < a.cost!.min);
-  if (improved && cheaper) return ["better", "两轮正式对照中，稳定前缀的命中率均提高至少 10 个百分点，未命中输入均减少至少 128 token，费用也均较低。"];
+  if (improved && cheaper) return ["better", "两轮正式对照中，稳定前缀的命中率均提高至少 10 个百分点，未命中输入均减少至少 128 token。两轮的输出 token 都未减少，服务商回传的总费用都更低。"];
   if (pairs.every(({ a, b }) => b.cost!.min >= a.cost!.max))
     return ["keep", "两轮正式对照均未显示稳定前缀可以降低费用，建议保留当前设置。"];
   return ["inconclusive", "两轮的缓存改善和费用下降未同时得到确认，暂时保留当前设置。"];
@@ -217,7 +222,8 @@ export async function runCacheProbe(options: {
   const persona = { prompt: "你是虚构的档案核对助手。合成测试批次 " + randomBytes(8).toString("hex") };
   const layouts: Layout[] = ["standard", "stable"];
   try {
-    for (let round = 1; round <= CACHE_TEST_PLAN.warmup_per_layout + CACHE_TEST_PLAN.measured_per_layout; round++) {
+    const rounds = CACHE_TEST_PLAN.warmup_per_layout + CACHE_TEST_PLAN.measured_per_layout;
+    for (let round = 1; round <= rounds; round++) {
       if (round > 1) {
         signal.throwIfAborted();
         if (options.waitForCache) await options.waitForCache(signal);
@@ -240,14 +246,19 @@ export async function runCacheProbe(options: {
         samples.push(sample);
         const run = () => llm.chat({ provider: target, messages, signal });
         const reply = options.diagnostics?.enabled ? await options.diagnostics.run({ purpose: "cache_probe" }, run) : await run();
-        const { cache, cost } = modelUsageDetails(reply.usage, target);
-        Object.assign(sample, cache, { input_tokens: count(reply.usage?.prompt_tokens), output_tokens: count(reply.usage?.completion_tokens),
-          cost: sampleCost(reply.usage, target, cache, cost) });
+        const details = modelUsageDetails(reply.usage, target);
+        Object.assign(sample, details.cache, { input_tokens: count(reply.usage?.prompt_tokens), output_tokens: count(reply.usage?.completion_tokens),
+          cost: sampleCost(reply.usage, target, details) });
         signal.throwIfAborted();
         if (reply.finish_reason && reply.finish_reason !== "stop" || reply.text.trim() !== code || reply.toolCalls.length ||
             (sample.output_tokens !== null && sample.output_tokens > settings.maximum))
           return report("inconclusive", `第 ${round} 轮${layout === "stable" ? "稳定前缀" : "常规布局"}未完整返回正确的合成回执，已停止后续请求。`);
         sample.completed = true;
+      }
+      if (round > CACHE_TEST_PLAN.warmup_per_layout) {
+        const [left, right] = samples.slice(-2);
+        const issue = left.layout === "standard" ? costComparisonIssue(left, right) : costComparisonIssue(right, left);
+        if (issue) return report("inconclusive", issue + (round < rounds ? " 已停止后续付费请求。" : ""));
       }
       history.append("user", query, stamp);
       history.append("assistant", code, stamp + 5000);

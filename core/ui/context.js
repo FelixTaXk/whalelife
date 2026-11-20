@@ -4,6 +4,7 @@
  */
 import { api, escapeHTML as e, viewedSession, sessionName } from "./api.js";
 const number = (value) => Number(value).toLocaleString();
+const currencies = Intl.supportedValuesOf?.("currency");
 const diaryEnabled = (policy = {}) => policy.diary_enabled ?? policy.memory_mode === "diary";
 const percentage = (value, limit) => limit > 0 && Number.isFinite(value) ? value.toFixed(2) + "%" : null;
 function requestMetrics(usage) {
@@ -13,16 +14,21 @@ function requestMetrics(usage) {
   const tokens = value => Number.isSafeInteger(value) && value >= 0 ? number(value) + " tokens" : "未报告";
   const cacheDetail = `最近一次请求缓存：命中 ${tokens(cache?.hit_tokens)}；未命中 ${tokens(cache?.miss_tokens)}；命中率 ${cachePercent || "未报告"}。`;
   const validMoney = value => Number.isFinite(value) && value >= 0;
+  const reported = usage?.reported_cost;
+  const reportedAmount = validMoney(reported?.amount) && typeof reported.currency === "string" &&
+    (currencies ? currencies.includes(reported.currency) : /^[A-Z]{3}$/.test(reported.currency))
+    ? `${reported.amount} ${reported.currency}` : null;
   const money = value => value > 0 && value < 0.000001 ? "<¥0.000001" :
     "¥" + value.toLocaleString("zh-CN", { maximumFractionDigits: 6 });
   const amount = cost?.currency === "CNY" && cost.basis === "reference" ?
     validMoney(cost.amount) ? money(cost.amount) : validMoney(cost.min) && validMoney(cost.max) && cost.max >= cost.min ?
       `${money(cost.min)}–${money(cost.max)}` : null : null;
-  const costDetail = amount
+  const costDetail = reportedAmount ? `接口回传费用：${reportedAmount}。实际扣款以服务商账单为准。` : amount
     ? `参考费用：${amount}；参考价日期 ${cost.price_date} · ${cost.period === "off_peak" ? "低峰时段" : "高峰或节假日"}。仅作参考，不等于账单。`
     : "参考费用：价格未知，暂不估算费用。";
   const scope = "以上缓存与费用仅对应最近一次模型请求，不含同轮其他工具调用或日记整理请求。";
-  return { compact: `缓存${cachePercent ? " " + cachePercent : "未报告"} · ${amount ? "估算" + amount : "价格未知"}`,
+  const costLabel = reportedAmount ? "本次回传 " + reportedAmount : amount ? "估算" + amount : "价格未知";
+  return { compact: `缓存${cachePercent ? " " + cachePercent : "未报告"} · ${costLabel}`,
     cacheDetail, costDetail, scope };
 }
 export function renderContextMeter(value, compact = false) {

@@ -46,7 +46,7 @@ test("cache check, confirmed paid test and apply are three independent actions o
     calls.push({ path, body: init.body ? JSON.parse(String(init.body)) : undefined });
     return Response.json([report, result, next][calls.length - 1]);
   });
-  assert.match(h.html, /检查缓存效果/);
+  assert.match(h.html, /检查缓存效果<\/button><\/div>\s*<p[^>]*>免费查看本机聊天记录，不调用模型，也不更改设置。<\/p>/);
   assert.doesNotMatch(h.html, /确认费用|为此模型启用稳定前缀/);
   await h.action("test"); await h.action("apply"); await h.action("inspect");
   assert.deepEqual(calls, [{ path: "/api/cache-diagnostics?model=id%2Fa", body: undefined }]);
@@ -57,7 +57,7 @@ test("cache check, confirmed paid test and apply are three independent actions o
     body: { model: "id/a", revision: "before", confirm_paid: true, confirm_token: "paid-once" } });
   assert.equal(calls.length, 2);
   assert.deepEqual(h.app.state.config, config);
-  assert.match(h.panel.innerHTML, /合计节省 0.001 USD/);
+  assert.match(h.panel.innerHTML, /按接口回传费用，[^<]*合计费用比标准排列低 0.001 USD/);
   assert.match(h.panel.innerHTML, /&lt;result&gt;/);
   await h.action("apply");
   assert.deepEqual(calls[2], { path: "/api/cache-diagnostics/apply", body: { model: "id/a", revision: "before", enabled: true, test_id: "apply-once" } });
@@ -75,7 +75,7 @@ test("builtin layouts, unknown metrics, insufficient history and unavailable pla
         observed: { ...report.observed, cached_input_percent: null }, plan: { ...report.plan, unavailable_reason: reason } });
     });
     await h.action("inspect");
-    assert.doesNotMatch(h.panel.innerHTML, /确认费用|为此模型启用|关闭此模型/);
+    assert.doesNotMatch(h.panel.innerHTML, /确认费用|为此模型启用|切回标准排列/);
     assert.match(h.panel.innerHTML, /缓存命中率为 未知/);
     if (mode === "builtin") assert.match(h.panel.innerHTML, /默认启用的内置稳定前缀/);
     if (reason) assert.ok(h.panel.innerHTML.includes(reason));
@@ -86,14 +86,17 @@ test("builtin layouts, unknown metrics, insufficient history and unavailable pla
 });
 
 test("an inconclusive or more expensive result stays read-only and costs keep their provenance", async t => {
-  for (const [cost, text] of [[null, "缺少同一口径"], [amount(0.005), "合计多花 0.002 USD"],
-    [{ ...amount(0.005), basis: "reference" }, "缺少同一口径"]] as const) {
+  const reference = (n: number) => ({ ...amount(n), basis: "reference" });
+  for (const [standardCost, stableCost, text] of [
+    [amount(0.003), null, "缺少同一口径"], [amount(0.003), amount(0.005), "合计费用比标准排列高 0.002 USD"],
+    [amount(0.003), reference(0.005), "缺少同一口径"], [reference(0.003), reference(0.002), "按参考价估算，"],
+  ] as const) {
     const h = harness();
     let calls = 0;
     const fn = t.mock.method(globalThis, "fetch", async () => {
       calls++;
       return Response.json({ ...report, result: { ...result, verdict: "inconclusive",
-        summaries: { standard: result.summaries.standard, stable: { ...sample, cost } } } });
+        summaries: { standard: { ...sample, cost: standardCost }, stable: { ...sample, cost: stableCost } } } });
     });
     await h.action("inspect"); await h.action("apply"); await h.action("test");
     assert.ok(h.panel.innerHTML.includes(text));
@@ -103,18 +106,25 @@ test("an inconclusive or more expensive result stays read-only and costs keep th
   }
 });
 
-test("only a previously applied model can be switched back, with its current revision", async t => {
-  const h = harness();
-  const bodies: any[] = [];
-  t.mock.method(globalThis, "fetch", async (_path: string, init: RequestInit) => {
-    bodies.push(init.body && JSON.parse(String(init.body)));
-    return Response.json(bodies.length === 1 ? { ...report, mode: "optimized" } : { ...config, revision: "after" });
-  });
-  await h.action("inspect"); await h.action("apply"); await h.action("test");
-  assert.match(h.panel.innerHTML, /关闭此模型的稳定前缀/);
-  assert.equal(bodies.length, 1);
-  await h.action("disable");
-  assert.deepEqual(bodies[1], { model: "id/a", revision: "before", enabled: false });
+test("checking a manually optimized model shows the evidence and only switches back on request", async t => {
+  for (const [code, message] of [["test", "低命中"], ["review_cost", "服务商回传的费用连续上涨"], ["healthy", "可以沿用当前配置"]]) {
+    const h = harness();
+    const calls: { path: string; body: any }[] = [];
+    const fn = t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+      calls.push({ path, body: init.body ? JSON.parse(String(init.body)) : undefined });
+      return Response.json(calls.length === 1 ? { ...report, mode: "optimized", advice: { code, message } } : { ...config, revision: "after" });
+    });
+    await h.action("inspect"); await h.action("apply"); await h.action("test");
+    assert.deepEqual(calls, [{ path: "/api/cache-diagnostics?model=id%2Fa", body: undefined }]);
+    assert.deepEqual(h.app.state.config, config);
+    assert.match(h.panel.innerHTML, /data-cache-action="disable">切回标准排列/);
+    assert.doesNotMatch(h.panel.innerHTML, /确认费用并运行|为此模型启用稳定前缀/);
+    if (code === "test") assert.match(h.panel.innerHTML, /仅凭命中率无法判断实际费用是否上涨。你可以免费切回标准排列，再查看后续聊天的服务商账单/);
+    else assert.ok(h.panel.innerHTML.includes(message));
+    await h.action("disable");
+    assert.deepEqual(calls.slice(1), [{ path: "/api/cache-diagnostics/apply", body: { model: "id/a", revision: "before", enabled: false } }]);
+    fn.mock.restore();
+  }
 });
 
 test("cancel or page replacement aborts a paid call and rejects even a racing success", async t => {
@@ -169,7 +179,7 @@ test("dirty and stale configurations cannot perform an action, and applied state
   await h.action("apply");
   assert.deepEqual(h.app.state.config, config);
   assert.match(h.panel.innerHTML, /配置已变化/);
-  assert.doesNotMatch(h.panel.innerHTML, /关闭此模型|为此模型启用/);
+  assert.doesNotMatch(h.panel.innerHTML, /切回标准排列|为此模型启用/);
   h.app.state.config.revision = "changed";
   await h.action("inspect");
   assert.equal(calls, 2);

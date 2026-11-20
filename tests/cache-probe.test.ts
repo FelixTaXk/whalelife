@@ -87,7 +87,9 @@ test("the production SSE path runs bounded interleaved frames with identical pai
 test("the current price sheet yields a distinct reference estimate when this relay omits usage.cost", async t => {
   transport(t, r => sse(r.code, { ...usage(r), cost: undefined, currency: undefined }));
   const result = await runCacheProbe({ provider: mira, logger, waitForCache });
-  assert.equal(result.verdict, "better");
+  assert.equal(result.verdict, "inconclusive");
+  assert.equal(result.requests, 6);
+  assert.match(result.message, /缺少同币种的接口回传费用/);
   assert.equal(result.summaries.stable.cost?.basis, "reference");
   assert.equal(result.summaries.stable.cost?.currency, "USD");
 });
@@ -100,16 +102,27 @@ for (const scenario of [
   { name: "only one formal success", patch: (r: Request) => r.round === 4 ? { prompt_cache_hit_tokens: 1024, cost: 0.001 } : {}, verdict: "inconclusive" },
   { name: "better hits higher cost", patch: (r: Request) => ({ cost: r.isStable ? 0.002 : 0.001 }), verdict: "keep" },
   { name: "zero cost both arms", patch: () => ({ cost: 0 }), verdict: "keep" },
-  { name: "unknown cost currency", patch: () => ({ currency: undefined }), verdict: "inconclusive" },
-  { name: "mixed currencies", patch: (r: Request) => ({ currency: r.isStable ? "EUR" : "USD" }), verdict: "inconclusive" },
-  { name: "conflicting currency declarations", patch: () => ({ cost_currency: "EUR" }), verdict: "inconclusive" },
-  { name: "uncalibrated upstream amount", patch: () => ({ cost: undefined, cost_details: { upstream_inference_cost: 0.003 } }), verdict: "inconclusive" },
+  { name: "unknown cost currency", earlyStop: true, patch: () => ({ currency: undefined }), verdict: "inconclusive" },
+  { name: "mixed currencies", earlyStop: true, patch: (r: Request) => ({ currency: r.isStable ? "EUR" : "USD" }), verdict: "inconclusive" },
+  { name: "conflicting currency declarations", earlyStop: true, patch: () => ({ cost_currency: "EUR" }), verdict: "inconclusive" },
+  { name: "uncalibrated upstream amount", earlyStop: true, patch: () => ({ cost: undefined, cost_details: { upstream_inference_cost: 0.003 } }), verdict: "inconclusive" },
+  { name: "cheaper only because the reply used fewer billed tokens", earlyStop: true, patch: (r: Request) => ({
+    prompt_tokens: r.isStable ? 4420 : 4400, prompt_cache_hit_tokens: r.isStable ? 1000 : 100,
+    completion_tokens: r.isStable ? 20 : 300, cost: r.isStable ? 0.004430 : 0.004699,
+  }), verdict: "inconclusive" },
+  { name: "incomparable output only in the last pair", patch: (r: Request) => ({
+    completion_tokens: r.isStable && r.round === 4 ? 5 : 25 }), verdict: "inconclusive" },
+  { name: "missing output count", earlyStop: true, patch: () => ({ completion_tokens: undefined }), verdict: "inconclusive" },
+  { name: "zero output count for a nonempty reply", earlyStop: true, patch: () => ({ completion_tokens: 0 }), verdict: "inconclusive" },
+  { name: "longer reply still costs less", patch: (r: Request) => ({ completion_tokens: r.isStable ? 25 : 24 }), verdict: "better" },
+  { name: "longer reply costs more", earlyStop: true, patch: (r: Request) => ({
+    completion_tokens: r.isStable ? 55 : 24, cost: r.isStable ? 0.002 : 0.001 }), verdict: "inconclusive" },
   { name: "unmatched input sizes", patch: (r: Request) => ({ prompt_tokens: r.isStable ? 9000 : 4400 }), verdict: "inconclusive" },
 ] as const) test("comparison handles " + scenario.name, async t => {
   const requests = transport(t, r => sse(r.code, { ...usage(r), ...scenario.patch(r) }));
   const result = await runCacheProbe({ provider, logger, waitForCache });
   assert.equal(result.verdict, scenario.verdict);
-  assert.equal(requests.length, 8);
+  assert.equal(requests.length, "earlyStop" in scenario ? 6 : 8);
   assert.equal(requests[0].body.thinking, undefined);
   if ("hits" in scenario) assert.equal(result.summaries.stable.hit_tokens, scenario.hits);
   if (["unknown cost currency", "uncalibrated upstream amount", "conflicting currency declarations"].some(n => n === scenario.name))

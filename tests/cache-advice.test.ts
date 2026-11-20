@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { link, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { readCacheAdvice } from "../core/cache-advice.ts";
+import { captureCacheCostBaseline, readCacheAdvice } from "../core/cache-advice.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
 
 const now = Date.parse("2026-11-10T12:00:00.000Z");
@@ -151,6 +151,67 @@ test("partial rows, oversized preambles and linked archive files cannot supply p
   const result = await readCacheAdvice(key);
   assert.equal(result.observed.measured_turns, 3);
   assert.equal(result.advice.code, "insufficient");
+});
+
+const billed = (cost: number, input = 8000, output = 100, currency = "USD") =>
+  ({ ...usage(input, input), completion_tokens: output, cost, currency });
+
+test("manual optimization compares the latest three same-session first requests with a real pre-enable baseline", async () => {
+  const root = await fixture(), key = target(root);
+  for (let i = 4; i <= 6; i++) await run(root, now - i * minute, billed(i === 6 ? 0.02 : 0.01));
+  const baseline = await captureCacheCostBaseline(key);
+  assert.ok(baseline);
+  assert.doesNotMatch(JSON.stringify(baseline), /private-session|saved-chat|saved-provider/);
+  for (let i = 1; i <= 3; i++) await run(root, now - i * minute, billed(0.03, 7900, 99));
+  await run(root, now - 1.5 * minute, billed(9, 1, 1), { session: "another-session" });
+  const active = { ...key, optimized: true, costBaseline: baseline, configMtimeMs: now - 3.5 * minute };
+  const result = await readCacheAdvice(active);
+  assert.equal(result.advice.code, "review_cost");
+  assert.match(result.advice.message, /开启前.*0\.02 USD.*连续三轮.*0\.03.*手动关闭/);
+  assert.equal(result.observed.cached_input_percent, 100);
+  assert.doesNotMatch(JSON.stringify(result), /private-session|session_hash|saved-chat/);
+  assert.equal((await readCacheAdvice({ ...active, optimized: false })).advice.code, "healthy");
+  assert.equal((await readCacheAdvice({ ...active, costBaseline: undefined })).advice.code, "healthy");
+  assert.equal((await readCacheAdvice({ ...active, costBaseline: { ...baseline, oldest_at: now - 8 * day } })).advice.code, "healthy");
+  assert.equal((await readCacheAdvice({ ...active, costBaseline: { ...baseline, session_hash: "another-session" } })).advice.code, "healthy");
+});
+
+test("already optimized configurations use the preceding three real turns and do not require cache counters", async () => {
+  const root = await fixture(), key = { ...target(root), optimized: true };
+  for (let i = 1; i <= 6; i++) {
+    const { prompt_tokens_details, ...usage } = billed(i <= 3 ? 0.02 : 0, 8000, 0);
+    await run(root, now - i * minute, usage);
+  }
+  const report = await readCacheAdvice(key);
+  assert.equal(report.advice.code, "review_cost");
+  assert.match(report.advice.message, /当前配置下.*前三轮.*0 USD/);
+  assert.equal(report.observed.cached_input_percent, null);
+  assert.equal((await readCacheAdvice({ ...key, configMtimeMs: now - 5 * minute })).advice.code, "unknown");
+});
+
+test("each of three higher bills needs the same currency and no extra input or output", async () => {
+  const invalid = [billed(0.03, 8001), billed(0.03, 8000, 101), billed(0.02),
+    billed(0.03, 8000, 100, "CNY"), { ...billed(0.03), currency: undefined },
+    { ...billed(0.03), cost: undefined, cost_details: { upstream_inference_cost: 0.03 } },
+    { ...billed(0.03), cost: undefined, reference_cost: { amount: 0.03, currency: "USD" } },
+    { ...billed(0.03), completion_tokens: undefined }, { ...billed(0.03), prompt_tokens: undefined }];
+  for (const sample of invalid) {
+    const root = await fixture(), key = { ...target(root), optimized: true };
+    for (let i = 1; i <= 6; i++)
+      await run(root, now - i * minute, i === 2 ? sample : billed(i <= 3 ? 0.03 : 0.02),
+        { later: [{ kind: "model_result", data: { round: 2, usage: billed(3) } }] });
+    assert.notEqual((await readCacheAdvice(key)).advice.code, "review_cost", JSON.stringify(sample));
+  }
+});
+
+test("cost comparisons never take a baseline from a different session, provider, model or prior configuration", async () => {
+  for (const other of [{ session: "other" }, { context: { ...ctx, model_id: "other" } },
+      { context: { ...ctx, provider: "other" } }, { kind: "technical_task" }]) {
+    const root = await fixture(), key = { ...target(root), optimized: true };
+    for (let i = 1; i <= 6; i++)
+      await run(root, now - i * minute, billed(i <= 3 ? 0.05 : 0.01), i <= 3 ? {} : other);
+    assert.notEqual((await readCacheAdvice(key)).advice.code, "review_cost");
+  }
 });
 
 test("a busy archive bounds file reads and discloses that the sample is incomplete", async () => {

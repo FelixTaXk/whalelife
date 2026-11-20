@@ -127,6 +127,26 @@ test("incomplete or invalid usage cannot fabricate a cost or replace the old nul
   }
 });
 
+test("saved request usage distinguishes provider charges from reference and upstream prices", () => {
+  const relay = { ...provider, base_url: "https://relay.example/v1" };
+  const saved = (extra: any, p = relay) => requestUsage(usage(extra), p, null)!;
+  assert.deepEqual(saved({ cost: 0, currency: "CNY" }).reported_cost, { amount: 0, currency: "CNY" });
+  assert.deepEqual(saved({ cost: 0.003, cost_currency: "EUR", currency: "EUR" }).reported_cost,
+    { amount: 0.003, currency: "EUR" });
+  const official = saved({ cost: 0.004, currency: "USD" }, provider);
+  assert.equal(official.cost?.currency, "CNY");
+  assert.equal(official.reported_cost?.currency, "USD");
+  for (const extra of [
+    { cost_details: { upstream_inference_cost: 0.01 }, currency: "USD" },
+    { cost: 0.004 }, { cost: "0.004", currency: "USD" }, { cost: -1, currency: "USD" },
+    { cost: 0.004, cost_currency: "USD", currency: "EUR" }, { cost: 0.004, currency: "secret" },
+  ]) assert.equal(Object.hasOwn(saved(extra), "reported_cost"), false);
+  assert.deepEqual(saved({ cost: 0.2 }, { ...relay, base_url: "https://api.mirarouter.com/v1/" }).reported_cost,
+    { amount: 0.2, currency: "USD" });
+  assert.equal(Object.hasOwn(saved({ cost: 0.2 }, { ...relay, base_url: "https://api.mirarouter.com/v1/copy" }),
+    "reported_cost"), false);
+});
+
 test("requestUsage retains old numeric fields and adds normalized details without raw metadata", () => {
   const raw = usage({ prompt_tokens_details: { cached_tokens: 750, private_detail: "do-not-retain" },
     untrusted_extension: "do-not-retain" });

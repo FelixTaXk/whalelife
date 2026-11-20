@@ -263,7 +263,7 @@ function cacheCostDifference(standard, stable) {
   if (low <= 0 && high >= 0) return `${basis}，两组费用区间重叠，无法确认节省金额。`;
   const amounts = [Math.abs(low), Math.abs(high)].sort((a, b) => a - b).map(cacheNumber);
   const amount = amounts[0] === amounts[1] ? amounts[0] : amounts.join("–");
-  return `${basis}，稳定前缀在正式测量中合计${low > 0 ? "节省" : "多花"} ${amount} ${standard.currency}。`;
+  return `${basis}，本次正式测量中，稳定前缀这组请求的合计费用比标准排列${low > 0 ? "低" : "高"} ${amount} ${standard.currency}。`;
 }
 function cacheComparison(result, plan) {
   if (!result) return "";
@@ -287,7 +287,11 @@ function cacheDetails(report, result) {
   if (!report) return "";
   const { observed, advice, plan, mode } = report;
   const modeName = { standard: "标准排列", optimized: "手动启用的稳定前缀", builtin: "此服务默认启用的内置稳定前缀" }[mode];
-  const guidance = mode !== "standard" && advice.code === "test" ? "近期多轮长输入的命中率偏低。此模型已使用稳定前缀，可以继续观察后续用量。" : advice.message;
+  let guidance = advice.message;
+  if (advice.code === "test") {
+    if (mode === "optimized") guidance = "近期多轮长输入的缓存命中率偏低。仅凭命中率无法判断实际费用是否上涨。你可以免费切回标准排列，再查看后续聊天的服务商账单。";
+    if (mode === "builtin") guidance = "近期多轮长输入的命中率偏低。此模型已使用稳定前缀，可以继续观察后续用量。";
+  }
   const paid = mode === "standard" && advice.code === "test" && !plan.unavailable_reason && report.confirm_token && !result;
   return `<h4>近期对话记录</h4><p>读取近 ${e(cacheNumber(observed.window_days))} 天、最多 ${e(cacheNumber(observed.max_turns))} 轮普通对话的首个请求。抽取的 ${e(cacheNumber(observed.turns))} 轮中，${e(cacheNumber(observed.measured_turns))} 轮有缓存计量。输入达到 ${e(cacheNumber(observed.long_input_tokens))} token 的有 ${e(cacheNumber(observed.long_turns))} 轮，其中 ${e(cacheNumber(observed.measured_long_turns))} 轮有缓存计量。${observed.limited ? "可读取的记录有限。" : ""}</p>
     <p>按有计量的输入 token 加权，缓存命中率为 ${e(cachePercent(observed.cached_input_percent))}。当前使用<strong>${e(modeName)}</strong>。</p><p>${e(guidance)}</p>
@@ -295,9 +299,9 @@ function cacheDetails(report, result) {
     ${cacheComparison(result, plan)}
     ${paid ? `<h4>运行付费对照测试</h4><p>向此连接发送合成对话，分别按标准排列和稳定前缀各预热 ${e(plan.warmup_per_layout)} 次、测量 ${e(plan.measured_per_layout)} 次。测试内容不含真实聊天、人格或记忆。</p>
       <p>最多发起 <strong>${e(plan.max_requests)} 次真实模型请求</strong>，预计合计输入约 ${e(cacheNumber(plan.estimated_input_tokens))} token，每次最多输出 ${e(cacheNumber(plan.max_output_tokens_per_request))} token。服务商可能对输入和输出均收费。${plan.estimated_cost ? `预计费用 ${e(cacheCost(plan.estimated_cost))}。` : "此连接的实际单价未知，无法预估金额。"}实际用量以服务回传为准，最终费用以服务商账单为准。</p>
-      <p>测试只生成对比结果。命中改善且费用合适时，可以再选择是否启用。</p><button type="button" class="btn tonal" data-cache-action="test">确认费用并运行对照测试</button>` : ""}
+      <p>测试只生成对比结果。两轮对照都提高了命中率，且服务商回传的可比费用都更低时，你可以手动启用。</p><button type="button" class="btn tonal" data-cache-action="test">确认费用并运行对照测试</button>` : ""}
     ${mode === "standard" && result?.verdict === "better" && result.test_id ? '<button type="button" class="btn primary" data-cache-action="apply">为此模型启用稳定前缀</button>' : ""}
-    ${mode === "optimized" ? '<button type="button" class="btn" data-cache-action="disable">关闭此模型的稳定前缀</button>' : ""}`;
+    ${mode === "optimized" ? '<button type="button" class="btn" data-cache-action="disable">切回标准排列</button>' : ""}`;
 }
 function cachePanelBody(app, d) {
   const { dirty, enabled } = d;
@@ -308,11 +312,12 @@ function cachePanelBody(app, d) {
   const locked = dirty || !enabled || d.revision !== app.state.config.revision;
   const hint = dirty ? "请先保存或放弃当前修改，再检查已保存的模型。"
     : d.revision !== app.state.config.revision ? "配置已经变化，请刷新页面后重新检查。"
-    : !enabled ? "请先启用并保存此模型和服务连接。" : "先查看本机记录，此步骤不会调用模型。";
+    : !enabled ? "请先启用并保存此模型和服务连接。" : "免费查看本机聊天记录，不调用模型，也不更改设置。";
   return `<div class="settings-section-title"><h3>提示缓存</h3><button type="button" class="btn small" data-cache-action="inspect" ${locked || state.busy ? "disabled" : ""}>检查缓存效果</button></div>
+    <p class="hint" data-cache-hint>${hint}</p>
     <p>聊天时，之前的对话会随新消息一起发送。有些服务商会对重复的开头少收费。把历史放在前面、每轮变化的时间放在后面，可能省下这部分输入费用。</p>
     <p>已保存的连接和模型 · ${e(provider?.name || saved.provider)} / ${e(saved.name)}（${e(saved.model)}）</p>
-    <p class="hint" data-cache-hint>${hint}</p><div data-cache-details ${locked || state.busy ? "hidden" : ""}>${cacheDetails(state.report, state.result)}</div>
+    <div data-cache-details ${locked || state.busy ? "hidden" : ""}>${cacheDetails(state.report, state.result)}</div>
     <p class="connection-result ${state.error ? "error" : ""}" role="status">${e(state.error || state.busy || "")}</p>
     ${state.controller ? '<button type="button" class="btn small" data-cache-action="cancel">停止后续请求</button><p class="hint">已发出的请求仍可能计费。</p>' : ""}`;
 }

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
+import type { CacheCostBaseline } from "./cache-advice.ts";
 import type { Diagnostics } from "./diagnostics.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { timezone } from "./time.ts";
@@ -56,6 +57,7 @@ export interface ModelDefinition {
   context_window?: number | null;
   reasoning_compatibility?: ReasoningCompatibility;
   cache_prefix_for?: string;
+  cache_cost_baseline?: CacheCostBaseline;
 }
 export class ModelConfigError extends Error {
   status: number;
@@ -567,7 +569,7 @@ export class ModelConfig {
     this.queue = task.catch(() => {});
     return task;
   }
-  setCacheOptimization(modelId: string, revision: string, enabled: boolean) {
+  setCacheOptimization(modelId: string, revision: string, enabled: boolean, baseline?: CacheCostBaseline) {
     const task = this.queue.then(async () => {
       const raw = await readFile(this.file, "utf8");
       if (!revision || revision !== this.revision || hash(raw) !== revision)
@@ -576,6 +578,8 @@ export class ModelConfig {
       const model = disk.models?.find((m: ModelDefinition) => m.id === modelId);
       if (!model) throw new ModelConfigError("请先保存这条对话模型配置");
       const provider = resolveModel(this.config, modelId);
+      if (enabled && baseline) model.cache_cost_baseline = baseline;
+      else delete model.cache_cost_baseline;
       if (enabled) model.cache_prefix_for = cacheConnectionKey(provider, model);
       else delete model.cache_prefix_for;
       return this.persist(disk, revision);
@@ -745,8 +749,11 @@ export class ModelConfig {
           "模型引用的提供商不存在；请先移除其模型再删除提供商",
         );
       const provider = providers.find((p) => p.id === model.provider)!;
-      if (previousModel?.cache_prefix_for && previousModel.cache_prefix_for === cacheConnectionKey(provider, model))
+      if (previousModel?.cache_prefix_for && previousModel.cache_prefix_for === cacheConnectionKey(provider, model)) {
         model.cache_prefix_for = previousModel.cache_prefix_for;
+        if (provider.enabled && model.enabled && previousModel.cache_cost_baseline)
+          model.cache_cost_baseline = previousModel.cache_cost_baseline;
+      }
       const error = modelConfigurationError(model, provider);
       if (error) {
         const old = previous.models.find((m) => m.id === model.id);

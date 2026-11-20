@@ -9,7 +9,8 @@ import { once } from "node:events";
 import { mkdir, readFile, writeFile, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { boot } from "../core/index.ts";
-import { resolveModel } from "../core/model-config.ts";
+import { CacheDiagnostics } from "../core/cache-diagnostics.ts";
+import { ModelConfig, resolveModel } from "../core/model-config.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
 
 test("authenticated cache check, paid consent, one-time application and rollback through the saved connection", async t => {
@@ -66,7 +67,7 @@ test("authenticated cache check, paid consent, one-time application and rollback
     const run = await app.executionArchive.start("one", { kind: "conversation" });
     await run!.write("context", { provider: "relay", model: model.model, model_id: model.id });
     await run!.write("model_start", { round: 1 });
-    await run!.write("model_result", { round: 1, usage: { prompt_tokens: 5000, prompt_cache_hit_tokens: 0 } });
+    await run!.write("model_result", { round: 1, usage: { prompt_tokens: 5000, completion_tokens: 10, prompt_cache_hit_tokens: 0, cost: 0.001, currency: "USD" } });
     await run!.end("completed");
   }
   const check = await get();
@@ -101,6 +102,8 @@ test("authenticated cache check, paid consent, one-time application and rollback
   assert.equal((await post("apply", activate)).status, 409);
   const persisted = JSON.parse(await readFile(file, "utf8"));
   assert.equal(resolveModel(persisted, model.id).cache_prefix_optimized, true);
+  assert.equal(persisted.models[0].cache_cost_baseline.max_cost, 0.001);
+  assert.equal(JSON.stringify(app.modelConfig.snapshot()).includes("cache_cost_baseline"), false);
   assert.deepEqual(persisted.providers, JSON.parse(original).providers);
   assert.deepEqual(persisted.models.slice(1), JSON.parse(original).models.slice(1));
   const edited = structuredClone(persisted);
@@ -110,6 +113,24 @@ test("authenticated cache check, paid consent, one-time application and rollback
   snapshot.models[0].name = "Renamed";
   await app.modelConfig.save({ ...snapshot, personaModels: { fish: model.id } });
   assert.equal((await get()).mode, "optimized");
+  // Drive ordinary chat through its real archive writer, using a synthetic model response.
+  let chatRequests = 0;
+  app.llm.chat = async () => {
+    chatRequests++;
+    return { text: "模拟聊天回复", toolCalls: [], finish_reason: "stop", usage: { prompt_tokens: 4900,
+      completion_tokens: 9, prompt_cache_hit_tokens: 4900, cost: 0.002, currency: "USD" } };
+  };
+  await app.memory.saveSessionMeta("one", { name: "模拟聊天", context: { history_enabled: true } });
+  for (let i = 0; i < 3; i++) await app.sessions.chat("one", "普通聊天 " + i, () => {});
+  const reviewed = await get();
+  assert.equal(reviewed.mode, "optimized");
+  assert.equal(reviewed.advice.code, "review_cost");
+  assert.equal(reviewed.confirm_token, undefined);
+  assert.equal(requests.length, check.plan.max_requests);
+  const freshConfig = new ModelConfig(root, JSON.parse(await readFile(file, "utf8")), app.modelConfig.logger);
+  const fresh = new CacheDiagnostics(freshConfig, app.executionArchive.root);
+  assert.equal((await fresh.check(model.id)).advice.code, "review_cost");
+  assert.equal(chatRequests, 3);
   const layouts: boolean[] = [];
   app.llm.chat = async ({ messages }: any) => {
     layouts.push(messages.slice(1).some((m: any) => m.role === "system" && m.content.includes("【主干时间】")));
@@ -119,7 +140,17 @@ test("authenticated cache check, paid consent, one-time application and rollback
   await app.sessions.chat("layout-check", "第一句", () => {});
   assert.equal((await post("apply", { model: model.id, revision: app.modelConfig.revision, enabled: false })).status, 200);
   assert.equal((await get()).mode, "standard");
+  assert.equal(JSON.parse(await readFile(file, "utf8")).models[0].cache_cost_baseline, undefined);
   await app.sessions.chat("layout-check", "第二句", () => {});
   assert.deepEqual(layouts, [true, false]);
+  // Replay the enabled fixture with a route edit through the normal settings-save path.
+  await writeFile(file, JSON.stringify(persisted));
+  const rerouted = app.modelConfig.snapshot();
+  rerouted.models[0].parameters = { temperature: 0.2 };
+  await app.modelConfig.save({ ...rerouted, personaModels: { fish: model.id } });
+  const savedRoute = JSON.parse(await readFile(file, "utf8")).models[0];
+  assert.equal(savedRoute.cache_prefix_for, undefined);
+  assert.equal(savedRoute.cache_cost_baseline, undefined);
+  assert.equal((await get()).mode, "standard");
   assert.equal(requests.length, check.plan.max_requests);
 });

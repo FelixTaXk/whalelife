@@ -4,7 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { readCacheAdvice } from "./cache-advice.ts";
+import { captureCacheCostBaseline, readCacheAdvice } from "./cache-advice.ts";
 import { cacheTestPlan, runCacheProbe } from "./cache-probe.ts";
 import { supportsContextPrefix } from "./context-material.ts";
 import { ModelConfig, ModelConfigError, resolveModel } from "./model-config.ts";
@@ -37,11 +37,16 @@ export class CacheDiagnostics {
       if (value.expires < now || value.revision !== revision) this.reviews.delete(key);
     return this.reviews.get(model);
   }
-  private async evidence(model: string, { provider, revision }: ReturnType<CacheDiagnostics["current"]>) {
+  private async target(model: string, { provider, mode }: ReturnType<CacheDiagnostics["current"]>) {
     const duplicates = this.models.config.models.filter((m: any) => m.provider === provider.id && m.model === provider.model);
-    const evidence = await readCacheAdvice({ archiveRoot: this.archiveRoot, modelId: model, providerId: provider.id,
-      model: provider.model, uniqueModel: duplicates.length === 1, configMtimeMs: (await stat(this.models.file)).mtimeMs });
-    if (this.models.snapshot().revision !== revision) throw new ModelConfigError("配置已变化，请重新检查", 409);
+    const optimized = mode === "optimized";
+    const costBaseline = optimized ? duplicates.find((m: any) => m.id === model)?.cache_cost_baseline : undefined;
+    return { archiveRoot: this.archiveRoot, modelId: model, providerId: provider.id, provider, optimized, costBaseline,
+      model: provider.model, uniqueModel: duplicates.length === 1, configMtimeMs: (await stat(this.models.file)).mtimeMs };
+  }
+  private async evidence(model: string, current: ReturnType<CacheDiagnostics["current"]>) {
+    const evidence = await readCacheAdvice(await this.target(model, current));
+    if (this.models.snapshot().revision !== current.revision) throw new ModelConfigError("配置已变化，请重新检查", 409);
     return evidence;
   }
   async check(model: string) {
@@ -91,7 +96,8 @@ export class CacheDiagnostics {
   }
   async apply(input: any) {
     const model = input?.model;
-    const { revision, mode } = this.current(model);
+    const current = this.current(model);
+    const { revision, mode } = current;
     if (input.revision !== revision || typeof input.enabled !== "boolean")
       throw new ModelConfigError("请读取当前模型配置后再操作", 409);
     if (input.enabled) {
@@ -101,7 +107,8 @@ export class CacheDiagnostics {
     } else if (mode !== "optimized") {
       throw new ModelConfigError("当前模型并未手动启用缓存优化", 409);
     }
-    const updated = await this.models.setCacheOptimization(model, revision, input.enabled);
+    const baseline = input.enabled ? await captureCacheCostBaseline(await this.target(model, current)) : undefined;
+    const updated = await this.models.setCacheOptimization(model, revision, input.enabled, baseline);
     this.reviews.delete(model);
     return updated;
   }
