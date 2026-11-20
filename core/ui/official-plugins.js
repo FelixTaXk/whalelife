@@ -118,8 +118,8 @@ function openDialog(app, plugin, title, body, submit, label, danger) {
   doc.getElementById("dialog")?.addEventListener("close", () => {
     if (app.state.page !== page || (doc.activeElement?.isConnected && doc.activeElement !== doc.body)) return;
     const drawer = doc.getElementById("store-drawer");
-    const buttons = (drawer?.open ? drawer : app.content).querySelectorAll("[data-official-action]:enabled");
-    [...buttons].find(b => b.dataset.officialId === plugin.id)?.focus({ preventScroll: true });
+    const buttons = (drawer?.open ? drawer : app.content).querySelectorAll("[data-official-action]:enabled, [data-community-install]:enabled");
+    [...buttons].find(b => (b.dataset.officialId || b.dataset.communityInstall) === plugin.id)?.focus({ preventScroll: true });
   }, { once: true });
 }
 
@@ -128,7 +128,13 @@ function failureMessage(error) {
   return error.message + (changes?.length ? "\n\n已撤回的改动\n" + changes.join("\n") : "");
 }
 
-async function apply(app, plugin) {
+function installSteps(plugin) {
+  const steps = plugin.steps || [];
+  const components = plugin.components || [];
+  return `<ul class="official-plan">${steps.map(step => `<li><span>${e(stepNames[step.action])}</span><strong>${e(step.name || step.id)}</strong><small>v${e(step.version)}</small></li>`).join("")}${components.map(part => `<li><span>从上游下载并校验</span><strong>${e(part.name)}</strong><small>v${e(part.version)}</small></li>`).join("")}</ul>`;
+}
+
+async function apply(app, plugin, source = "official") {
   const { state, content } = app;
   if (state.officialBusy) throw Error("另一个插件操作正在进行。");
   state.officialBusy = plugin.id;
@@ -136,13 +142,17 @@ async function apply(app, plugin) {
   paint(app);
   let applied = false;
   try {
-    const result = await api("/api/official-plugins/apply", { id: plugin.id, action: plugin.action, planKey: plugin.planKey });
+    const result = await api(`/api/${source}-plugins/apply`, { id: plugin.id, action: plugin.action, planKey: plugin.planKey });
     if (!result.ok) throw Object.assign(Error(result.error || result.message || "插件操作失败。"), { rolledBack: result.rolledBack });
     applied = true;
     app.toast(result.message);
   } finally {
     try { await app.refreshStatus(); } catch (error) { app.toast(error.message, true); }
     state.officialBusy = null;
+    // Installing or enabling a dependency changes the plan for other entries too.
+    state.communityPlugins = null;
+    app.communityRead = null;
+    content.ownerDocument.getElementById("plugin-store")?.dispatchEvent(new Event("community-plans-invalidated"));
     const workspace = content.querySelector(".plugin-workspace");
     if (applied && plugin.action === "uninstall" && workspace?.dataset.runtimeId === plugin.runtimeId) {
       state.officialPlugins = null;
@@ -150,6 +160,23 @@ async function apply(app, plugin) {
       content.ownerDocument.defaultView.location.hash = "#plugins";
     } else await refresh(app, true);
   }
+}
+
+export function confirmCommunityInstall(app, entry, plugin, stillCurrent) {
+  if (app.state.officialBusy) return;
+  if (plugin.action === "blocked") {
+    openDialog(app, entry, "暂时无法安装 " + entry.name,
+      `<p class="official-dialog-text">${e(plugin.reason || "当前安装环境不兼容。")}</p>`);
+    return;
+  }
+  if (plugin.action !== "install" || !plugin.planKey) return;
+  const body = `<p class="official-dialog-text">将安装 ${e(entry.author)} 发布的 ${e(entry.name)} v${e(plugin.version)}。</p>` +
+    installSteps(plugin);
+  openDialog(app, entry, "安装 " + entry.name, body, async () => {
+    if (!stillCurrent()) throw Error("安装计划已变化，请关闭并重新查看。");
+    try { await apply(app, plugin, "community"); }
+    catch (error) { throw Error(failureMessage(error)); }
+  }, e(plugin.buttonLabel || "确认安装"));
 }
 
 async function handleClick(app, event) {
@@ -175,7 +202,7 @@ async function handleClick(app, event) {
   if (action === "uninstall" || components.length || steps.some(step => step.id !== plugin.id)) {
     const body = action === "uninstall"
       ? '<p class="official-dialog-text">只移除这个插件的程序文件。配置和用户资料会保留，重新安装后可以继续使用。</p>'
-      : `<ul class="official-plan">${steps.map(step => `<li><span>${e(stepNames[step.action])}</span><strong>${e(step.name)}</strong><small>v${e(step.version)}</small></li>`).join("")}${components.map(part => `<li><span>从上游下载并校验</span><strong>${e(part.name)}</strong><small>v${e(part.version)}</small></li>`).join("")}</ul>`;
+      : installSteps(plugin);
     openDialog(app, plugin, verb + " " + plugin.name, body, async () => {
       try { await apply(app, plugin); } catch (error) { throw Error(failureMessage(error)); }
     }, e(plugin.label || verb), action === "uninstall");

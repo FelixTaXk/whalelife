@@ -12,6 +12,8 @@ import { conversationRows } from "./channel-history.ts";
 import { PluginWebRegistry } from "./plugin-web.ts";
 import { WebClientDisconnectedError } from "./web-errors.ts";
 import { OfficialPlugins } from "./official-plugins.ts";
+import { CommunityPackages } from "./community-packages.ts";
+import { readPublishedCommunityReviews } from "./community-reviews.ts";
 import { PluginUpdates } from "./plugin-updates.ts";
 import { CacheDiagnostics } from "./cache-diagnostics.ts";
 
@@ -38,6 +40,12 @@ export async function startWeb(config: any, services: any, runtime: any) {
   const official = new OfficialPlugins(runtime);
   const cacheDiagnostics = new CacheDiagnostics(services.modelConfig, services.executionArchive?.root);
   const lifetime = new AbortController();
+  const reviewedPackages = async () => {
+    try { return await readPublishedCommunityReviews(lifetime.signal); }
+    catch {
+      throw Object.assign(Error("暂时无法核对社区插件的审核记录。请稍后重试，或查看作者的安装说明。"), { status: 503 });
+    }
+  };
   const pluginUpdates = new PluginUpdates(lifetime.signal);
   let officialRead: ReturnType<typeof official.list> | undefined;
   let lastOfficial: { time: number; result: Awaited<ReturnType<typeof official.list>> } | undefined;
@@ -185,6 +193,23 @@ export async function startWeb(config: any, services: any, runtime: any) {
         return send(200, { ok: true });
       }
       if (!authorized(req)) return send(401, { error: "请先登录" });
+      if (pathname === "/api/community-plugins" && req.method === "GET") {
+        const reviews = await reviewedPackages();
+        return send(200, reviews.length ? await new CommunityPackages(runtime, reviews).list() : { plugins: [] });
+      }
+      if (pathname === "/api/community-plugins/apply" && req.method === "POST") {
+        if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
+          return send(415, { error: "请使用 JSON 提交操作。" });
+        const input = await body(req, 4096);
+        if (!input || input.action !== "install" || typeof input.id !== "string" ||
+            typeof input.planKey !== "string" || !/^[a-f0-9]{64}$/.test(input.planKey) ||
+            Object.keys(input).some(key => !["id", "action", "planKey"].includes(key)))
+          return send(400, {error: "请先查看商店提供的安装计划，再确认安装。"});
+        // Re-read the maintainer's approvals on confirmation, including revocations and changed packages.
+        const reviews = await reviewedPackages();
+        try { return send(200, await new CommunityPackages(runtime, reviews).apply(input)); }
+        finally { lastOfficial = undefined; }
+      }
       if (pathname === "/api/plugin-updates" && req.method === "GET") {
         return send(200, await pluginUpdates.list(runtime.list(), () => officialList(true)));
       }
@@ -475,7 +500,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
       if (res.destroyed) return;
       if (!res.headersSent)
         send(
-          [400, 404, 409, 413, 500, 502].includes(error.status)
+          [400, 404, 409, 413, 500, 502, 503].includes(error.status)
             ? error.status
             : 400,
           {

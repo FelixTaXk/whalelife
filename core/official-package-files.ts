@@ -38,7 +38,7 @@ function safePath(value: unknown): value is string {
     value.split("/").every(part => part && !/[. ]$/.test(part) && !/[\\<>:"|?*\x00-\x1f]/.test(part) &&
       !/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part) && !/~\d+(?:\.|$)/.test(part));
 }
-function isPersistent(path: string, preserve: readonly string[]) {
+export function isPackageDataPath(path: string, preserve: readonly string[] = []) {
   const lower = path.toLowerCase();
   if (preserve.some(value => lower === value.toLowerCase() || lower.startsWith(value.toLowerCase() + "/"))) return true;
   // Each nested plugin has its own data/config namespace. Libraries may have source files named config.
@@ -54,7 +54,7 @@ export function inventoryOf(header: Buffer): Inventory {
   let size = 0;
   for (const file of value.files) {
     if (!safePath(file?.path) || !hashPattern.test(file?.sha256) || !Number.isSafeInteger(file.size) || file.size < 0 ||
-        isPersistent(file.path, []) || byPath.has(file.path)) throw Error(`发行包文件不合规：${file?.path}`);
+        isPackageDataPath(file.path) || byPath.has(file.path)) throw Error(`发行包文件不合规：${file?.path}`);
     size += file.size;
     if (size > 16 * 1024 ** 3) throw Error("发行包超出大小上限");
     const parts = file.path.split("/");
@@ -72,12 +72,14 @@ export function inventoryOf(header: Buffer): Inventory {
 }
 
 // gzip wraps one UTF-8 inventory line followed by each file's exact bytes in inventory order.
-async function readPackage(path: string, staging?: string, expected?: Inventory): Promise<Inventory> {
+async function readPackage(path: string, staging?: string, expected?: Inventory,
+  manifests?: Map<string, Buffer>): Promise<Inventory> {
   const compressed = createReadStream(path), gzip = createGunzip({ chunkSize: 256 * 1024 });
   compressed.on("error", error => gzip.destroy(error)).pipe(gzip);
   const header: Buffer[] = [], created = new Set<string>();
   let headerSize = 0, inventory: Inventory | undefined, index = 0, written = 0;
   let handle: Awaited<ReturnType<typeof open>> | undefined, hash = createHash("sha256");
+  let captured: Buffer[] = [];
   try {
     for await (const chunk of gzip) {
       const bytes = chunk as Buffer;
@@ -89,17 +91,19 @@ async function readPackage(path: string, staging?: string, expected?: Inventory)
         header.push(part);
         if (end < 0) continue;
         inventory = inventoryOf(Buffer.concat(header));
-        if (!staging) return inventory;
-        if (!expected || expected.files.length !== inventory.files.length || expected.files.some((file, i) => {
+        if (!staging && !manifests) return inventory;
+        if (expected && (expected.files.length !== inventory.files.length || expected.files.some((file, i) => {
           const next = inventory!.files[i];
           return next.path !== file.path || next.size !== file.size || next.sha256 !== file.sha256;
-        })) throw Error("解包时发行清单已变化");
+        }))) throw Error("解包时发行清单已变化");
         offset = end + 1;
       }
       while (index < inventory.files.length) {
         const file = inventory.files[index];
         if (offset === bytes.length && file.size > written) break;
-        if (!handle) {
+        const capture = manifests && /^(?:sub\/[^/]+\/)*plugin\.yaml$/.test(file.path);
+        if (capture && (file.size > 128 * 1024 || manifests.size >= 256)) throw Error("发行包插件清单过大或子插件过多");
+        if (staging && !handle) {
           const target = join(staging!, file.path), parent = dirname(target);
           if (!created.has(parent)) { await mkdir(parent, { recursive: true }); created.add(parent); }
           handle = await open(target, "wx");
@@ -108,14 +112,16 @@ async function readPackage(path: string, staging?: string, expected?: Inventory)
         if (length) {
           const part = bytes.subarray(offset, offset + length);
           hash.update(part);
-          await handle.writeFile(part);
+          if (handle) await handle.writeFile(part);
+          if (capture) captured.push(part);
           written += length;
           offset += length;
         }
         if (written === file.size) {
-          await handle.close();
+          await handle?.close();
           handle = undefined;
           if (hash.digest("hex") !== file.sha256) throw Error(`发行文件校验失败：${file.path}`);
+          if (capture) { manifests!.set(file.path, Buffer.concat(captured)); captured = []; }
           index++;
           written = 0;
           hash = createHash("sha256");
@@ -130,6 +136,14 @@ async function readPackage(path: string, staging?: string, expected?: Inventory)
     gzip.destroy();
     await handle?.close();
   }
+}
+
+/** Stream verified contents and collect only plugin manifests, before any file becomes executable. */
+export async function verifiedPackageManifests(root: string, spec: OfficialPackageSpec) {
+  const { archive, inventory } = await releaseAt(root, spec);
+  const manifests = new Map<string, Buffer>();
+  await readPackage(archive, undefined, inventory, manifests);
+  return { paths: inventory.byPath, manifests };
 }
 
 async function fileStamp(path: string) {
@@ -183,24 +197,24 @@ async function releaseAt(root: string, spec: OfficialPackageSpec) {
       entry = { stamp, inventory: inventoryOf(bytes) };
       metadata.set(archive, entry);
     }
-    if (spec.preserve?.length && entry.inventory.files.some(file => isPersistent(file.path, spec.preserve!)))
+    if (spec.preserve?.length && entry.inventory.files.some(file => isPackageDataPath(file.path, spec.preserve!)))
       throw Error("历史清单包含需保留的用户资料");
     return { cache: join(root, ".artifacts", "official-packages"), archive, inventory: entry.inventory };
   }
   const cache = await directoryAt(root, ".artifacts/official-packages");
-  if (!cache) throw Error("尚未取得已验证的官方发行包");
+  if (!cache) throw Error("尚未取得已验证的发行包");
   const archive = join(cache, spec.sha256 + ".wlpkg.gz");
   let stamp: string;
   try { stamp = (await fileStamp(archive)).key; }
-  catch (error) { if (missing(error)) throw Error("尚未取得已验证的官方发行包"); throw error; }
+  catch (error) { if (missing(error)) throw Error("尚未取得已验证的发行包"); throw error; }
   let entry = metadata.get(archive);
   if (entry?.stamp !== stamp) {
-    if (await digestFile(archive) !== spec.sha256) throw Error("官方发行包 SHA-256 校验失败");
+    if (await digestFile(archive) !== spec.sha256) throw Error("发行包 SHA-256 校验失败");
     entry = { stamp, inventory: await readPackage(archive) };
     if ((await fileStamp(archive)).key !== stamp) throw Error("校验期间发行包被替换");
     metadata.set(archive, entry);
   }
-  if (spec.preserve?.length && entry.inventory.files.some(file => isPersistent(file.path, spec.preserve!))) {
+  if (spec.preserve?.length && entry.inventory.files.some(file => isPackageDataPath(file.path, spec.preserve!))) {
     throw Error("发行包包含用户配置或持久数据");
   }
   return { cache, archive, inventory: entry.inventory };
@@ -215,7 +229,7 @@ async function inspectTree(root: string, spec: OfficialPackageSpec, inventory: I
   async function visit(parent: string) {
     for (const item of await readdir(join(base!, parent), { withFileTypes: true })) {
       const path = parent ? parent + "/" + item.name : item.name;
-      if (isPersistent(path, spec.preserve ?? [])) {
+      if (isPackageDataPath(path, spec.preserve)) {
         if (item.isSymbolicLink()) throw Error(`持久目录或配置使用了链接：${path}`);
         continue;
       }
@@ -237,7 +251,7 @@ async function inspectTree(root: string, spec: OfficialPackageSpec, inventory: I
   }
   for (let i = 0; i < inventory.files.length; i += 16) {
     await Promise.all(inventory.files.slice(i, i + 16).map(async file => {
-      if (await digestFile(join(base, file.path), file.size, fresh) !== file.sha256) throw Error(`文件与官方发行包不一致：${file.path}`);
+      if (await digestFile(join(base, file.path), file.size, fresh) !== file.sha256) throw Error(`文件与已审核发行包不一致：${file.path}`);
     }));
   }
   return { state: "installed" };
