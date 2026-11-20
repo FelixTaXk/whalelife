@@ -25,32 +25,33 @@ export function hostUpdateContent(app) {
   const data = ui.data;
   const latest = data?.latest;
   const busy = ui.watching || active(data);
-  const current = data?.current ? "当前 " + versionLabel(data.current) : "";
+  const current = data?.current ? "当前版本 " + versionLabel(data.current) : "";
   const error = ui.error || data?.error;
   const available = Boolean(latest?.version && data?.supported && !error);
-  let title = "WhaleLife 本体", info = current;
+  let title = "WhaleLife 本体", status = "";
   if (busy) {
     title = ui.reconnecting ? "正在重新连接 WhaleLife" :
       data?.phase === "restarting" ? "WhaleLife 正在重启" : "正在准备本体更新";
-    info = ui.reconnecting ? "连接恢复后将显示更新结果。" : "完成后会在这里显示结果。";
+    status = ui.reconnecting ? "连接恢复后将显示更新结果。" : "完成后会在这里显示结果。";
   } else if (latest?.version && !error) {
     title = "WhaleLife " + versionLabel(latest.version) + " 可更新";
-  } else if (ui.checked && !error && data?.supported) {
-    info = [current, "暂无新版本"].filter(Boolean).join(" · ");
+  } else if (data?.supported && !error && data.phase === "idle") {
+    status = "暂无更高的正式版本";
   }
   if (!busy && data?.supported === false && !error) {
-    info = [current, "当前安装方式不支持一键更新"].filter(Boolean).join(" · ");
+    status = "当前安装方式不支持一键更新";
   }
+  const info = [current, status].filter(Boolean).join(" · ");
   const last = data?.lastResult;
   const resultLabel = { updated: "更新成功", "rolled-back": "更新失败，已回滚", failed: "更新失败" }[last?.status];
   const result = !busy && resultLabel
     ? `<p class="host-update-result ${last.status === "updated" ? "ok" : "warning"}">上次更新 · ${e(resultLabel)}${last.version ? "（" + e(versionLabel(last.version)) + "）" : ""}${last.message ? "。" + e(last.message) : ""}</p>` : "";
-  const release = !busy && latest ? releaseLink(latest.url) : "";
+  const release = !busy && !error && latest ? releaseLink(latest.url) : "";
   const button = busy ? "" : available
     ? '<button type="button" class="btn small primary" data-host-action="open">查看更新</button>'
     : `<button type="button" class="btn small" data-host-action="check"${ui.reading ? " disabled" : ""}>${ui.reading ? "检查中…" : "检查更新"}</button>`;
   return `<div class="host-update-line"><span class="host-update-icon${available ? " available" : ""}">${icon(busy ? "refresh" : "download")}</span>
-    <div class="host-update-copy" role="status"><strong>${e(title)}</strong>${info ? `<small>${e(info)}</small>` : ""}${result}
+    <div class="host-update-copy" role="status"><strong>${e(title)}</strong><small>${info ? e(info) + " · " : ""}<a class="host-release-link" href="https://github.com/iinukami/whalelife/releases" target="_blank" rel="noopener noreferrer">GitHub 正式发行版</a></small>${result}
     ${error && !busy ? `<p class="host-update-result warning">${e(error)}</p>` : ""}</div>
     <div class="host-update-actions">${release}${button}</div></div>`;
 }
@@ -81,7 +82,6 @@ async function read(app, force = false) {
     const data = await api(endpoint + (force ? "/check" : ""), force ? {} : undefined, AbortSignal.timeout(20_000));
     if (ui !== app.hostUpdate) return;
     ui.data = data;
-    ui.checked = force || ui.checked;
     ui.error = "";
     ui.watching = active(data);
     ui.reconnecting = false;

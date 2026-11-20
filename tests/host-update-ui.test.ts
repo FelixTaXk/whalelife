@@ -45,6 +45,8 @@ test("a console read or cancelled dialog cannot apply an update; confirming pins
   bindHostUpdate(view.app);
   await turn();
   assert.match(view.slot.innerHTML, /v0\.1\.1 可更新/);
+  assert.match(view.slot.innerHTML, /当前版本 v0\.1\.0/);
+  assert.match(view.slot.innerHTML, /href="https:\/\/github\.com\/iinukami\/whalelife\/releases\/tag\/v0\.1\.1"[^>]*>发行说明</);
   view.click("open");
   assert.equal(fetch.mock.callCount(), 1); // The cancel path never runs submit.
   view.click("open");
@@ -98,10 +100,24 @@ test("offline checks can be retried, and only the host's returned outcome is sho
   bindHostUpdate(view.app);
   await turn();
   assert.match(view.slot.innerHTML, /无法连接发行源/);
+  assert.match(view.slot.innerHTML, /href="https:\/\/github\.com\/iinukami\/whalelife\/releases"[^>]*>GitHub 正式发行版</);
+  assert.doesNotMatch(view.slot.innerHTML, /暂无更高的正式版本/);
   view.click("check");
   await turn();
   assert.equal(paths[1], "/api/host-update/check");
   assert.match(view.slot.innerHTML, /更新成功/);
-  assert.match(view.slot.innerHTML, /暂无新版本/);
+  assert.match(view.slot.innerHTML, /当前版本 v0\.1\.1 · 暂无更高的正式版本/);
   assert.doesNotMatch(hostUpdateContent({ hostUpdate: { data: { ...ready, supported: false } } }), /data-host-action="open"/);
+});
+
+test("opening the overview shows the checked release status before a manual refresh", async t => {
+  const view = overview();
+  t.mock.method(globalThis, "fetch", async () => Response.json({ ...ready, latest: null }));
+  t.after(() => resetHostUpdateSession(view.app));
+  bindHostUpdate(view.app);
+  assert.doesNotMatch(view.slot.innerHTML, /暂无更高的正式版本/);
+  await turn();
+  assert.match(view.slot.innerHTML, /当前版本 v0\.1\.0 · 暂无更高的正式版本/);
+  assert.match(view.slot.innerHTML, /GitHub 正式发行版/);
+  assert.doesNotMatch(view.slot.innerHTML, /data-host-action="open"|>发行说明</);
 });
