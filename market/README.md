@@ -23,7 +23,9 @@
 
 | 插件 | 作者 | 用途 | 必需插件 | 相关链接 |
 | --- | --- | --- | --- | --- |
+| 表情包工坊 | FelixTaXk | 需要先在本机安装 Python 和 Pillow。给图片加字幕、气泡或描边，成品可收藏到官方图库。商店会一并安装缺少的图库插件。 | 图库 | [安装说明](<https://github.com/FelixTaXk/whalelife-community-meme/blob/main/README.md#%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-meme>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-meme/issues>) |
 | 日程 | FelixTaXk | 按作息生成每日日程，可查看、编辑并保存。公开版 WhaleLife 支持这些功能。若要在每轮聊天中自动加入当前和下一项日程，需要作者提供的宿主补丁。 | — | [安装说明](<https://github.com/FelixTaXk/whalelife-community-schedule/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-schedule>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-schedule/issues>) |
+| 语音模块 | FelixTaXk | 管理音色库，合成语音并转换歌声。一键安装包含说话和唱歌两个子插件。使用本机语音引擎时，还需在插件设置中单独部署。 | — | [安装说明](<https://github.com/FelixTaXk/whalelife-community-voice/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-voice>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-voice/issues>) |
 | 颜色便签 | iinukami | 社区投稿测试插件。保存一条带颜色的本地便签，重启后可继续查看。 | — | [安装说明](<https://github.com/iinukami/whalelife-community-color-note/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-community-color-note>) · [反馈](<https://github.com/iinukami/whalelife-community-color-note/issues>) |
 
 社区插件由原作者维护。控制台为通过审核且兼容的发行包提供一键安装，其他条目可查看作者的安装说明。作者可以[提交 GitHub 收录申请](https://github.com/iinukami/whalelife/issues/new?template=submit-plugin.yml)，附上公开仓库链接和一句话介绍。希望开通一键安装的作者可在原 Issue 提交发行附件。[社区插件打包与审核说明](community-packages.md)
