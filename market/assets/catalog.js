@@ -102,6 +102,89 @@ window.WHALELIFE_CATALOG = {
       "dependencies": [],
       "collected": "2026-11-20",
       "stars": 0
+    },
+    {
+      "id": "schedule",
+      "name": "日程",
+      "author": "FelixTaXk",
+      "description": "按作息生成每日日程，可查看、编辑并保存。公开版 WhaleLife 支持这些功能。若要在每轮聊天中自动加入当前和下一项日程，需要作者提供的宿主补丁。",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-schedule",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-schedule/blob/main/README.md#手动安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-schedule/issues",
+      "dependencies": [],
+      "collected": "2026-11-21",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.4.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-schedule/releases/download/v0.4.0/schedule-0.4.0-win32-x64.wlpkg.gz",
+          "sizeBytes": 70971,
+          "sha256": "a7dbbe859a38d42d5c69b06f4d11187dcb57af60a1e268f74f881f1f0e63019e",
+          "dependencies": {},
+          "bundledPluginIds": [
+            "schedule/weather"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "meme",
+      "name": "表情包工坊",
+      "author": "FelixTaXk",
+      "description": "需要先在本机安装 Python 和 Pillow。给图片加字幕、气泡或描边，成品可收藏到官方图库。商店会一并安装缺少的图库插件。",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-meme",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-meme/blob/main/README.md#安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-meme/issues",
+      "dependencies": [
+        "gallery"
+      ],
+      "collected": "2026-11-21",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.2.1",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-meme/releases/download/v0.2.1/meme-0.2.1-win32-x64.wlpkg.gz",
+          "sizeBytes": 35776,
+          "sha256": "a31dcd82ac78de05de2c183140008768ccb82ef9b91d85b38dc33f36ba390faf",
+          "dependencies": {
+            "gallery": "0.1.2"
+          }
+        }
+      ]
+    },
+    {
+      "id": "voice",
+      "name": "语音模块",
+      "author": "FelixTaXk",
+      "description": "管理音色库，合成语音并转换歌声。一键安装包含说话和唱歌两个子插件。使用本机语音引擎时，还需在插件设置中单独部署。",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-voice",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-voice/blob/main/README.md#手动安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-voice/issues",
+      "dependencies": [],
+      "collected": "2026-11-21",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.9.4",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-voice/releases/download/v0.9.4/voice-0.9.4-win32-x64.wlpkg.gz",
+          "sizeBytes": 72070,
+          "sha256": "1614142302ac180d767b6d9959447ec6c7b139e3a62b5d8b6ac2e0d815e5379d",
+          "dependencies": {},
+          "bundledPluginIds": [
+            "voice/sing",
+            "voice/speak"
+          ]
+        }
+      ]
     }
   ]
 };
