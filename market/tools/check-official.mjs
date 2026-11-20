@@ -6,12 +6,14 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { reviewedCommunityEntries } from "../../core/community-reviews.ts";
 
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
 const context = { window: {}, URL };
 runInNewContext(read("../assets/catalog-validation.js"), context);
 export const catalog = JSON.parse(read("../catalog.json"));
 assert.ok(context.window.isWhaleLifeCatalog(catalog), "Invalid plugin catalog");
+reviewedCommunityEntries(catalog);
 const { official } = catalog;
 const manifest = JSON.parse(read("../official-releases.json"));
 

@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
-import { escapeHTML as e } from "./api.js";
+import { api, escapeHTML as e } from "./api.js";
 import { icon } from "./icons.js";
-import { bindOfficialActions, officialBadge, renderStoreInstall } from "./official-plugins.js";
+import { bindOfficialActions, confirmCommunityInstall, officialBadge, renderStoreInstall } from "./official-plugins.js";
 import { storeUpdate, updateBadge, updateDetails } from "./plugin-updates.js";
 
 const bundledURL = "/market/catalog.json";
@@ -31,12 +31,15 @@ function bundledIdentity(state, entry) {
 }
 
 function localPlan(state, entry, official) {
-  return official && bundledIdentity(state, entry) ? state.officialPlugins?.find(item => item.id === entry.id) : null;
+  if (official) return bundledIdentity(state, entry) ? state.officialPlugins?.find(item => item.id === entry.id) : null;
+  return state.communityPlugins?.find(item => item.id === entry.id && item.repository === entry.repository &&
+    (item.action === "installed" || item.action === "blocked" || (item.action === "install" && item.version && item.planKey)));
 }
 
 function art(entry, official, plan) {
   const theme = official && artNames.has(entry.id) ? entry.id : "generic";
-  const version = plan?.installed ? plan.installedVersion : plan?.version;
+  const installed = official ? plan?.installed : plan?.action === "installed";
+  const version = installed ? plan.installedVersion || plan.version : plan?.version;
   return `<span class="store-art" data-art="${theme}" aria-hidden="true">
     <span class="store-object"><i></i><em></em><u></u></span>
     <span class="store-card-version">${version ? "v" + e(version) : ""}</span></span>`;
@@ -45,7 +48,7 @@ function art(entry, official, plan) {
 function card(state, entry, official) {
   const plan = localPlan(state, entry, official);
   const update = storeUpdate(state, entry, official ? "official" : "community");
-  const installed = plan?.installed || !!update;
+  const installed = (official ? plan?.installed : plan?.action === "installed") || !!update;
   const status = installed ? icon("check") + "已安装" : plan?.action === "install" ? "可安装" : "";
   return `<button type="button" class="store-card" data-store-entry="${e(entry.id)}">
     ${art(entry, official, plan)}<span class="store-card-body"><span class="store-card-line">
@@ -86,16 +89,17 @@ function detail(state, catalog) {
   const names = new Map([...catalog.official, ...catalog.community].map(item => [item.id, item.name]));
   const dependencies = entry.dependencies.map(id => names.get(id) || id).join("、");
   const local = officialEntry && bundledIdentity(state, entry);
+  const plan = localPlan(state, entry, !!officialEntry);
   const update = storeUpdate(state, entry, officialEntry ? "official" : "community");
   const action = local
     ? `<span class="store-action" data-official-store-slot="${e(entry.id)}">${renderStoreInstall(state, entry.id)}</span>`
-    : externalLink(entry.installation, "安装说明");
+    : plan ? communityAction(state, entry, plan) : externalLink(entry.installation, "安装说明");
   const links = [
-    local ? externalLink(entry.installation, "安装说明") : "",
+    local || plan ? externalLink(entry.installation, "安装说明") : "",
     externalLink(entry.repository, "原仓库 · 加星"),
     externalLink(entry.feedback, "反馈问题"),
   ].join("");
-  return `${art(entry, !!officialEntry, localPlan(state, entry, !!officialEntry))}
+  return `${art(entry, !!officialEntry, plan)}
     <div class="store-detail-body">${officialEntry ? "" : '<small class="store-kind">社区插件</small>'}
       <div class="store-name-line"><h1 id="store-heading" tabindex="-1">${e(entry.name)}</h1>${officialEntry ? officialBadge : ""}${updateBadge(update)}</div>
       <p class="store-description">${e(entry.description)}</p>
@@ -104,6 +108,33 @@ function detail(state, catalog) {
       ${updateDetails(update)}
       <div class="store-actions">${action}</div>
       <nav class="store-links" aria-label="${e(entry.name)}相关链接">${links}</nav></div>`;
+}
+
+function communityAction(state, entry, plan) {
+  const installed = plan.action === "installed";
+  const version = installed ? plan.installedVersion || plan.version : plan.version;
+  const versionTag = version ? `<span class="official-version">v${e(version)}</span>` : "";
+  const label = plan.action === "blocked" ? "查看安装条件" : "安装";
+  const control = installed ? '<span class="official-installed">已安装</span>' :
+    `<button type="button" class="btn small tonal" data-community-install="${e(entry.id)}" aria-label="${e(label + " " + entry.name)}"${state.officialBusy ? " disabled" : ""}>${state.officialBusy === entry.id ? "安装中…" : label}</button>`;
+  return `<span class="store-action">${versionTag}${control}</span>`;
+}
+
+async function readCommunityPlans(app) {
+  if (app.communityRead || app.state.officialBusy) return;
+  const read = api("/api/community-plugins");
+  app.communityRead = read;
+  try {
+    const { plugins } = await read;
+    if (app.communityRead === read) app.state.communityPlugins = Array.isArray(plugins) ? plugins : null;
+  } catch {
+    if (app.communityRead === read) app.state.communityPlugins = null;
+  } finally {
+    if (app.communityRead === read) {
+      app.communityRead = null;
+      app.content.ownerDocument.getElementById("plugin-store")?.dispatchEvent(new Event("community-plans"));
+    }
+  }
 }
 
 function storeBody(state) {
@@ -186,11 +217,17 @@ export function bindStore(app, container = app.content, opening = true) {
       [...listing.querySelectorAll("[data-store-entry]")].find(el => el.dataset.storeEntry === focusedId)?.focus({ preventScroll: true });
     } else if (focusedDetail) {
       const next = active.matches("a") ? [...listing.querySelectorAll("a")].find(link => link.href === active.href)
-        : active.hasAttribute("data-official-action") ? listing.querySelector("[data-official-action]:enabled") : null;
+        : active.hasAttribute("data-official-action") ? listing.querySelector("[data-official-action]:enabled")
+        : active.hasAttribute("data-community-install") ? listing.querySelector("[data-community-install]:enabled") : null;
       (next || listing.querySelector("#store-heading"))?.focus({ preventScroll: true });
     }
   }
   root.addEventListener("plugin-updates", paint);
+  root.addEventListener("community-plans", paint);
+  root.addEventListener("community-plans-invalidated", () => {
+    paint();
+    void readCommunityPlans(app);
+  });
   // Official plan reads and public catalog reads can finish in either order.
   // A plan refresh only changes the list badges; the installer updates its own detail slot.
   app.storeOfficialChange = () => {
@@ -198,7 +235,8 @@ export function bindStore(app, container = app.content, opening = true) {
     else if (root.isConnected) {
       const version = listing.querySelector(".store-card-version");
       const entry = (state.publishedStore || state.bundledStore)?.official.find(item => item.id === state.storeDetail);
-      const plan = entry && localPlan(state, entry, true);
+      if (!entry) { paint(); return; }
+      const plan = localPlan(state, entry, true);
       const number = plan?.installed ? plan.installedVersion : plan?.version;
       if (version) version.textContent = number ? "v" + number : "";
     }
@@ -213,9 +251,26 @@ export function bindStore(app, container = app.content, opening = true) {
      <p class="official-help">${externalLink(submissionURL, "填写收录申请")}</p>`);
   listing.onclick = event => {
     const card = event.target.closest("[data-store-entry]");
+    const install = event.target.closest("[data-community-install]");
     if (card) app.showStoreDetail(card.dataset.storeEntry);
     else if (event.target.closest("[data-store-retry]")) void loadStoreCatalog(app, paint);
+    else if (install && !install.disabled) {
+      const id = install.dataset.communityInstall;
+      const currentEntry = () => (state.publishedStore || state.bundledStore)?.community.find(item => item.id === id && item.id === state.storeDetail);
+      const entry = currentEntry();
+      const plan = entry && localPlan(state, entry, false);
+      if (!plan) return;
+      confirmCommunityInstall(app, entry, plan, () => {
+        const shown = currentEntry();
+        return root.isConnected && shown?.repository === entry.repository && localPlan(state, shown, false)?.planKey === plan.planKey;
+      });
+    }
   };
   bindOfficialActions(app, root, opening);
+  if (opening && state.communityPlugins) {
+    state.communityPlugins = null;
+    paint();
+  }
+  if (opening || !state.communityPlugins) void readCommunityPlans(app);
   if (opening || !state.bundledStore || app.storePublishedRead) void loadStoreCatalog(app, paint);
 }

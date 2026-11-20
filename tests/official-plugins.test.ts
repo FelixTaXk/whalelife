@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { temporaryDirectory } from "./temporary-directory.ts";
 import { Runtime } from "../core/runtime.ts";
 import { OfficialPlugins } from "../core/official-plugins.ts";
+import { recordCommunityInstalls } from "../core/community-install-receipts.ts";
 import { startWeb } from "../core/web.ts";
 
 const hash = (b: Buffer) => createHash("sha256").update(b).digest("hex");
@@ -41,11 +42,26 @@ async function fixture(t: TestContext, broken = false, required = "1.0.0") {
   return { root, runtime, manager, get, apply, parentFiles: parent.files, packages: [parent, child] };
 }
 
+test("停用的社区插件仍保护其经审核的必需插件，重读安装记录不依赖在线目录", async t => {
+  const f = await fixture(t);
+  await f.apply("surf");
+  const dir = join(f.root, "plugins", "sample");
+  await mkdir(dir);
+  await writeFile(join(dir, "plugin.yaml"), JSON.stringify({id:"sample", name:"示例", version:"1.0.0", description:"测试"}));
+  await f.runtime.pluginState.setEnabled("sample", false);
+  assert.equal((await f.runtime.loadPath("sample")).status, "stopped");
+  await recordCommunityInstalls(f.root, [{id:"sample", name:"示例", version:"1.0.0", sha256:"a".repeat(64), dependencies:["surf"]}]);
+  const plan = await f.get("surf");
+  assert.equal(plan.action, null);
+  assert.match(plan.reason, /请先卸载依赖它的插件：示例/);
+});
+
 async function isolatedManager(root: string, plugins: unknown[], installedBuilds: unknown[] = []) {
   const core = join(root, "core"), market = join(root, "market");
   await mkdir(core);
   await mkdir(join(market, "inventories"), { recursive: true });
-  for (const file of ["official-plugins.ts", "official-package-files.ts", "official-package-download.ts"]) {
+  for (const file of ["official-plugins.ts", "official-package-files.ts", "official-package-download.ts",
+    "community-install-receipts.ts", "plugin-state.ts", "memory.ts"]) {
     await copyFile(new URL("../core/" + file, import.meta.url), join(core, file));
   }
   await writeFile(join(market, "official-releases.json"), JSON.stringify({ plugins, installedBuilds }));
@@ -193,18 +209,26 @@ test("a separately distributed official build identifies its installed runtime w
   assert.deepEqual((await manager.list()).recognizedRuntimeIds, []);
 });
 
-test("official plugin operations require a logged-in same-origin console and JSON mutation", async t => {
+test("official and community plugin operations require a logged-in same-origin console and JSON mutation", async t => {
   const f = await fixture(t);
   const web = await startWeb({ web: { port: 0 } }, { channels: {}, logger: { info() {}, error() {} } }, f.runtime);
   t.after(() => web.close());
   const address = web.server.address() as { port: number };
-  const base = "http://127.0.0.1:" + address.port, path = base + "/api/official-plugins";
-  assert.equal((await fetch(path)).status, 401);
-  assert.equal((await fetch(path + "/apply", { method: "POST" })).status, 401);
+  const base = "http://127.0.0.1:" + address.port;
   const login = await fetch(base + "/api/login", { method: "POST", body: "{}" });
   const cookie = login.headers.get("set-cookie")!.split(";")[0];
-  assert.equal((await fetch(path + "/apply", { method: "POST", headers: { cookie, origin: "https://example.invalid" } })).status, 403);
-  assert.equal((await fetch(path + "/apply", { method: "POST", headers: { cookie } })).status, 415);
+  for (const route of ["/api/official-plugins", "/api/community-plugins"]) {
+    const path = base + route;
+    assert.equal((await fetch(path)).status, 401);
+    assert.equal((await fetch(path + "/apply", { method: "POST" })).status, 401);
+    assert.equal((await fetch(path + "/apply", { method: "POST", headers: { cookie, origin: "https://example.invalid" } })).status, 403);
+    assert.equal((await fetch(path + "/apply", { method: "POST", headers: { cookie } })).status, 415);
+  }
+  const suppliedAsset = await fetch(base + "/api/community-plugins/apply", {
+    method: "POST", headers: { cookie, "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "sample", action: "install", planKey: "a".repeat(64), assetUrl: "https://example.invalid/sample.gz" }),
+  });
+  assert.equal(suppliedAsset.status, 400);
 });
 
 test("graceful shutdown finishes an accepted package transaction before closing plugin services", async t => {

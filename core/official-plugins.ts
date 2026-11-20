@@ -7,18 +7,27 @@ import { readFileSync } from "node:fs";
 import { inspectOfficialFiles, installOfficialFiles, uninstallOfficialFiles } from "./official-package-files.ts";
 import { ensureOfficialPackage } from "./official-package-download.ts";
 import type { Runtime } from "./runtime.ts";
+import { readCommunityInstalls, type CommunityInstallReceipt } from "./community-install-receipts.ts";
 
-type Release = {
+export type PackageRelease = {
   version: string; hostRange: string; platform: string; arch: string; sha256: string;
   assetUrl?: string; sizeBytes?: number; inventorySha256?: string;
   composition?: Pick<Parameters<typeof import("./official-package-composition.ts").ensureComposedOfficialPackage>[1], "packagePart" | "zipPart"> & { name: string; version: string };
   dependencies: Record<string, string>; bundledPluginIds?: string[]; recognitionOnly?: boolean;
 };
-type Entry = { id: string; name: string; repository: string; parentId: string | null; requiredPlugins: string[]; preserve?: string[]; verifiedReleases: Release[] };
+type Release = PackageRelease;
+export type PackageEntry = { id: string; name: string; repository: string; parentId: string | null; requiredPlugins: string[]; preserve?: string[]; verifiedReleases: Release[];
+  community?: boolean };
+type Entry = PackageEntry;
 type InstalledBuild = { runtimeId: string; version: string; platform: string; arch: string; sha256: string; sourceCommit: string };
 type Card = { id: string; description: string; installation: string };
+type CommunityPolicy = {
+  available(root: string, id: string): Promise<void>;
+  verify(root: string, entry: Entry, release: Release): Promise<void>;
+  installed(root: string, packages: Array<{entry: Entry; release: Release}>): Promise<void>;
+};
 type Step = { action: "install" | "enable" | "reuse" | "uninstall"; id: string; name: string; version: string };
-type Item = { entry: Entry; pathId: string; target?: Release; existing?: Release; installedVersion?: string; installed: boolean; reason: string; enabled: boolean; active: boolean };
+type Item = { entry: Entry; pathId: string; eligible: Release[]; target?: Release; existing?: Release; installedVersion?: string; installed: boolean; reason: string; enabled: boolean; active: boolean };
 const read = (file: string) => JSON.parse(readFileSync(new URL(file, import.meta.url), "utf8"));
 const registry: { plugins: Entry[]; installedBuilds?: InstalledBuild[] } = read("../market/official-releases.json");
 const cards: Card[] = read("../market/catalog.json").official;
@@ -36,30 +45,45 @@ function inventorySpec(item: Item, release: Release) {
   return release.inventorySha256 ? { ...files, sha256: release.inventorySha256, recognitionOnly: true } : files;
 }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+const releaseFor = (part: Item, version: string) => part.existing ?? part.eligible.find(r => r.version === version)!;
 
-export class OfficialPlugins {
+export class PluginPackages {
+  private communityReceipts = new Map<string, CommunityInstallReceipt>();
+  private receiptError = "";
   private runtime: Runtime;
   private entries: Entry[];
   private installedBuilds: InstalledBuild[];
-  constructor(runtime: Runtime, entries = registry.plugins, installedBuilds = registry.installedBuilds ?? []) {
+  private cards: Card[];
+  private community?: CommunityPolicy;
+  constructor(runtime: Runtime, entries = registry.plugins, installedBuilds = registry.installedBuilds ?? [],
+    catalogCards = cards, community?: CommunityPolicy) {
     this.runtime = runtime;
     this.entries = entries;
     this.installedBuilds = installedBuilds;
+    this.cards = catalogCards;
+    this.community = community;
   }
 
   private async inspect(entry: Entry): Promise<Item> {
     const runtime = this.runtime;
     const pathId = entry.parentId ? entry.parentId + "/" + entry.id : entry.id;
     const record = runtime.records.get(pathId);
-    const releases = entry.verifiedReleases.filter(r => r.platform === process.platform && r.arch === process.arch)
+    const releases = entry.verifiedReleases.filter(r => (r.platform === process.platform || (entry.community && r.platform === "any")) &&
+      (r.arch === process.arch || (entry.community && r.arch === "any")))
       .sort((a, b) => compare(b.version, a.version));
-    const target = releases.find(r => !r.recognitionOnly && matches(hostVersion, r.hostRange));
-    const item: Item = { entry, pathId, target, installedVersion: record?.manifest.version, installed: !!record,
+    const eligible = releases.filter(r => !r.recognitionOnly && matches(hostVersion, r.hostRange));
+    const target = eligible[0];
+    const item: Item = { entry, pathId, eligible, target, installedVersion: record?.manifest.version, installed: !!record,
       enabled: runtime.pluginState.enabled(pathId), active: record?.status === "active", reason: "" };
     const candidates = record ? releases.filter(r => r.version === item.installedVersion) : target ? [target] : [];
     if (!candidates.length) {
-      item.reason = record ? "当前安装版本未匹配已验证的官方发行包，无法确认程序文件归属。"
+      item.reason = record ? "当前安装版本未匹配已验证的发行包，无法确认程序文件归属。"
         : releases.length ? "当前 WhaleLife 没有兼容版本，请先升级 WhaleLife。" : "此平台还没有验证过的发行包。";
+      return item;
+    }
+    if (entry.community && !record) {
+      try { await this.community!.available(runtime.root, pathId); }
+      catch (error) { item.reason = errorText(error); }
       return item;
     }
     for (const candidate of candidates) try {
@@ -84,6 +108,11 @@ export class OfficialPlugins {
     const result = new Set<string>();
     for (const record of runtime.records.values()) {
       if (record.manifest.builtin || owned.has(record.id)) continue;
+      const receipt = this.communityReceipts.get(record.id);
+      if (receipt?.dependencies.includes(item.pathId)) {
+        result.add(receipt.name);
+        continue;
+      }
       const declared = this.entries.find(e => (e.parentId ? e.parentId + "/" + e.id : e.id) === record.id);
       if (record.id.startsWith(item.pathId + "/") || declared?.requiredPlugins.includes(item.entry.id) ||
           [...(record.manifest.depends ?? []), ...(record.dependencies ?? [])].some(n => services.has(n)))
@@ -95,27 +124,30 @@ export class OfficialPlugins {
   private plan(item: Item, items: Map<string, Item>) {
     const steps: Step[] = [];
     let reason = item.reason, upgradeUrl = "";
-    const card = cards.find(card => card.id === item.entry.id);
+    const card = this.cards.find(card => card.id === item.entry.id);
     const add = (part: Item, action: Step["action"], release: Release) =>
       steps.push({ id: part.entry.id, name: part.entry.name, version: release.version, action });
     if (item.installed && item.existing) {
       const used = this.dependents(item);
-      if (used.length) reason = "请先卸载依赖它的插件：" + used.join("、") + "。";
+      if (this.receiptError) reason = this.receiptError;
+      else if (used.length) reason = "请先卸载依赖它的插件：" + used.join("、") + "。";
       if (!reason) add(item, "uninstall", item.existing);
     } else if (!reason && item.target) {
       const walking = new Set<string>();
       const visit = (part: Item, requirement?: string) => {
         if (walking.has(part.entry.id)) throw Error("发行清单包含循环依赖。");
-        const release = part.installed ? part.existing : part.target;
+        const release = part.installed ? part.existing : requirement ? part.eligible.find(r => r.version === requirement) : part.target;
         if (requirement && part.installedVersion && !matches(part.installedVersion, requirement)) {
-          upgradeUrl = cards.find(c => c.id === part.entry.id)?.installation ?? part.entry.repository;
+          upgradeUrl = this.cards.find(c => c.id === part.entry.id)?.installation ?? part.entry.repository;
           const instruction = compare(part.installedVersion, requirement) < 0 ? "请先升级" + part.entry.name + "至已验证的 " + requirement + " 版本"
             : part.entry.name + "与本插件的已验证组合要求 " + requirement;
           throw Error(instruction + "（当前 " + part.installedVersion + "）。");
         }
         if (part.reason || !release) throw Error(part.entry.name + "：" + (part.reason || "没有兼容的发行包。"));
         if (requirement && !matches(release.version, requirement)) throw Error(part.entry.name + "没有符合依赖要求的已验证版本。");
-        if (steps.some(step => step.id === part.entry.id)) return;
+        const previous = steps.find(step => step.id === part.entry.id);
+        if (previous && previous.version !== release.version) throw Error(part.entry.name + "存在互不兼容的依赖版本要求。");
+        if (previous) return;
         walking.add(part.entry.id);
         for (const id of part.entry.requiredPlugins) {
           const dependency = items.get(id);
@@ -130,14 +162,15 @@ export class OfficialPlugins {
     }
     const action = reason || !steps.length ? null : item.installed ? "uninstall" : "install";
     const components = steps.flatMap(step => {
-      const parts = step.action === "install" && items.get(step.id)?.target?.composition;
+      const parts = step.action === "install" && releaseFor(items.get(step.id)!, step.version).composition;
       return parts ? [{ name: parts.name, version: parts.version, repository: parts.zipPart.repository }] : [];
     });
     const verbs = { install: "安装", uninstall: "卸载", enable: "启用", reuse: "沿用" };
     const label = steps.filter(s => s.action !== "reuse").map(s =>
       verbs[s.action] + (/^[A-Za-z]/.test(s.name) ? " " : "") + s.name + (s.id === "bilibili" ? "插件" : "")).join("并");
     const planKey = action ? createHash("sha256").update(JSON.stringify([item.entry.id, action,
-      steps.map(s => { const p = items.get(s.id)!; return [s, p.enabled, p.active, (p.existing ?? p.target)?.sha256]; })])).digest("hex") : "";
+      steps.map(s => { const p = items.get(s.id)!, r = releaseFor(p, s.version); return [s, p.enabled, p.active, r?.sha256,
+        ...(p.entry.community ? [p.entry.repository, r?.assetUrl, r?.sizeBytes, r?.bundledPluginIds ?? [], r?.dependencies] : [])]; })])).digest("hex") : "";
     return { id: item.entry.id, runtimeId: item.pathId, name: item.entry.name, description: card?.description, repository: item.entry.repository,
       installation: card?.installation, version: item.target?.version ?? item.installedVersion ?? null,
       installedVersion: item.installedVersion ?? null, installed: item.installed, recognized: Boolean(item.existing),
@@ -148,6 +181,13 @@ export class OfficialPlugins {
 
   private async snapshot() {
     await this.runtime.pluginState.load();
+    try {
+      this.communityReceipts = await readCommunityInstalls(this.runtime.root);
+      this.receiptError = "";
+    } catch {
+      this.communityReceipts.clear();
+      this.receiptError = "无法读取社区插件的安装记录，确认依赖关系后才能卸载。";
+    }
     const items = await Promise.all(this.entries.map(entry => this.inspect(entry)));
     return new Map(items.map(item => [item.entry.id, item]));
   }
@@ -195,7 +235,7 @@ export class OfficialPlugins {
         for (const step of plan.steps) {
           if (step.action !== "install") continue;
           const p = items.get(step.id)!;
-          const target = p.target!;
+          const target = releaseFor(p, step.version);
           if (target.composition) {
             stage = step.name + " · 下载并校验发行包和 " + target.composition.name;
             if (!target.sizeBytes || !target.inventorySha256 || !/^[a-f0-9]{64}$/.test(target.inventorySha256))
@@ -210,6 +250,16 @@ export class OfficialPlugins {
             await ensureOfficialPackage(runtime.root, { repository: p.entry.repository, assetUrl: target.assetUrl,
               sha256: target.sha256, sizeBytes: target.sizeBytes }, signal);
           }
+          if (p.entry.community) await this.community!.verify(runtime.root, p.entry, target);
+        }
+        // Downloads may take minutes. Recheck the files of dependencies before enabling or relying on them.
+        for (const step of plan.steps) {
+          if (step.action !== "enable" && step.action !== "reuse") continue;
+          const part = items.get(step.id)!, release = releaseFor(part, step.version);
+          stage = step.name + " · 核对已安装依赖";
+          const state = await inspectOfficialFiles(runtime.root, inventorySpec(part, release));
+          if (state.state !== "installed") throw Error(state.reason || "已安装文件发生变化，请重新确认。");
+          if (part.entry.community) await this.community!.verify(runtime.root, part.entry, release);
         }
         signal.throwIfAborted();
         finishCommit = runtime.beginPackageCommit();
@@ -217,7 +267,7 @@ export class OfficialPlugins {
           signal.throwIfAborted();
           if (step.action === "reuse") continue;
           const p = items.get(step.id)!;
-          const release = (p.existing ?? p.target)!;
+          const release = releaseFor(p, step.version);
           const files = spec(p, release);
           stage = step.name + " · " + ({ install: "安装程序文件", enable: "启用依赖", uninstall: "卸载程序文件" }[step.action]);
           if (step.action === "uninstall") {
@@ -228,6 +278,15 @@ export class OfficialPlugins {
             continue;
           }
           if (step.action === "install") {
+            if (p.entry.community) {
+              await this.community!.available(runtime.root, p.pathId);
+              const slash = p.pathId.lastIndexOf("/");
+              if (slash >= 0) {
+                const parent = runtime.records.get(p.pathId.slice(0, slash)), leaf = p.pathId.slice(slash + 1);
+                if (parent?.status !== "active" || (Array.isArray(parent.manifest.sub) && !parent.manifest.sub.includes(leaf)))
+                  throw Error("父插件尚未启用或没有声明可加载这个子插件。");
+              }
+            }
             await installOfficialFiles(runtime.root, files);
             undo.push({ label: "撤回新装的" + step.name, run: async () => {
               const used = this.dependents({ ...p, existing: release });
@@ -248,9 +307,19 @@ export class OfficialPlugins {
           stage = step.name + " · 启用插件";
           signal.throwIfAborted();
           await activate(p);
+          if (p.entry.community) for (const id of release.bundledPluginIds ?? []) {
+            const child = runtime.records.get(id);
+            if (!child || (runtime.pluginState.enabled(id) && child.status !== "active"))
+              throw Error(`子插件 ${id} 未就绪：${child?.error || "未能加载"}`);
+          }
           signal.throwIfAborted();
         }
-        if (plan.action === "install") await runtime.resumeBlocked();
+        if (plan.action === "install") {
+          await runtime.resumeBlocked();
+          const communityInstalls = plan.steps.filter(s => s.action === "install" && items.get(s.id)!.entry.community)
+            .map(s => ({ entry: items.get(s.id)!.entry, release: releaseFor(items.get(s.id)!, s.version) }));
+          if (communityInstalls.length) await this.community!.installed(runtime.root, communityInstalls);
+        }
         return { ok: true, message: item.entry.name + (plan.action === "install" ? "已安装并启用。" : "已卸载，配置和数据已保留。") };
       } catch (error) {
         const rolledBack: string[] = [], failed: string[] = [];
@@ -266,3 +335,5 @@ export class OfficialPlugins {
     });
   }
 }
+
+export class OfficialPlugins extends PluginPackages {}
