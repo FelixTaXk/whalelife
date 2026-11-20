@@ -298,6 +298,40 @@
       ],
       "verifiedReleases": [
         {
+          "version": "0.2.10",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {
+            "surf": "0.1.1"
+          },
+          "sourceCommit": "19c5faf781cc5c6cf209c2cfc8866e910f20da08",
+          "delivery": "github-release",
+          "verification": "market/official-builds.md",
+          "sha256": "c5458c7c0811609961296a9613e9de6bd169165afbcfbd850947758a3a6bf614",
+          "fileCount": 339,
+          "sizeBytes": 540948,
+          "inventorySha256": "d61b7b2720275b5d637ad0c83f55a2d2d1c668c0cc1885311cf2c3a5395473ef",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-bilibili/releases/download/v0.2.10/bilibili-0.2.10-win32-x64.wlpkg.gz"
+        },
+        {
+          "version": "0.2.10",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {
+            "surf": "0.1.1"
+          },
+          "sourceCommit": "19c5faf781cc5c6cf209c2cfc8866e910f20da08",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "sha256": "97bb6b1f41d63bec7551bc9336231936d0c6d5094a5fbe606307a49962d62836",
+          "fileCount": 339,
+          "sizeBytes": 46188,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/97bb6b1f41d63bec7551bc9336231936d0c6d5094a5fbe606307a49962d62836.json"
+        },
+        {
           "version": "0.2.8",
           "hostRange": "0.1.0",
           "platform": "win32",
