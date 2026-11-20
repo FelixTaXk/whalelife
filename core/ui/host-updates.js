@@ -1,0 +1,170 @@
+/*! Copyright (c) 2026 iinukami and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
+ */
+import { api, escapeHTML as e } from "./api.js";
+import { icon } from "./icons.js";
+
+const endpoint = "/api/host-update";
+const refreshInterval = 15 * 60_000;
+const versionLabel = value => /^\d/.test(value) ? "v" + value : value;
+const active = data => data?.phase === "preparing" || data?.phase === "restarting";
+
+function releaseLink(address) {
+  try {
+    const url = new URL(address);
+    if (url.origin === "https://github.com" && !url.username && !url.password &&
+        /^\/iinukami\/whalelife\/(?:releases(?:\/|$)|commit\/)/i.test(url.pathname))
+      return `<a class="host-release-link" href="${e(url.href)}" target="_blank" rel="noopener noreferrer">发行说明</a>`;
+  } catch {}
+  return "";
+}
+
+export function hostUpdateContent(app) {
+  const ui = app.hostUpdate ?? {};
+  const data = ui.data;
+  const latest = data?.latest;
+  const busy = ui.watching || active(data);
+  const current = data?.current ? "当前 " + versionLabel(data.current) : "";
+  const error = ui.error || data?.error;
+  const available = Boolean(latest?.version && data?.supported && !error);
+  let title = "WhaleLife 本体", info = current;
+  if (busy) {
+    title = ui.reconnecting ? "正在重新连接 WhaleLife" :
+      data?.phase === "restarting" ? "WhaleLife 正在重启" : "正在准备本体更新";
+    info = ui.reconnecting ? "连接恢复后将显示更新结果。" : "完成后会在这里显示结果。";
+  } else if (latest?.version && !error) {
+    title = "WhaleLife " + versionLabel(latest.version) + " 可更新";
+  } else if (ui.checked && !error && data?.supported) {
+    info = [current, "暂无新版本"].filter(Boolean).join(" · ");
+  }
+  if (!busy && data?.supported === false && !error) {
+    info = [current, "当前安装方式不支持一键更新"].filter(Boolean).join(" · ");
+  }
+  const last = data?.lastResult;
+  const resultLabel = { updated: "更新成功", "rolled-back": "更新失败，已回滚", failed: "更新失败" }[last?.status];
+  const result = !busy && resultLabel
+    ? `<p class="host-update-result ${last.status === "updated" ? "ok" : "warning"}">上次更新 · ${e(resultLabel)}${last.version ? "（" + e(versionLabel(last.version)) + "）" : ""}${last.message ? "。" + e(last.message) : ""}</p>` : "";
+  const release = !busy && latest ? releaseLink(latest.url) : "";
+  const button = busy ? "" : available
+    ? '<button type="button" class="btn small primary" data-host-action="open">查看更新</button>'
+    : `<button type="button" class="btn small" data-host-action="check"${ui.reading ? " disabled" : ""}>${ui.reading ? "检查中…" : "检查更新"}</button>`;
+  return `<div class="host-update-line"><span class="host-update-icon${available ? " available" : ""}">${icon(busy ? "refresh" : "download")}</span>
+    <div class="host-update-copy" role="status"><strong>${e(title)}</strong>${info ? `<small>${e(info)}</small>` : ""}${result}
+    ${error && !busy ? `<p class="host-update-result warning">${e(error)}</p>` : ""}</div>
+    <div class="host-update-actions">${release}${button}</div></div>`;
+}
+
+function paint(app) {
+  const slot = app.content.querySelector("[data-host-update]");
+  if (!slot) return;
+  const focused = slot.contains(slot.ownerDocument.activeElement);
+  slot.innerHTML = hostUpdateContent(app);
+  if (focused) slot.querySelector("button:enabled")?.focus({ preventScroll: true });
+}
+
+function schedule(app) {
+  const ui = app.hostUpdate;
+  clearTimeout(ui.timer);
+  if (!app.authenticated || (!ui.watching && app.state.page !== "overview")) return;
+  ui.timer = setTimeout(() => {
+    if (ui.watching || app.state.page === "overview") void read(app);
+  }, ui.watching ? 2000 : Math.max(1000, ui.nextRead - Date.now()));
+}
+
+async function read(app, force = false) {
+  const ui = app.hostUpdate;
+  if (ui.reading || ui.submitting || !app.authenticated) return;
+  ui.reading = true;
+  paint(app);
+  try {
+    const data = await api(endpoint + (force ? "/check" : ""), force ? {} : undefined, AbortSignal.timeout(20_000));
+    if (ui !== app.hostUpdate) return;
+    ui.data = data;
+    ui.checked = force || ui.checked;
+    ui.error = "";
+    ui.watching = active(data);
+    ui.reconnecting = false;
+    ui.disconnectedAt = 0;
+    ui.nextRead = Date.now() + refreshInterval;
+  } catch (error) {
+    if (ui !== app.hostUpdate) return;
+    if (error.status === 401) return app.requireLogin();
+    ui.nextRead = Date.now() + 60_000;
+    if (ui.watching) {
+      ui.reconnecting = true;
+      ui.disconnectedAt ||= Date.now();
+      if (Date.now() - ui.disconnectedAt >= 180_000) {
+        ui.data = undefined;
+        ui.watching = false;
+        ui.error = "尚未收到更新结果。服务恢复后可点「检查更新」重新连接。";
+      }
+    } else ui.error = error.message || "暂时无法读取更新状态。";
+  } finally {
+    if (ui === app.hostUpdate) {
+      ui.reading = false;
+      paint(app);
+      schedule(app);
+    }
+  }
+}
+
+function confirmUpdate(app) {
+  const ui = app.hostUpdate;
+  const version = ui.data?.latest?.version;
+  if (!version || !ui.data.supported || ui.watching || ui.submitting) return;
+  app.dialog("更新 WhaleLife 并重启？",
+    `<p class="official-dialog-text">将从 ${e(versionLabel(ui.data.current))} 更新到 <strong>${e(versionLabel(version))}</strong>。重启期间控制台会短暂断开，重新进入后可查看结果。</p>
+    <p class="host-confirm-note">已安装的插件、配置和数据会保留。如果新版启动失败，系统会恢复旧版。</p>`,
+    async () => {
+      if (ui !== app.hostUpdate || ui.reading || ui.submitting || ui.watching || ui.data?.latest?.version !== version)
+        throw Error("更新状态已变化，请关闭并重新查看。");
+      clearTimeout(ui.timer);
+      ui.submitting = true;
+      ui.watching = true;
+      ui.error = "";
+      paint(app);
+      try {
+        const data = await api(endpoint + "/apply", { version, confirmed: true }, AbortSignal.timeout(30_000));
+        if (ui !== app.hostUpdate) return;
+        ui.data = data;
+        ui.watching = active(data);
+      } catch (error) {
+        if (ui !== app.hostUpdate) return;
+        if (error.status === 401) return app.requireLogin();
+        if (error.status) {
+          ui.watching = false;
+          ui.error = error.message;
+        } else {
+          // A lost response can follow an accepted update. Only poll; never resubmit it.
+          ui.reconnecting = true;
+          ui.disconnectedAt = Date.now();
+        }
+      } finally {
+        if (ui === app.hostUpdate) {
+          ui.submitting = false;
+          paint(app);
+          schedule(app);
+        }
+      }
+    }, "更新并重启");
+}
+
+export function bindHostUpdate(app) {
+  const ui = app.hostUpdate ??= { nextRead: 0 };
+  const slot = app.content.querySelector("[data-host-update]");
+  slot.onclick = event => {
+    const button = event.target.closest("[data-host-action]");
+    if (!button || button.disabled || ui.reading || ui.watching || ui.submitting) return;
+    if (button.dataset.hostAction === "open") confirmUpdate(app);
+    else void read(app, true);
+  };
+  if (!ui.reading && !ui.submitting && Date.now() >= ui.nextRead) void read(app);
+}
+
+export function resetHostUpdateSession(app) {
+  const ui = app.hostUpdate;
+  clearTimeout(ui?.timer);
+  app.hostUpdate = undefined;
+  return Boolean(ui?.watching);
+}
