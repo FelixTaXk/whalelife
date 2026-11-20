@@ -4,6 +4,7 @@
  */
 import { api, escapeHTML as e, extensionPlugins } from "./api.js";
 import { icon } from "./icons.js";
+import { bindOfficialActions, renderManageBadgeSlot, renderManageSlot } from "./official-plugins.js";
 export const extensionKey = (path) => "extension:" + encodeURIComponent(path);
 export const pluginKey = (id) => "plugin:" + encodeURIComponent(id);
 export const extensionEntries = (status) => (status?.pluginPages ?? []).filter((p) => status.plugins?.some((plugin) => plugin.id === p.owner && plugin.status === "active"));
@@ -68,12 +69,15 @@ export function updateExtensionContent(content, markup) {
 function actions(p) {
   return `<button class="btn small" data-plugin-id="${e(p.id)}" data-plugin-action="${(p.enabled ?? p.status === "active") ? "stop" : "start"}">${(p.enabled ?? p.status === "active") ? "停用" : "启用"}</button><button class="btn small tonal" data-plugin-id="${e(p.id)}" data-plugin-action="reload">${icon("refresh")}重载</button>`;
 }
-export function pluginCard(status, p) {
+export function pluginCard(status, p, state) {
   const grouped = pluginGroup(status, p.id)?.id === p.id;
   const children = plugins(status).filter(c => c.id !== p.id && belongs(c.id, p.id));
-  return `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon("puzzle")}<h3>${e(p.name || p.id)}</h3><div class="spacer"></div>${badge(p)}</div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "扩展插件")}</p><footer>${grouped ? `<a class="btn small" href="#${pluginKey(p.id)}">${icon("sliders")}打开 / 管理</a>` : extensionSettings(status, p.id)}${actions(p)}${grouped ? `<small class="plugin-child-count">${children.length} 个子插件</small>` : p.id.includes("/") ? '<small class="plugin-child-count">子插件</small>' : ""}</footer></article>`;
+  const childMenu = grouped && children.length ? `<details class="plugin-card-children"><summary>${children.length} 个子插件</summary>
+    ${children.map(child => `<div class="plugin-card-child"><span class="store-name-line"><a href="#${pluginKey(child.id)}">${e(child.name || child.id)}</a>${renderManageBadgeSlot(state, child.id)}</span>${renderManageSlot(state, child.id)}</div>`).join("")}</details>` : "";
+  return `<article class="panel plugin-card ${p.id.includes("/") ? "child" : ""}"><div class="row">${icon("puzzle")}<div class="store-name-line"><h3>${e(p.name || p.id)}</h3>${renderManageBadgeSlot(state, p.id)}</div><div class="spacer"></div>${badge(p)}</div><code>${e(p.id)} · v${e(p.version || "0.1.0")}</code><p class="${p.error ? "plugin-error" : ""}">${e(p.error || p.description || "扩展插件")}</p><footer>${grouped ? `<a class="btn small" href="#${pluginKey(p.id)}">${icon("sliders")}打开 / 管理</a>` : extensionSettings(status, p.id)}${actions(p)}${renderManageSlot(state, p.id)}${!grouped && p.id.includes("/") ? '<small class="plugin-child-count">子插件</small>' : ""}</footer>${childMenu}</article>`;
 }
 export function bindPluginActions(app) {
+  if (app.state) bindOfficialActions(app);
   app.content.querySelectorAll(".plugin-more").forEach(menu => menu.addEventListener?.("keydown", event => {
     if (event.key === "Escape") { menu.open = false; menu.querySelector("summary").focus(); }
   }));
@@ -103,9 +107,9 @@ function groupPage(app, owner, entry, root) {
   const content = entry ? `<section class="panel extension-panel"><iframe class="extension-frame" title="${e(entry.title)}" src="${e(entry.path)}"></iframe></section>`
     : `<div class="plugin-empty">${icon("puzzle")}<h2>${owner.status === "active" ? "暂无可用页面" : "插件未运行"}</h2><p>${owner.status === "active" ? "此插件未注册可用页面，或原页面已移除。" : "可以在右上方启用或重载，已有设置会保留。"}</p></div>`;
   const info = `<details class="plugin-more"><summary class="btn small" aria-label="插件信息与更多操作" title="插件信息与更多操作">${icon("more")}</summary><div class="plugin-more-menu"><strong>${e(owner.name || owner.id)}</strong><code>${e(owner.id)} · v${e(owner.version || "0.1.0")}</code><p>${e(owner.description || "扩展插件")}</p><button class="btn small" data-plugin-id="${e(owner.id)}" data-plugin-action="reload">${icon("refresh")}重载插件</button></div></details>`;
-  const heading = `<header class="plugin-detail"><div class="plugin-location"><a href="#plugins" aria-label="返回插件管理" title="返回插件管理">${icon("back")}</a><a class="plugin-root-name" href="#${pluginKey(root.id)}">${e(root.name || root.id)}</a>${owner.id !== root.id ? `${icon("chevron")}<span class="plugin-selected-name">${e(owner.name || owner.id)}</span>` : '<span class="plugin-location-kind">父插件</span>'}</div><div class="plugin-controls">${badge(owner)}<button class="btn small ${(owner.enabled ?? owner.status === "active") ? "" : "primary"}" data-plugin-id="${e(owner.id)}" data-plugin-action="${(owner.enabled ?? owner.status === "active") ? "stop" : "start"}">${(owner.enabled ?? owner.status === "active") ? "停用" : "启用"}</button>${info}</div></header>`;
+  const heading = `<header class="plugin-detail"><div class="plugin-location"><a href="#plugins" aria-label="返回插件管理" title="返回插件管理">${icon("back")}</a><a class="plugin-root-name" href="#${pluginKey(root.id)}">${e(root.name || root.id)}</a>${owner.id !== root.id ? `${icon("chevron")}<span class="plugin-selected-name">${e(owner.name || owner.id)}</span>` : '<span class="plugin-location-kind">父插件</span>'}</div><div class="plugin-controls">${badge(owner)}<button class="btn small ${(owner.enabled ?? owner.status === "active") ? "" : "primary"}" data-plugin-id="${e(owner.id)}" data-plugin-action="${(owner.enabled ?? owner.status === "active") ? "stop" : "start"}">${(owner.enabled ?? owner.status === "active") ? "停用" : "启用"}</button>${renderManageSlot(app.state, owner.id)}${info}</div></header>`;
   const notice = owner.error ? `<div class="plugin-notice" role="status">${icon("info")}<span>${e(owner.error)}</span></div>` : "";
-  return `<div class="plugin-workspace">${heading}${familyNavigation(status, root, owner)}<div class="plugin-workspace-main">${notice}${pageLinks}${content}</div></div>`;
+  return `<div class="plugin-workspace" data-runtime-id="${e(owner.id)}">${heading}${familyNavigation(status, root, owner)}<div data-official-read-status role="status"></div><div class="plugin-workspace-main">${notice}${pageLinks}${content}</div></div>`;
 }
 export function extensionPage(app) {
   const { owner, entry } = selection(app.state.status, app.state.page);

@@ -883,3 +883,43 @@
 .model-compatibility .connection-result:empty {
   display: none;
 }
+.model-cache {
+  margin-bottom: 24px;
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.model-cache .settings-section-title {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.model-cache h4 {
+  margin: 16px 0 6px;
+}
+.model-cache p {
+  margin: 6px 0;
+  line-height: 1.6;
+}
+.model-cache .connection-result:empty {
+  display: none;
+}
+.cache-comparison {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.cache-comparison caption {
+  color: var(--muted);
+  text-align: left;
+}
+.cache-comparison th, .cache-comparison td {
+  padding: 6px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+}
+.cache-comparison th:first-child {
+  text-align: left;
+}

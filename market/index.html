@@ -1,0 +1,82 @@
+<!doctype html>
+<!-- Copyright (c) 2026 iinukami and contributors.
+     SPDX-License-Identifier: AGPL-3.0-only
+     Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL. -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f7fb">
+  <title>插件市场 · WhaleLife</title>
+  <meta name="description" content="浏览 WhaleLife 官方与社区插件，找到原作者、安装说明和反馈入口。">
+  <link rel="icon" href="assets/whale.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/market.css">
+  <script src="assets/catalog.js" defer></script>
+  <script src="assets/catalog-validation.js" defer></script>
+  <script src="assets/symbols.js" defer></script>
+  <script src="assets/market.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#catalog">跳到插件目录</a>
+  <header class="masthead">
+    <div class="shell topbar">
+      <a class="brand" href="#all" aria-label="WhaleLife 插件市场首页">
+        <img src="assets/whale.svg" width="38" height="38" alt="">
+        <span>WhaleLife</span>
+      </a>
+      <nav class="project-links" aria-label="项目导航">
+        <a id="project-home" href="https://github.com/iinukami/whalelife">主项目</a>
+        <button class="submit" type="button" id="open-submission">提交插件</button>
+      </nav>
+    </div>
+  </header>
+  <main class="shell">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <h1 id="page-title">插件市场</h1>
+        <p>为 WhaleLife 添加消息接入、图库、网页浏览等能力。</p>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="orbit orbit-back"></div><div class="orbit orbit-front"></div>
+        <div class="tile tile-low"></div><div class="tile tile-mid"></div>
+        <div class="tile tile-top"><img src="assets/whale.svg" alt="" width="110" height="110"></div>
+      </div>
+    </section>
+    <section id="catalog" class="catalog" aria-label="插件目录">
+      <div class="toolbar">
+        <nav class="views" aria-label="插件分类">
+          <a href="#all" data-view="all" aria-current="page">全部插件</a>
+          <a href="#official" data-view="official">官方插件</a>
+          <a href="#community" data-view="community">社区插件</a>
+        </nav>
+        <label class="sort">社区排序
+          <select id="community-sort">
+            <option value="stars">GitHub 星标</option>
+            <option value="date">最近收录</option>
+          </select>
+        </label>
+      </div>
+      <div id="results" class="cards" aria-live="polite"></div>
+      <noscript><p>启用 JavaScript 可浏览分类与插件卡片，也可打开<a href="https://github.com/iinukami/whalelife#插件">主仓的官方插件列表</a>。</p></noscript>
+    </section>
+  </main>
+  <footer class="footer">
+    <div class="shell foot-inner">
+      <span class="foot-brand"><img src="assets/whale.svg" width="22" height="22" alt=""> WhaleLife</span>
+      <span>交流 QQ 群 <span class="group-number">962935021</span></span>
+    </div>
+  </footer>
+  <dialog id="submission" aria-labelledby="submit-title">
+    <div class="dialog-head"><h2 id="submit-title">提交社区插件</h2><form method="dialog"><button aria-label="关闭投稿说明" class="close">×</button></form></div>
+    <p>在 WhaleLife 主仓提一条 GitHub Issue，附上插件的公开 GitHub 仓库链接和一句话介绍。维护者核对后会在同一条 Issue 回复。</p>
+    <a class="action" href="https://github.com/iinukami/whalelife/issues/new?template=submit-plugin.yml">填写收录申请</a>
+  </dialog>
+  <template id="plugin-card">
+    <article class="card">
+      <div class="card-head"><span class="glyph" aria-hidden="true"></span><span class="kind"></span></div>
+      <h2></h2><p class="author"></p><p class="description"></p><p class="dependency" hidden></p>
+      <div class="card-links"><a class="install">安装说明</a><a class="repo">原仓库 · 加星</a><a class="feedback">反馈</a></div>
+    </article>
+  </template>
+</body>
+</html>

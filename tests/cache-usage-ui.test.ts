@@ -35,6 +35,36 @@ test("compact context keeps cache percentage and reference cost in one line with
   assert.match(full, /最近请求实测：输入 2,000 \+ 输出 100 = 2,100 tokens/);
 });
 
+test("a reported charge takes precedence and labels this request in chat and memory", () => {
+  const value = context();
+  for (const [amount, currency] of [[0.000123456789, "USD"], [0, "CNY"]] as const) {
+    value.usage.reported_cost = { amount, currency };
+    const compact = renderContextMeter(value, true), full = renderContextMeter(value);
+    assert.ok(label(compact).endsWith(`本次回传 ${amount} ${currency}`));
+    for (const html of [compact, full]) {
+      assert.ok(html.includes(`接口回传费用：${amount} ${currency}。实际扣款以服务商账单为准。`));
+      assert.match(html, /仅对应最近一次模型请求/);
+      assert.doesNotMatch(html, /参考费用|参考价日期|估算¥|价格未知/);
+    }
+    value.usage.cost = null;
+  }
+});
+
+test("malformed reported charges fall back to reference prices or unknown", () => {
+  const value = context();
+  for (const reported of [
+    { amount: null, currency: "USD" }, { amount: "0", currency: "USD" }, { amount: NaN, currency: "USD" },
+    { amount: Infinity, currency: "USD" }, { amount: -1, currency: "USD" }, { amount: 1 },
+    { amount: 1, currency: '<img src=x>' }, { amount: 1, currency: ["USD"] }, { amount: 1, currency: "ZZZ" },
+  ]) {
+    value.usage.reported_cost = reported;
+    assert.match(label(renderContextMeter(value, true)), /估算¥0.000123$/);
+    assert.doesNotMatch(renderContextMeter(value), /接口回传费用|<img|NaN|Infinity/);
+  }
+  value.usage.cost = null;
+  assert.match(label(renderContextMeter(value, true)), /价格未知$/);
+});
+
 test("unknown or partially reported caches remain distinct from genuine zero usage and unknown prices", () => {
   const value = context();
   value.usage.cache = { hit_tokens: null, miss_tokens: null, hit_percent: null }; value.usage.cost = null;

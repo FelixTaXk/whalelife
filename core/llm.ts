@@ -3,6 +3,8 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import type { Logger } from "./logger.ts";
+import type { ModelTool } from "./plugin-api.ts";
+import type { RegisteredToolOrder } from "./tool-order.ts";
 import {
   modelConfigurationError,
   validateModelParameters,
@@ -20,6 +22,16 @@ export function thinkingToolHistory(provider: any, tools: unknown[]) {
   return provider.parameters?.thinking?.type === "enabled" ||
     host === "api.deepseek.com" || /^deepseek[-/]/i.test(provider.model ?? "");
 }
+function orderedRequestTools(tools: ModelTool[], registeredOrder?: RegisteredToolOrder) {
+  // Provider-specific tool shapes may depend on their original order.
+  if (!Array.isArray(tools) || !tools.every(tool => tool?.type === "function" && typeof tool.function?.name === "string"))
+    return tools;
+  if (registeredOrder) return registeredOrder.order(tools);
+  return tools.toSorted((a, b) => {
+    const left = a.function.name, right = b.function.name;
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+}
 export class LLM {
   logger: Logger;
   providers: any[];
@@ -34,7 +46,7 @@ export class LLM {
     this.providers = providers;
     this.resolver = resolver;
   }
-  async chat(opts: any) {
+  async chat(opts: any, registeredOrder?: RegisteredToolOrder) {
     opts = {
       ...opts,
       provider:
@@ -79,7 +91,7 @@ export class LLM {
           messages: encodeReasoningMessages(opts.messages, compatibility),
           stream: true,
           stream_options: { include_usage: true },
-          ...(opts.tools?.length ? { tools: opts.tools } : {}),
+          ...(opts.tools?.length ? { tools: await orderedRequestTools(opts.tools, registeredOrder) } : {}),
           ...(opts.tool_choice === "none" ? { tool_choice: "none" } : {}),
         },
         async (response, trace) => {

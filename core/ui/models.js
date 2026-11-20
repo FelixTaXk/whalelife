@@ -170,6 +170,7 @@ export function renderModels(app) {
   // A full render replaces the request's form. Stop its diagnostic work as well
   // as rejecting late results; normal diagnostic updates only touch the DOM.
   app.state.modelDraft?.compatibilityRun?.abort();
+  app.state.modelDraft?.cacheDiagnostics?.controller?.abort();
   const config = app.state.config;
   const type = types.some(([id]) => id === app.state.modelFilter)
     ? app.state.modelFilter
@@ -242,6 +243,157 @@ function renderCompatibility(app, d) {
     <p class="hint">以上设置只影响当前选中的模型。密钥错误、余额不足、网络故障或 HTTP 429 繁忙，需要按对应报错处理。</p>
     <div id="compatibility-result" class="connection-result ${d.compatibilityError ? "error" : ""}" role="status">${e(d.compatibilityLoading ? "正在分析并验证工具续轮…" : d.compatibilityMessage || "")}</div></section>`;
 }
+const cacheNumber = (n) => Number.isFinite(n) ? n.toLocaleString("zh-CN", { maximumSignificantDigits: 6 }) : "未回传";
+const cachePercent = (n) => Number.isFinite(n) ? `${n.toLocaleString("zh-CN", { maximumFractionDigits: 1 })}%` : "未知";
+function cacheCost(cost) {
+  if (!cost?.currency) return "未知";
+  const amount = Number.isFinite(cost.amount) ? cacheNumber(cost.amount)
+    : Number.isFinite(cost.min) && Number.isFinite(cost.max) ? `${cacheNumber(cost.min)}–${cacheNumber(cost.max)}` : null;
+  const basis = cost.basis === "reported" ? "接口回传" : cost.price_date ? `${cost.price_date} 参考价估算` : "参考价估算";
+  return amount === null ? "未知" : `${amount} ${cost.currency}（${basis}）`;
+}
+function cacheCostDifference(standard, stable) {
+  if (!standard || !stable || !standard.currency || standard.currency !== stable.currency || standard.basis !== stable.basis ||
+      standard.price_date !== stable.price_date || standard.source !== stable.source ||
+      ![standard.min, standard.max, stable.min, stable.max].every(Number.isFinite))
+    return "缺少同一口径的费用，无法计算差额。";
+  const low = standard.min - stable.max, high = standard.max - stable.min;
+  const basis = standard.basis === "reported" ? "按接口回传费用" : "按参考价估算";
+  if (low === 0 && high === 0) return `${basis}，两组正式测量费用相同。`;
+  if (low <= 0 && high >= 0) return `${basis}，两组费用区间重叠，无法确认节省金额。`;
+  const amounts = [Math.abs(low), Math.abs(high)].sort((a, b) => a - b).map(cacheNumber);
+  const amount = amounts[0] === amounts[1] ? amounts[0] : amounts.join("–");
+  return `${basis}，本次正式测量中，稳定前缀这组请求的合计费用比标准排列${low > 0 ? "低" : "高"} ${amount} ${standard.currency}。`;
+}
+function cacheComparison(result, plan) {
+  if (!result) return "";
+  const { standard, stable } = result.summaries;
+  const difference = standard.measured === plan.measured_per_layout && stable.measured === plan.measured_per_layout
+    ? cacheCostDifference(standard.cost, stable.cost) : "正式测量样本不齐，无法比较费用差额。";
+  const rows = [
+    ["计入对比的请求", standard.measured, stable.measured],
+    ["输入 token", standard.input_tokens, stable.input_tokens],
+    ["命中 token", standard.hit_tokens, stable.hit_tokens],
+    ["未命中 token", standard.miss_tokens, stable.miss_tokens],
+    ["输出 token", standard.output_tokens, stable.output_tokens],
+  ].map(([label, left, right]) => [label, cacheNumber(left), cacheNumber(right)]);
+  rows.push(["缓存命中率", cachePercent(standard.hit_percent), cachePercent(stable.hit_percent)],
+    ["费用", cacheCost(standard.cost), cacheCost(stable.cost)]);
+  return `<h4>对照测试结果</h4><table class="cache-comparison"><caption>两种排列的服务回传用量（扣除预热请求）</caption><thead><tr><th scope="col">指标</th><th scope="col">标准排列</th><th scope="col">稳定前缀</th></tr></thead><tbody>${rows.map(([label, left, right]) => `<tr><th scope="row">${label}</th><td>${e(left)}</td><td>${e(right)}</td></tr>`).join("")}</tbody></table>
+    <p>${e(difference)}</p><p>含预热共发起 ${e(cacheNumber(result.requests))} 次请求，输入 ${e(cacheNumber(result.total.input_tokens))} token，输出 ${e(cacheNumber(result.total.output_tokens))} token，总费用 ${e(cacheCost(result.total.cost))}。</p>
+    <p><strong>${e(result.message)}</strong></p>`;
+}
+function cacheDetails(report, result) {
+  if (!report) return "";
+  const { observed, advice, plan, mode } = report;
+  const modeName = { standard: "标准排列", optimized: "手动启用的稳定前缀", builtin: "此服务默认启用的内置稳定前缀" }[mode];
+  let guidance = advice.message;
+  if (advice.code === "test") {
+    if (mode === "optimized") guidance = "近期多轮长输入的缓存命中率偏低。仅凭命中率无法判断实际费用是否上涨。你可以免费切回标准排列，再查看后续聊天的服务商账单。";
+    if (mode === "builtin") guidance = "近期多轮长输入的命中率偏低。此模型已使用稳定前缀，可以继续观察后续用量。";
+  }
+  const paid = mode === "standard" && advice.code === "test" && !plan.unavailable_reason && report.confirm_token && !result;
+  return `<h4>近期对话记录</h4><p>读取近 ${e(cacheNumber(observed.window_days))} 天、最多 ${e(cacheNumber(observed.max_turns))} 轮普通对话的首个请求。抽取的 ${e(cacheNumber(observed.turns))} 轮中，${e(cacheNumber(observed.measured_turns))} 轮有缓存计量。输入达到 ${e(cacheNumber(observed.long_input_tokens))} token 的有 ${e(cacheNumber(observed.long_turns))} 轮，其中 ${e(cacheNumber(observed.measured_long_turns))} 轮有缓存计量。${observed.limited ? "可读取的记录有限。" : ""}</p>
+    <p>按有计量的输入 token 加权，缓存命中率为 ${e(cachePercent(observed.cached_input_percent))}。当前使用<strong>${e(modeName)}</strong>。</p><p>${e(guidance)}</p>
+    ${mode === "standard" && advice.code === "test" && plan.unavailable_reason ? `<p>${e(plan.unavailable_reason)}</p>` : ""}
+    ${cacheComparison(result, plan)}
+    ${paid ? `<h4>运行付费对照测试</h4><p>向此连接发送合成对话，分别按标准排列和稳定前缀各预热 ${e(plan.warmup_per_layout)} 次、测量 ${e(plan.measured_per_layout)} 次。测试内容不含真实聊天、人格或记忆。</p>
+      <p>最多发起 <strong>${e(plan.max_requests)} 次真实模型请求</strong>，预计合计输入约 ${e(cacheNumber(plan.estimated_input_tokens))} token，每次最多输出 ${e(cacheNumber(plan.max_output_tokens_per_request))} token。服务商可能对输入和输出均收费。${plan.estimated_cost ? `预计费用 ${e(cacheCost(plan.estimated_cost))}。` : "此连接的实际单价未知，无法预估金额。"}实际用量以服务回传为准，最终费用以服务商账单为准。</p>
+      <p>测试只生成对比结果。两轮对照都提高了命中率，且服务商回传的可比费用都更低时，你可以手动启用。</p><button type="button" class="btn tonal" data-cache-action="test">确认费用并运行对照测试</button>` : ""}
+    ${mode === "standard" && result?.verdict === "better" && result.test_id ? '<button type="button" class="btn primary" data-cache-action="apply">为此模型启用稳定前缀</button>' : ""}
+    ${mode === "optimized" ? '<button type="button" class="btn" data-cache-action="disable">切回标准排列</button>' : ""}`;
+}
+function cachePanelBody(app, d) {
+  const { dirty, enabled } = d;
+  const saved = app.state.config.models.find((m) => m.id === d.id);
+  if (!saved) return "";
+  const provider = app.state.config.providers.find((p) => p.id === saved.provider);
+  const state = d.cacheDiagnostics || {};
+  const locked = dirty || !enabled || d.revision !== app.state.config.revision;
+  const hint = dirty ? "请先保存或放弃当前修改，再检查已保存的模型。"
+    : d.revision !== app.state.config.revision ? "配置已经变化，请刷新页面后重新检查。"
+    : !enabled ? "请先启用并保存此模型和服务连接。" : "免费查看本机聊天记录，不调用模型，也不更改设置。";
+  return `<div class="settings-section-title"><h3>提示缓存</h3><button type="button" class="btn small" data-cache-action="inspect" ${locked || state.busy ? "disabled" : ""}>检查缓存效果</button></div>
+    <p class="hint" data-cache-hint>${hint}</p>
+    <p>聊天时，之前的对话会随新消息一起发送。有些服务商会对重复的开头少收费。把历史放在前面、每轮变化的时间放在后面，可能省下这部分输入费用。</p>
+    <p>已保存的连接和模型 · ${e(provider?.name || saved.provider)} / ${e(saved.name)}（${e(saved.model)}）</p>
+    <div data-cache-details ${locked || state.busy ? "hidden" : ""}>${cacheDetails(state.report, state.result)}</div>
+    <p class="connection-result ${state.error ? "error" : ""}" role="status">${e(state.error || state.busy || "")}</p>
+    ${state.controller ? '<button type="button" class="btn small" data-cache-action="cancel">停止后续请求</button><p class="hint">已发出的请求仍可能计费。</p>' : ""}`;
+}
+function renderCachePanel(app, d, saved) {
+  if (!saved || d.isNew || d.repair || d.type !== "chat" || d.protocol !== "openai-compatible") return "";
+  return `<section class="model-cache" aria-label="提示缓存">${cachePanelBody(app, d)}</section>`;
+}
+async function cacheAction(app, form, d, action) {
+  if (action === "cancel") return d.cacheDiagnostics?.controller?.abort();
+  const current = () => app.state.modelDraft === d && !d.dirty && d.enabled &&
+    d.revision === app.state.config.revision && app.content.querySelector("#connection-form") === form;
+  if (!current() || app.state.modelSaving) return;
+  const state = d.cacheDiagnostics ??= {};
+  if (state.busy) return;
+  const report = state.report, result = state.result;
+  const update = () => {
+    if (app.state.modelDraft !== d) return;
+    const panel = app.content.querySelector("#connection-form")?.querySelector(".model-cache");
+    if (panel) panel.innerHTML = cachePanelBody(app, d);
+  };
+  const model = d.id, revision = d.revision;
+  const cancel = () => state.controller?.abort();
+  let applying = false;
+  state.error = "";
+  try {
+    if (action === "inspect") {
+      state.busy = "正在读取本机记录…";
+      state.report = state.result = null;
+      update();
+      const value = await api("/api/cache-diagnostics?model=" + encodeURIComponent(model));
+      if (!current()) return;
+      if (value.model !== model || value.revision !== revision) throw Error("已保存的模型配置发生变化，请刷新页面后重新检查。");
+      state.report = value;
+      state.result = value.result;
+    } else if (action === "test") {
+      if (report?.mode !== "standard" || report.advice.code !== "test" || report.plan.unavailable_reason || !report.confirm_token || result) return;
+      state.busy = "正在使用合成对话测试，请等待服务返回用量…";
+      const token = report.confirm_token;
+      delete report.confirm_token;
+      state.controller = new AbortController();
+      globalThis.addEventListener?.("hashchange", cancel, { once: true });
+      update();
+      const value = await api("/api/cache-diagnostics/test", { model, revision, confirm_paid: true, confirm_token: token }, state.controller.signal);
+      state.controller.signal.throwIfAborted();
+      if (!current()) return;
+      if (value.model !== model || value.revision !== revision) throw Error("测试期间配置发生变化，请刷新后重新检查。");
+      state.result = value;
+    } else if (action === "apply" || action === "disable") {
+      const enabled = action === "apply";
+      if (enabled ? report?.mode !== "standard" || result?.verdict !== "better" || !result.test_id : report?.mode !== "optimized") return;
+      applying = app.state.modelSaving = true;
+      d.compatibilityRun?.abort();
+      state.busy = "正在保存此模型的缓存设置…";
+      form.inert = true;
+      update();
+      const next = await api("/api/cache-diagnostics/apply", { model, revision, enabled, ...(enabled ? { test_id: result.test_id } : {}) });
+      if (app.state.config.revision === revision) app.state.config = next;
+      if (app.state.modelDraft === d && !d.dirty) app.state.modelDraft = null;
+      state.report = state.result = null;
+      app.toast(enabled ? "已为此模型启用稳定前缀" : "此模型已恢复标准排列");
+    }
+  } catch (error) {
+    state.error = state.controller?.signal.aborted ? "已停止后续测试。已发出的请求仍可能计费。" : error.message;
+    if (error.status === 409) state.report = state.result = null;
+  } finally {
+    globalThis.removeEventListener?.("hashchange", cancel);
+    delete state.controller;
+    state.busy = "";
+    if (applying) {
+      app.state.modelSaving = false;
+      form.inert = false;
+      if (!state.error && app.state.page === "models") app.render();
+    }
+    update();
+  }
+}
 function renderEditor(app, d) {
   const embedding = d.type === "embedding";
   const supported = d.type === "chat" ? d.protocol === "openai-compatible"
@@ -257,6 +409,7 @@ function renderEditor(app, d) {
     ${d.revision !== app.state.config.revision ? '<div class="configuration-warning repair-note">已保存的配置发生了变化。当前未保存的内容仍保留；请先放弃修改，再根据最新配置重新编辑。</div>' : ""}
     <div class="service-notice">${icon("info")}<p>${e(t?.note || "选择要连接的服务，然后填写实际模型名称。")}</p></div>
     ${renderConnectionModels(app, d)}
+    ${renderCachePanel(app, d, existing)}
     ${renderCompatibility(app, d)}
     <h3 class="model-section-heading">服务连接</h3>
     ${row("providerName", "连接名称", "这个连接下的模型共用地址、密钥、代理和超时。", input(d, "providerName", 'required maxlength="200"'))}
@@ -358,6 +511,7 @@ async function addModels(app, d, choices) {
   if (!choices.length) throw Error("请至少选择一个模型");
   if (app.state.modelSaving) throw Error("配置正在保存，请稍后重试");
   d.compatibilityRun?.abort();
+  d.cacheDiagnostics?.controller?.abort();
   app.state.modelSaving = true;
   try {
     const next = configWithModels(app.configDraft(), d, choices);
@@ -440,9 +594,19 @@ function customModel(app, form, d) {
     "添加模型",
   );
 }
+function lockCacheDraft(form, d) {
+  d.cacheDiagnostics?.controller?.abort();
+  const cacheButton = form.querySelector('[data-cache-action="inspect"]');
+  if (cacheButton) {
+    cacheButton.disabled = true;
+    form.querySelector("[data-cache-details]").hidden = true;
+    form.querySelector("[data-cache-hint]").textContent = "请先保存或放弃当前修改，再检查已保存的模型。";
+  }
+}
 function markDirty(app, form, d) {
   capture(form, d);
   d.compatibilityRun?.abort();
+  lockCacheDraft(form, d);
   d.compatibilityMessage = "";
   d.compatibilityError = false;
   const compatibilityOutput = form.querySelector("#compatibility-result");
@@ -466,7 +630,11 @@ function refreshCompatibilityButton(app) {
 }
 function leaveDraft(app, action) {
   if (app.state.modelSaving) return;
-  const leave = () => { app.state.modelDraft?.compatibilityRun?.abort(); action(); };
+  const leave = () => {
+    app.state.modelDraft?.compatibilityRun?.abort();
+    app.state.modelDraft?.cacheDiagnostics?.controller?.abort();
+    action();
+  };
   if (!app.state.modelDraft?.dirty) return leave();
   app.dialog(
     "放弃未保存的修改？",
@@ -512,6 +680,11 @@ export function bindModels(app) {
   const form = root.querySelector("#connection-form");
   if (!form) return;
   const d = app.state.modelDraft;
+  const cachePanel = form.querySelector(".model-cache");
+  if (cachePanel) cachePanel.onclick = (event) => {
+    const button = event.target.closest("[data-cache-action]");
+    if (button && !button.disabled) return cacheAction(app, form, d, button.dataset.cacheAction);
+  };
   root.querySelectorAll("[data-edit-model]").forEach(
     (b) =>
       (b.onclick = () =>
@@ -577,6 +750,7 @@ export function bindModels(app) {
     event.preventDefault();
     if (app.state.modelSaving) return;
     d.compatibilityRun?.abort();
+    d.cacheDiagnostics?.controller?.abort();
     capture(form, d);
     const button = form.querySelector("#connection-save");
     button.disabled = true;
@@ -769,6 +943,7 @@ async function assistCompatibility(app, form, d) {
     d.reasoningCompatibility = { response_field: mapping.response_field, request_field: mapping.request_field,
       ...(d.reasoningCompatibility?.fill_missing === true ? { fill_missing: true } : {}) };
     d.dirty = true;
+    lockCacheDraft(form, d);
     d.version++;
     d.compatibilityMessage = `${result.message || "工具续轮验证通过"}${count}${tokens}。映射已填入草稿，请保存后使用。`;
     d.compatibilityError = false;
@@ -943,6 +1118,7 @@ function deleteConnection(app, d) {
     `<p>删除「${e(d.name)}」？已选用的模型需要先在使用设置中取消选择。</p>`,
     async () => {
       d.compatibilityRun?.abort();
+      d.cacheDiagnostics?.controller?.abort();
       const next = app.configDraft();
       next.revision = d.revision;
       const original = next.models.find((m) => m.id === d.id);

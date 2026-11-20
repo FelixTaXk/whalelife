@@ -11,6 +11,7 @@ import { Memory } from "./memory.ts";
 import { MemoryAdmin } from "./memory-admin.ts";
 import { LLM } from "./llm.ts";
 import { Tools } from "./tools.ts";
+import { RegisteredToolOrder } from "./tool-order.ts";
 import { approval } from "./permission.ts";
 import { Runtime } from "./runtime.ts";
 import { Sessions } from "./session.ts";
@@ -79,6 +80,7 @@ export async function boot(
   tools.executionArchive = executionArchive;
   llm.diagnostics = diagnostics;
   tools.diagnostics = diagnostics;
+  const toolOrder = await RegisteredToolOrder.open(resolve(root, "config/tool-order.json"), logger);
   const runtime = new Runtime(root, logger, config.plugin_runtime);
   const services: any = {
     diagnostics,
@@ -87,6 +89,7 @@ export async function boot(
     memoryEngine,
     llm,
     tools,
+    toolOrder,
     executionArchive,
     approval,
     modelConfig,
@@ -137,6 +140,7 @@ export async function boot(
   await runtime.builtin("web", web);
   await runtime.bus.start();
   await runtime.scan();
+  await toolOrder.remember(tools.entries.keys());
   runtime.events.emit("whalelife/ready", { at: new Date().toISOString() });
   logger.info("核心就绪");
   let closing: Promise<void> | undefined;
@@ -147,6 +151,7 @@ export async function boot(
     closing = new Promise<void>((resolve, reject) => { resolveClose = resolve; rejectClose = reject; });
     void (async () => {
       logger.info("WhaleLife 关闭");
+      await runtime.finishManagement();
       runtime.events.emit("whalelife/shutdown", { at: new Date().toISOString() });
       // Let shutdown listeners receive the notification before their subscriptions are removed.
       await new Promise<void>((r) => setImmediate(r));
@@ -160,7 +165,7 @@ export async function boot(
     })().then(resolveClose, rejectClose);
     return closing;
   };
-  return { config, ...services, runtime, close };
+  return { config, ...services, runtime, close, pendingPackageCommit: () => runtime.pendingPackageCommit };
 }
 if (
   process.argv[1] &&

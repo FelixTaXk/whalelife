@@ -1,9 +1,11 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Memory } from "../core/memory.ts";
 import { MemoryEngine, estimateTokens } from "../core/memory-engine.ts";
+import { LLM } from "../core/llm.ts";
+import { RegisteredToolOrder } from "../core/tool-order.ts";
 import { Sessions } from "../core/session.ts";
 import { supportsContextPrefix } from "../core/context-material.ts";
 import { promptText } from "../core/tool-content.ts";
@@ -45,6 +47,58 @@ async function fixture(t: TestContext) {
     respond: (value: typeof respond) => { respond = value; },
     recall: (text: string) => { recalled = [{ id: text, kind: "experience", text, source: "plugin", ts: "2026-11-02T00:00:00Z", origin: { plugin: "probe" } }]; } };
 }
+
+test("outbound function definitions stay byte-identical after re-registration", async t => {
+  const requests: any[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: URL, init: RequestInit) => {
+    requests.push(JSON.parse(String(init.body)));
+    return new Response("data: [DONE]\n\n");
+  });
+  const llm = new LLM({ info() {}, error() {} } as any);
+  const provider = { model: "synthetic", base_url: "http://127.0.0.1:1/v1" };
+  const send = (tools: unknown[]) => llm.chat({ provider, messages: [], tools });
+  const tool = (name: string) => ({ type: "function", function: {
+    name, description: name, parameters: { type: "object", properties: { q: { type: "string" } } },
+  } });
+  const [upper, lower, last] = ["Search", "search", "search_web"].map(tool);
+  const original = [last, lower, upper];
+  Object.freeze(original);
+  await send(original);
+  await send([lower, upper, last]);
+  assert.deepEqual(requests[0].tools, [upper, lower, last]);
+  assert.equal(JSON.stringify(requests[0].tools), JSON.stringify(requests[1].tools));
+  const mixed = [last, { type: "custom", name: "custom" }, upper];
+  await send(mixed);
+  assert.deepEqual(requests[2].tools, mixed);
+  await send([]);
+  assert.equal(Object.hasOwn(requests[3], "tools"), false);
+});
+
+test("registered tools keep their prefix through additions, removal, re-enable and restart", async () => {
+  const root = await temporaryDirectory("whale-tool-order-"), file = join(root, "order.json");
+  const logger = { warn() { assert.fail("unexpected order storage warning"); } };
+  let order = await RegisteredToolOrder.open(file, logger);
+  const [a, b, c, d] = ["aaa", "bravo", "charlie", "delta"].map(name => ({
+    type: "function" as const, function: { name, description: name, parameters: {} },
+  }));
+  assert.deepEqual(await order.order([d, b]), [b, d]);
+  await Promise.all([order.remember(["charlie"]), order.remember(["aaa"])]);
+  assert.deepEqual(await order.order([b, a, c, d]), [b, d, c, a]);
+  assert.deepEqual(await order.order([a, d, c]), [d, c, a]);
+  order = await RegisteredToolOrder.open(file, logger);
+  assert.deepEqual(await order.order([a, d, c, b]), [b, d, c, a]);
+});
+
+test("an unreadable order file does not block chat or overwrite the previous order", async () => {
+  const root = await temporaryDirectory("whale-tool-order-damaged-"), file = join(root, "order.json");
+  await writeFile(file, "incomplete");
+  let warnings = 0;
+  const order = await RegisteredToolOrder.open(file, { warn() { warnings++; } });
+  await order.remember(["later"]);
+  await order.remember(["earlier"]);
+  assert.equal(warnings, 1);
+  assert.equal(await readFile(file, "utf8"), "incomplete");
+});
 
 test("only the verified official endpoint enables a trailing system block", () => {
   for (const base_url of ["https://api.deepseek.com", "https://api.deepseek.com/v1/", "https://API.DEEPSEEK.COM:443/v1"])

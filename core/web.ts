@@ -11,6 +11,21 @@ import { Channels } from "./channels.ts";
 import { conversationRows } from "./channel-history.ts";
 import { PluginWebRegistry } from "./plugin-web.ts";
 import { WebClientDisconnectedError } from "./web-errors.ts";
+import { OfficialPlugins } from "./official-plugins.ts";
+import { CacheDiagnostics } from "./cache-diagnostics.ts";
+
+const marketFiles = new Map([
+  ["index.html", "text/html"],
+  ["catalog.json", "application/json"],
+  ["official-releases.json", "application/json"],
+  ["assets/catalog.js", "text/javascript"],
+  ["assets/catalog-validation.js", "text/javascript"],
+  ["assets/symbols.js", "text/javascript"],
+  ["assets/market.js", "text/javascript"],
+  ["assets/market.css", "text/css"],
+  ["assets/whale.svg", "image/svg+xml"],
+]);
+
 export async function startWeb(config: any, services: any, runtime: any) {
   const { logger, memory, sessions } = services;
   const channels = services.channels ?? new Channels(memory, sessions, config);
@@ -19,6 +34,8 @@ export async function startWeb(config: any, services: any, runtime: any) {
     throw Error("局域网监听需 lan_enabled 与访问密码");
   const tokens = new Set<string>();
   const routes = new PluginWebRegistry();
+  const official = new OfficialPlugins(runtime);
+  const cacheDiagnostics = new CacheDiagnostics(services.modelConfig, services.executionArchive?.root);
   const lifetime = new AbortController();
   const register = (method: string, path: string, handler: any) => routes.register("", lifetime.signal, method, path, handler);
   let origin = `http://${host}:${port}`;
@@ -30,6 +47,8 @@ export async function startWeb(config: any, services: any, runtime: any) {
     "icons.js",
     "models.js",
     "views.js",
+    "official-plugins.js",
+    "plugin-store.js",
     "personas.js",
     "memory.js",
     "context.js",
@@ -82,6 +101,31 @@ export async function startWeb(config: any, services: any, runtime: any) {
     };
     try {
       if (!allowedOrigin(req)) return send(403, { error: "来源无效" });
+      const pathname = req.url?.split("?", 1)[0] ?? "";
+      if (req.method === "GET" && pathname === "/market") {
+        res.writeHead(308, { Location: "/market/" + req.url!.slice(pathname.length) });
+        return res.end();
+      }
+      if (req.method === "GET" && pathname.startsWith("/market/")) {
+        const file = pathname.slice("/market/".length) || "index.html";
+        if (file === "index.html" && authorized(req)) {
+          res.writeHead(302, { Location: "/#market", Vary: "Cookie", "Cache-Control": "no-store" });
+          return res.end();
+        }
+        const type = marketFiles.get(file);
+        if (!type) return send(404, { error: "文件不存在" });
+        const content = await readFile(new URL("../market/" + file, import.meta.url));
+        res.writeHead(200, {
+          "Content-Type": type + "; charset=utf-8",
+          ...(file === "index.html" ? { Vary: "Cookie" } : {}),
+          "Cache-Control": "no-cache",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY",
+          "Content-Security-Policy":
+            "default-src 'self'; connect-src 'self' https://raw.githubusercontent.com; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        });
+        return res.end(content);
+      }
       if (req.method === "GET" && req.url?.startsWith("/ui/")) {
         const asset = req.url.slice(4);
         if (!assets.has(asset)) return send(404, { error: "文件不存在" });
@@ -101,7 +145,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
           "Cache-Control": "no-store",
           "X-Frame-Options": "DENY",
           "Content-Security-Policy":
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'",
         });
         res.end(await readFile(new URL("./ui/index.html", import.meta.url)));
         return;
@@ -125,6 +169,12 @@ export async function startWeb(config: any, services: any, runtime: any) {
         return send(200, { ok: true });
       }
       if (!authorized(req)) return send(401, { error: "请先登录" });
+      if (pathname === "/api/official-plugins" && req.method === "GET") return send(200, await official.list());
+      if (pathname === "/api/official-plugins/apply" && req.method === "POST") {
+        if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
+          return send(415, { error: "请使用 JSON 提交操作。" });
+        return send(200, await official.apply(await body(req, 4096)));
+      }
       const memoryUrl = new URL(req.url!, origin);
       if (memoryUrl.pathname === "/api/session/list" && req.method === "GET") {
         const entries = await memory.listSessionMeta();
@@ -302,6 +352,23 @@ export async function startWeb(config: any, services: any, runtime: any) {
       }
       if (req.url === "/api/model-config" && req.method === "GET")
         return send(200, services.modelConfig.snapshot());
+      if (pathname === "/api/cache-diagnostics" && req.method === "GET")
+        return send(200, await cacheDiagnostics.check(memoryUrl.searchParams.get("model") ?? ""));
+      if ((pathname === "/api/cache-diagnostics/test" || pathname === "/api/cache-diagnostics/apply") && req.method === "POST") {
+        if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
+          return send(415, { error: "请使用 JSON 提交操作" });
+        const input = await body(req, 4096);
+        if (pathname.endsWith("/apply")) return send(200, await cacheDiagnostics.apply(input));
+        const cancellation = new AbortController();
+        const cancel = () => { if (!res.writableEnded) cancellation.abort(); };
+        res.once("close", cancel);
+        try {
+          if (res.destroyed) return;
+          const result = await cacheDiagnostics.test(input, AbortSignal.any([cancellation.signal, lifetime.signal]));
+          if (!res.destroyed) send(200, result);
+          return;
+        } finally { res.off("close", cancel); }
+      }
       if (req.url === "/api/model-config" && req.method === "POST") {
         const value = await services.modelConfig.save(await body(req));
         services.llm.providers = config.providers;
@@ -393,6 +460,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
             : 400,
           {
             error: error.message,
+            ...(Array.isArray(error.rolledBack) ? { rolledBack: error.rolledBack } : {}),
           },
         );
       else res.end();

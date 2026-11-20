@@ -56,11 +56,12 @@ export function renderOverview(app) {
      active + "",
      extensions.length + " 个扩展插件",
      "puzzle",
+     "#market",
    ],
  ]
    .map(
-     ([name, value, foot, ico]) =>
-       `<div class="panel stat-card"><span class="stat-icon">${icon(ico)}</span><small>${name}</small><div class="stat-value ${name === "当前对话" ? "text" : ""}">${e(value)}</div><div class="stat-foot">${e(foot)}</div></div>`,
+     ([name, value, foot, ico, store]) =>
+       `<div class="panel stat-card"><span class="stat-icon">${icon(ico)}</span><small>${name}</small><div class="stat-value ${name === "当前对话" ? "text" : ""}">${e(value)}</div><div class="stat-foot">${e(foot)}${store ? ` · <a class="btn link small" href="${store}">插件商店</a>` : ""}</div></div>`,
    )
    .join("")}</div>
  <div class="overview-grid"><div><section class="panel welcome-panel"><div class="eyebrow">HELLO, WHALELIFE</div><h2>让鲸鲸拥有适合自己的能力</h2><p>接入模型服务，为对话和向量检索分别选择模型，再到聊天页面试一试。</p><div class="row"><a href="#models" class="btn primary">${icon("plus")}管理模型</a><a href="#chat" class="btn">开始聊天 ${icon("arrow")}</a></div><span class="brand-mark">${whale}</span></section><section class="panel" style="margin-top:22px"><div class="panel-header"><h2>模型分工</h2><a class="btn link small" href="#bindings">调整配置 ${icon("arrow")}</a></div><div class="panel-body">${[
@@ -199,7 +200,14 @@ export function bindBindings(app) {
 export function renderPlugins(app) {
   const plugins = extensionPlugins(app.state.status);
   const cards = visiblePluginCards(app.state.status);
-  return `<div class="page-heading"><div><h1>插件管理</h1><p>插件开关会保存，重启后保持选择；依赖恢复后会自动恢复原本启用的插件。</p></div><span class="badge">${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</span></div><div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}`;
+  return `<header class="page-heading plugin-hub-heading">
+    <div><h1>插件管理</h1><p>${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</p></div>
+    <a class="btn primary store-launch" href="#market" aria-haspopup="dialog" aria-controls="store-drawer">${icon("cube")}插件商店</a>
+  </header>
+  <section id="installed-plugins" aria-label="已安装插件">
+    <div data-official-read-status role="status"></div>
+    <div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p, app.state)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}
+  </section>`;
 }
 export function bindPlugins(app) {
   bindPluginActions(app);

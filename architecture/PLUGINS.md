@@ -36,6 +36,10 @@ WhaleLife 是独立于交流平台的机器人。主干的职责固定为五项�
 
 `ctx.llm.chat()` 的返回值可选增加 `finish_reason`：服务商提供结束原因时返回，`length` 表示生成被截断；未知原因归一为 `unknown`，未提供时省略。已有 `text/toolCalls/usage/reasoning_content` 语义不变，插件自行决定如何处理截断。主干的记忆整理会拒绝提交截断结果；普通聊天和插件直接调用不自动重试或改变思考设置。
 
+## 会话工具顺序
+
+主干首次记录可用工具时按函数名排列，以后同一批新增的工具按名称追加在末尾。插件停用期间不发送其工具，重新启用后同名工具回到原有顺位。主干重启后从 `config/tool-order.json` 恢复顺序。注册工具时请使用稳定的名称；改名会作为新工具追加。插件直接调用 `ctx.llm.chat()` 时自带的工具清单独立处理。
+
 ## 临时工具内容与持久回执
 
 普通 `ctx.tools.register` 的返回、事件和默认记忆行为不变。需要让外部资料仅供当轮理解的工具，使用新增的 `ctx.tools.registerTransient`；先检查 `typeof ctx.tools.registerTransient === "function"`。旧宿主缺少时仅停用相关能力，不能回退到普通register。

@@ -138,6 +138,22 @@ test("a hung normal shutdown also has a total deadline and exits nonzero", async
   assert.match(result.stderr, /关闭超时/);
 });
 
+for (const hangs of [false,true]) test("the CLI drains package files beyond its deadline then " +
+  (hangs ? "still times out a hung plugin" : "exits cleanly"), async t => {
+  const result = await childScenario(t, `
+    let files;
+    installProcessLifecycle({ logger, pendingPackageCommit: () => files, async close() {
+      files = new Promise(resolve => setTimeout(resolve, 180));
+      await files; files = undefined; mark("files-safe");
+      ${hangs ? "await new Promise(() => {});" : ""}
+    } }, { shutdownTimeoutMs: 70 });
+    process.emit("SIGTERM");
+  `);
+  assert.equal(result.named("files-safe").length, 1);
+  assert.equal(result.code, hangs ? 1 : 0);
+  if (hangs) assert.match(result.stderr, /关闭超时/);
+});
+
 test("unhandled rejections retain log-only behavior even when the logger throws", async t => {
   const result = await childScenario(t, `
     process.on("uncaughtExceptionMonitor", () => mark("uncaught"));

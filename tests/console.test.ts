@@ -7,6 +7,64 @@ import { join } from "node:path";
 import { WebSocket } from "ws";
 import { boot } from "../core/index.ts";
 import { persona } from "../core/persona.ts";
+import { startWeb } from "../core/web.ts";
+
+test("plugin management opens the store drawer and public catalog links still work", async t => {
+  const { renderPlugins } = await import(new URL("../core/ui/views.js", import.meta.url).href);
+  const management = renderPlugins({ state: { status: { plugins: [] } } });
+  assert.match(management, /href="#market"/);
+  assert.doesNotMatch(management, /data-plugin-view|id="official-shelf"/);
+  const web = await startWeb({ web: { port: 0 } }, { channels: {}, logger: { info() {} } }, {});
+  t.after(() => web.close());
+  const address = web.server.address();
+  assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  const shell = await fetch(base);
+  assert.equal(shell.status, 200);
+  const shellHTML = await shell.text();
+  assert.match(shellHTML, /<dialog\b[^>]*\bid="store-drawer"/);
+  const sidebar = shellHTML.match(/<aside\b[^>]*\bid="sidebar"[^>]*>[\s\S]*?<\/aside>/)?.[0];
+  assert.ok(sidebar);
+  assert.doesNotMatch(sidebar, /href="#market"/);
+  const store = await fetch(base + "/ui/plugin-store.js");
+  assert.equal(store.status, 200);
+  assert.match(store.headers.get("content-type") || "", /javascript/);
+  const market = new URL("/market/", base);
+  const page = await fetch(market);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("content-type") || "", /^text\/html/);
+  assert.match(await page.text(), /<footer\b[^>]*>[\s\S]*?962935021[\s\S]*?<\/footer>/);
+
+  const paths = new Map([
+    ["index.html", "text/html"], ["assets/market.css", "text/css"],
+    ["assets/catalog.js", "text/javascript"], ["assets/symbols.js", "text/javascript"],
+    ["assets/catalog-validation.js", "text/javascript"], ["assets/market.js", "text/javascript"],
+    ["assets/whale.svg", "image/svg+xml"], ["catalog.json", "application/json"],
+    ["official-releases.json", "application/json"],
+  ]);
+  const ids = ["qq", "qzone", "autonomy", "gallery", "surf", "bilibili", "vision", "computer"];
+  for (const [file, mime] of paths) {
+    const asset = await fetch(new URL(file + "?cache=1", market));
+    assert.equal(asset.status, 200, file);
+    assert.equal(asset.headers.get("content-type")?.split(";")[0], mime, file);
+    if (file === "catalog.json" || file === "official-releases.json") {
+      const data = await asset.json();
+      const plugins = file === "catalog.json" ? data.official : data.plugins;
+      assert.deepEqual(plugins.map((plugin: { id: string }) => plugin.id), ids);
+    }
+  }
+  const redirect = await fetch(base + "/market?view=official", { redirect: "manual" });
+  assert.equal(redirect.status, 308);
+  assert.equal(redirect.headers.get("location"), "/market/?view=official");
+  assert.equal((await fetch(new URL("tools/check-official.mjs", market))).status, 404);
+  assert.equal((await fetch(market, { headers: { Origin: "https://example.invalid" } })).status, 403);
+  assert.equal((await fetch(base + "/api/status")).status, 401);
+  const login = await fetch(base + "/api/login", { method: "POST", body: "{}" });
+  const cookie = login.headers.get("set-cookie")!.split(";")[0];
+  const signedIn = await fetch(market, { redirect: "manual", headers: { cookie } });
+  assert.equal(signedIn.status, 302);
+  assert.equal(signedIn.headers.get("location"), "/#market");
+});
 
 test("console config API persists model selection, protects secrets and changes the next chat request", async () => {
   const requested: string[] = [];

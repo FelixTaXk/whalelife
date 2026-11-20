@@ -332,10 +332,12 @@ export class Sessions {
       signal.throwIfAborted();
       const p = await persona(this.root, this.config, channel.persona);
       this.identities.set(id, { persona_id: p.id, persona_name: p.name, persona_revision: p.revision, timezone: zone });
-      await execution?.write("context", { persona: p.id, provider: p.provider.id, model: p.provider.model });
+      const policy = contextPolicy(this.config.memory, meta?.context);
+      await execution?.write("context", { persona: p.id, provider: p.provider.id, model: p.provider.model,
+        model_id: p.provider.model_id || p.provider.model,
+        cache_layout_eligible: policy.memory_mode !== "legacy" && policy.history_enabled });
       if (expectedPersona && expectedPersona !== p.id)
         throw Error("当前人格已在其他窗口切换，请刷新后重试");
-      const policy = contextPolicy(this.config.memory, meta?.context);
       const summaryId =
         "p_" +
         createHash("sha256")
@@ -469,7 +471,8 @@ export class Sessions {
       const limit = await this.modelLimit(p.provider, signal);
       const reserve = this.outputReserve(p.provider, legacy);
       const requestBudget = limit.tokens ? Math.max(1, limit.tokens - reserve) : Infinity;
-      const stablePrefix = !legacy && supportsContextPrefix(p.provider);
+      const stablePrefix = !legacy && (supportsContextPrefix(p.provider) ||
+        (policy.history_enabled && p.provider.cache_prefix_optimized === true));
       const assemble = (rows = recent, compressed = shortSummary) => {
         const frame = contextFrame(materials(compressed), rows, historyReference, timing(), stablePrefix);
         frame.messages.push(transient
@@ -615,7 +618,7 @@ export class Sessions {
           reply = await llm.chat({
             provider: p.provider, messages, tools: activeTools,
             onChunk: stream?.push ?? onChunk, signal: requestSignal,
-          });
+          }, this.services.toolOrder);
         } catch (error) {
           if (!requestSignal.aborted) stream?.interrupted();
           throw error;

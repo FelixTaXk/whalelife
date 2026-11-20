@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
+import type { CacheCostBaseline } from "./cache-advice.ts";
 import type { Diagnostics } from "./diagnostics.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { timezone } from "./time.ts";
@@ -55,6 +56,8 @@ export interface ModelDefinition {
   dimensions: number | null;
   context_window?: number | null;
   reasoning_compatibility?: ReasoningCompatibility;
+  cache_prefix_for?: string;
+  cache_cost_baseline?: CacheCostBaseline;
 }
 export class ModelConfigError extends Error {
   status: number;
@@ -65,6 +68,12 @@ export class ModelConfigError extends Error {
   }
 }
 const hash = (raw: string) => createHash("sha256").update(raw).digest("hex");
+// Internal binding to the tested route. Never include the digest in browser/plugin snapshots.
+function cacheConnectionKey(provider: ProviderConfig, model: ModelDefinition) {
+  return hash(JSON.stringify([provider.id, provider.protocol, provider.base_url.replace(/\/+$/, ""),
+    provider.api_key, provider.proxy_url || "", model.id, model.type, model.model,
+    model.parameters ?? {}, model.reasoning_compatibility ?? null]));
+}
 const parseConfig = (raw: string) => {
   try {
     return JSON.parse(raw.replace(/^\uFEFF/, ""));
@@ -396,6 +405,7 @@ export function resolveChatModel(
   model_id?: string;
   context_window: number | null;
   reasoning_compatibility?: ReasoningCompatibility;
+  cache_prefix_optimized?: true;
 } {
   if (!Array.isArray(config.models)) {
     const item = personaId ? config.personas?.[personaId] : undefined;
@@ -438,6 +448,8 @@ export function resolveModel(config: any, selected: string) {
     ...provider,
     model: model.model,
     model_id: model.id,
+    ...(model.cache_prefix_for && model.cache_prefix_for === cacheConnectionKey(provider, model)
+      ? { cache_prefix_optimized: true as const } : {}),
     parameters: validateModelParameters(model.parameters),
     context_window: contextWindow(model.context_window, model.type),
     ...(validateReasoningCompatibility(model.reasoning_compatibility)
@@ -554,6 +566,24 @@ export class ModelConfig {
   save(input: any) {
     if (Array.isArray(input?.providers)) this.protectKeys(input.providers);
     const task = this.queue.then(() => this.write(input));
+    this.queue = task.catch(() => {});
+    return task;
+  }
+  setCacheOptimization(modelId: string, revision: string, enabled: boolean, baseline?: CacheCostBaseline) {
+    const task = this.queue.then(async () => {
+      const raw = await readFile(this.file, "utf8");
+      if (!revision || revision !== this.revision || hash(raw) !== revision)
+        throw new ModelConfigError("模型配置已变化，请重新检查缓存效果", 409);
+      const disk = parseConfig(raw);
+      const model = disk.models?.find((m: ModelDefinition) => m.id === modelId);
+      if (!model) throw new ModelConfigError("请先保存这条对话模型配置");
+      const provider = resolveModel(this.config, modelId);
+      if (enabled && baseline) model.cache_cost_baseline = baseline;
+      else delete model.cache_cost_baseline;
+      if (enabled) model.cache_prefix_for = cacheConnectionKey(provider, model);
+      else delete model.cache_prefix_for;
+      return this.persist(disk, revision);
+    });
     this.queue = task.catch(() => {});
     return task;
   }
@@ -709,7 +739,8 @@ export class ModelConfig {
     });
     const modelIds = new Set<string>();
     const models: ModelDefinition[] = input.models.map((m: any) => {
-      const model = readModel(m, false, false, previous.models.find((old) => old.id === m?.id));
+      const previousModel = previous.models.find((old) => old.id === m?.id);
+      const model = readModel(m, false, false, previousModel);
       if (modelIds.has(model.id))
         throw new ModelConfigError("模型 ID 不能重复");
       modelIds.add(model.id);
@@ -718,6 +749,11 @@ export class ModelConfig {
           "模型引用的提供商不存在；请先移除其模型再删除提供商",
         );
       const provider = providers.find((p) => p.id === model.provider)!;
+      if (previousModel?.cache_prefix_for && previousModel.cache_prefix_for === cacheConnectionKey(provider, model)) {
+        model.cache_prefix_for = previousModel.cache_prefix_for;
+        if (provider.enabled && model.enabled && previousModel.cache_cost_baseline)
+          model.cache_cost_baseline = previousModel.cache_cost_baseline;
+      }
       const error = modelConfigurationError(model, provider);
       if (error) {
         const old = previous.models.find((m) => m.id === model.id);
@@ -793,6 +829,9 @@ export class ModelConfig {
       model_bindings: bindings,
       personas,
     };
+    return this.persist(next, expectedRevision);
+  }
+  private async persist(next: any, expectedRevision: string) {
     const content = JSON.stringify(next, null, 2) + "\n";
     const temporary = `${this.file}.${randomUUID()}.tmp`;
     try {
@@ -817,8 +856,8 @@ export class ModelConfig {
     this.source = normalize(next);
     this.apply();
     this.logger.info("模型配置已保存", {
-      providers: providers.length,
-      models: models.length,
+      providers: this.source.providers.length,
+      models: this.source.models.length,
     });
     return this.snapshot();
   }

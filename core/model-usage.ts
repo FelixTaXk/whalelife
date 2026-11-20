@@ -20,6 +20,21 @@ const tokens = (value: unknown): value is number => Number.isSafeInteger(value) 
 const object = (value: any) => value !== null && typeof value === "object" && !Array.isArray(value);
 const unknownCache = (): CacheUsage => ({ hit_tokens: null, miss_tokens: null, hit_percent: null });
 
+type BillingProvider = { base_url?: string; protocol?: string };
+export const isMiraRouterEndpoint = (provider?: BillingProvider) =>
+  provider?.base_url?.replace(/\/+$/, "") === "https://api.mirarouter.com/v1" &&
+  (provider.protocol ?? "openai-compatible") === "openai-compatible";
+
+const supportedCurrencies = new Set<string>(Intl.supportedValuesOf("currency"));
+/** Total charge reported by the API. Upstream costs and reference prices have different meanings. */
+export function reportedUsageCost(raw: any, provider?: BillingProvider): { amount: number; currency: string } | null {
+  if (typeof raw?.cost !== "number" || !Number.isFinite(raw.cost) || raw.cost < 0) return null;
+  const currencies = [raw.cost_currency, raw.currency].filter(value => value !== undefined);
+  const currency = currencies.length ? currencies[0] : isMiraRouterEndpoint(provider) ? "USD" : null;
+  if (!supportedCurrencies.has(currency) || !currencies.every(value => value === currency)) return null;
+  return { amount: raw.cost, currency };
+}
+
 /** Missing cache details are unknown; an explicit zero remains a measured zero. */
 function cacheUsage(raw: any): CacheUsage {
   if (!object(raw) || !tokens(raw.prompt_tokens)) return unknownCache();
@@ -79,5 +94,6 @@ function referenceCost(raw: any, provider: any, cache: CacheUsage, measuredAt: D
 /** Normalize only supported usage fields; do not retain arbitrary provider response metadata. */
 export function modelUsageDetails(raw: any, provider: any, measuredAt = new Date()) {
   const cache = cacheUsage(raw);
-  return { cache, cost: referenceCost(raw, provider, cache, measuredAt) };
+  const reported = reportedUsageCost(raw, provider);
+  return { cache, cost: referenceCost(raw, provider, cache, measuredAt), ...(reported ? { reported_cost: reported } : {}) };
 }
