@@ -13,6 +13,7 @@ import {
   sessionName,
 } from "./api.js";
 import { icon, whale } from "./icons.js";
+import { bindManagementIcons } from "./plugin-store.js";
 import { renderContextMeter } from "./context.js";
 import { hostUpdateContent } from "./host-updates.js";
 import { bindPluginUpdateCheck, checkPluginsButton, checkPluginsStatus } from "./plugin-updates.js";
@@ -222,6 +223,7 @@ export function renderPlugins(app) {
 export function bindPlugins(app) {
   bindPluginActions(app);
   bindPluginUpdateCheck(app, app.content);
+  bindManagementIcons(app);
 }
 
 export function renderChat(app) {

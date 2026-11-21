@@ -815,6 +815,11 @@ main {
 .plugin-card-children summary { width: fit-content; color: #636b7b; font-size: 12px; cursor: pointer; }
 .plugin-card-child { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; min-height: 32px; padding-top: 5px; font-size: 13px; }
 .plugin-card-child a:hover { color: var(--accent-hover); }
+.plugin-card-icon { display: inline-flex; flex: none; align-items: center; }
+.plugin-card-icon:empty, .plugin-card-icon:has(> img[hidden]:only-child) { display: none; }
+.plugin-card-icon:has(> img:not([hidden])) > .icon { display: none; }
+.plugin-card-icon img { width: 20px; height: 20px; border-radius: 4px; object-fit: contain; }
+.plugin-card-child .plugin-card-icon img { width: 16px; height: 16px; }
 .official-manage-slot:empty, [data-official-read-status]:empty { display: none; }
 .official-version { font: 11px/1.4 ui-monospace, Consolas, monospace; color: #636b7b; }
 .official-installed { color: #547563; white-space: nowrap; font-size: 12px; }
@@ -1127,6 +1132,16 @@ html:has(#store-drawer[open]) { overflow: hidden; }
   overflow: hidden;
   isolation: isolate;
 }
+.store-art > .community-plugin-image {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  margin: auto;
+  height: 76%;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+.store-art:has(> img:not([hidden])) .store-object { visibility: hidden; }
 .store-art::before,
 .store-art::after {
   content: "";

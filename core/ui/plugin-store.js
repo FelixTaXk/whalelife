@@ -4,6 +4,7 @@
  */
 import { api, escapeHTML as e } from "./api.js";
 import { icon } from "./icons.js";
+import { bindCommunityImages, communityImage, paintManageIcons } from "./community-icons.js";
 import { bindOfficialActions, confirmCommunityInstall, confirmPluginUpdate, officialBadge, renderStoreInstall } from "./official-plugins.js";
 import { bindPluginUpdateCheck, checkPluginsButton, checkPluginsStatus, storeUpdate, updateBadge, updateDetails } from "./plugin-updates.js";
 import "../../market/assets/catalog-validation.js";
@@ -40,7 +41,7 @@ function localPlan(state, entry, official) {
 function art(entry, official) {
   const theme = official && artNames.has(entry.id) ? entry.id : "generic";
   return `<span class="store-art" data-art="${theme}" aria-hidden="true">
-    <span class="store-object"><i></i><em></em><u></u></span></span>`;
+    <span class="store-object"><i></i><em></em><u></u></span>${official ? "" : communityImage(entry)}</span>`;
 }
 
 function versionLine(state, entry, official, plan, update) {
@@ -149,6 +150,7 @@ async function readCommunityPlans(app) {
   } finally {
     if (app.communityRead === read) {
       app.communityRead = null;
+      paintManageIcons(app);
       app.content.ownerDocument.getElementById("plugin-store")?.dispatchEvent(new Event("community-plans"));
     }
   }
@@ -186,7 +188,7 @@ export function renderStore(app) {
       ${state.storeDetail ? "" : `<footer class="store-footer">${icon("chat")} 交流 QQ 群 · 962935021</footer>`}</div></div>`;
 }
 
-export async function loadStoreCatalog(app, onChange) {
+export async function loadStoreCatalog(app, onChange, needsPublished = () => true) {
   const state = app.state;
   if (!state.bundledStore) {
     app.storeLocalRead ??= readCatalog(bundledURL);
@@ -201,6 +203,7 @@ export async function loadStoreCatalog(app, onChange) {
     }
     onChange();
   }
+  if (!needsPublished()) return;
   const previous = state.publishedStore;
   const read = app.storePublishedRead ??= readCatalog(publishedURL);
   try {
@@ -213,6 +216,29 @@ export async function loadStoreCatalog(app, onChange) {
     // Keep the bundled list usable. The next visit can retry this read.
     if (app.storePublishedRead === read) app.storePublishedRead = null;
   }
+}
+
+export function bindManagementIcons(app) {
+  if (!app.content.querySelectorAll("[data-community-icon-slot]").length) return;
+  const paint = () => {
+    const catalog = app.state.publishedStore || app.state.bundledStore;
+    if (paintManageIcons(app) && app.managementIconIdentityCatalog !== catalog) {
+      app.managementIconIdentityCatalog = catalog;
+      void readCommunityPlans(app);
+    }
+  };
+  paint();
+  // Opening or repainting management reuses the store's catalog. A failed
+  // read can be retried by visiting the store, without polling on every render.
+  if (!app.state.publishedStore && !app.managementIconCatalogAttempted) void loadStoreCatalog(app, paint, () => {
+    const { bundledStore, status, officialPlugins } = app.state;
+    const hasCommunity = status?.plugins?.some(plugin => !plugin.builtin &&
+      !bundledStore.official.some(entry => entry.id === plugin.id ||
+        entry.dependencies?.some(parent => parent + "/" + entry.id === plugin.id)) &&
+      !officialPlugins?.some(entry => entry.runtimeId === plugin.id));
+    if (hasCommunity) app.managementIconCatalogAttempted = true;
+    return hasCommunity;
+  });
 }
 
 export function bindStore(app, container = app.content, opening = true) {
@@ -233,6 +259,7 @@ export function bindStore(app, container = app.content, opening = true) {
     for (const button of controls) button.setAttribute("aria-pressed", String(button.dataset.storeView === current));
     if (sort) sort.closest("label").hidden = current === "official" || !(catalog?.community.length > 1);
     listing.innerHTML = storeBody(state);
+    bindCommunityImages(root);
     if (focusedUpdate) {
       const button = [...listing.querySelectorAll("[data-plugin-update]:enabled")].find(el => el.dataset.pluginUpdate === focusedUpdate)
         || [...listing.querySelectorAll("[data-store-entry]")].find(el => el.dataset.storeEntry === focusedUpdate);
@@ -246,6 +273,8 @@ export function bindStore(app, container = app.content, opening = true) {
       (next || listing.querySelector("#store-heading"))?.focus({ preventScroll: true });
     }
   }
+  const catalogChanged = () => { paint(); paintManageIcons(app); };
+  bindCommunityImages(root);
   root.addEventListener("plugin-updates", paint);
   root.addEventListener("community-plans", paint);
   root.addEventListener("community-plans-invalidated", () => {
@@ -259,8 +288,8 @@ export function bindStore(app, container = app.content, opening = true) {
   if (search) search.oninput = () => { state.storeSearch = search.value; paint(); scroll.scrollTop = 0; };
   const submit = root.querySelector("[data-store-submit]");
   if (submit) submit.onclick = () => app.dialog("提交社区插件",
-    `<p>首次投稿请附上公开 GitHub 仓库链接和一句话介绍。维护者会在投稿 Issue 回复，收录后即可关帖。</p>
-     <p>后续请在原仓库升版并发布正式 GitHub Release。维护者会收到发版通知。审核通过后，用户手动检查更新时就能看到适合本机的新版。</p>
+    `<p>首次投稿请附上公开 GitHub 仓库链接和一句话介绍，也可以填写仓库里的图标链接。维护者会在投稿 Issue 回复，收录后即可关帖。</p>
+     <p>只换图标时，提交新图片链接即可单独审图。插件程序有更新时，请在原仓库升版并发布正式 GitHub Release。审核通过后，用户手动检查更新时就能看到适合本机的新版。</p>
      <p class="official-help">${externalLink(submissionURL, "填写收录申请")}</p>`);
   listing.onclick = event => {
     const card = event.target.closest("[data-store-entry]");
@@ -280,7 +309,7 @@ export function bindStore(app, container = app.content, opening = true) {
           current.repository === update.repository;
       });
     }
-    else if (event.target.closest("[data-store-retry]")) void loadStoreCatalog(app, paint);
+    else if (event.target.closest("[data-store-retry]")) void loadStoreCatalog(app, catalogChanged);
     else if (install && !install.disabled) {
       const id = install.dataset.communityInstall;
       const currentEntry = () => (state.publishedStore || state.bundledStore)?.community.find(item => item.id === id && item.id === state.storeDetail);
@@ -300,5 +329,5 @@ export function bindStore(app, container = app.content, opening = true) {
     paint();
   }
   if (opening || !state.communityPlugins) void readCommunityPlans(app);
-  if (opening || !state.bundledStore || app.storePublishedRead) void loadStoreCatalog(app, paint);
+  if (opening || !state.bundledStore || app.storePublishedRead) void loadStoreCatalog(app, catalogChanged);
 }

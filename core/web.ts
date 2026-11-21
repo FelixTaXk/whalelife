@@ -89,6 +89,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
     "models.js",
     "views.js",
     "official-plugins.js",
+    "community-icons.js",
     "plugin-store.js",
     "plugin-updates.js",
     "host-updates.js",
@@ -167,7 +168,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
           "X-Content-Type-Options": "nosniff",
           "X-Frame-Options": "DENY",
           "Content-Security-Policy":
-            "default-src 'self'; connect-src 'self' https://raw.githubusercontent.com; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+            "default-src 'self'; img-src 'self' https://raw.githubusercontent.com/iinukami/whalelife/main/market/assets/community-icons/; connect-src 'self' https://raw.githubusercontent.com; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         });
         return res.end(content);
       }
@@ -190,7 +191,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
           "Cache-Control": "no-store",
           "X-Frame-Options": "DENY",
           "Content-Security-Policy":
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://raw.githubusercontent.com/iinukami/whalelife/main/market/assets/community-icons/; connect-src 'self' https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'",
         });
         res.end(await readFile(new URL("./ui/index.html", import.meta.url)));
         return;

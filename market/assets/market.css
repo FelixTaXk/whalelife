@@ -64,6 +64,7 @@ h1 { font-size: clamp(2.25rem, 4.1vw, 3.3rem); line-height: 1.2; letter-spacing:
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; gap: 12px; }
 .glyph { height: 40px; width: 40px; display: grid; place-items: center; border-radius: 12px; color: #5545ae; background: #f0edfc; }
 .glyph svg { width: 23px; height: 23px; }
+.glyph img { width: 100%; height: 100%; border-radius: inherit; object-fit: contain; }
 .card[data-plugin="qq"] .glyph { background: #e8f1fe; color: #3c6cbc; }
 .card[data-plugin="qzone"] .glyph { background: #fff1d7; color: #93661f; }
 .card[data-plugin="gallery"] .glyph { background: #e4f4ed; color: #347657; }

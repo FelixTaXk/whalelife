@@ -15,8 +15,17 @@ function makeCard(plugin, isOfficial, pluginNames) {
   const card = template.content.firstElementChild.cloneNode(true);
   card.dataset.plugin = plugin.id;
   const glyphs = window.WHALELIFE_SYMBOLS;
-  card.querySelector(".glyph").innerHTML = isOfficial && Object.hasOwn(glyphs, plugin.id)
+  const glyph = card.querySelector(".glyph");
+  glyph.innerHTML = isOfficial && Object.hasOwn(glyphs, plugin.id)
     ? glyphs[plugin.id] : glyphs.generic;
+  const iconURL = !isOfficial && window.whaleLifeCommunityIconURL(plugin);
+  if (iconURL) {
+    const image = new Image();
+    image.alt = "";
+    image.referrerPolicy = "no-referrer";
+    image.onload = () => glyph.replaceChildren(image);
+    image.src = iconURL;
+  }
   card.querySelector(".kind").textContent = isOfficial ? "官方" : "社区";
   card.querySelector("h2").textContent = plugin.name;
   const version = window.whaleLifeCatalogVersion(plugin, window.WHALELIFE_CATALOG[isOfficial ? "official" : "community"]);

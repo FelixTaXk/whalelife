@@ -21,3 +21,11 @@ body:
       description: 说说插件能做什么。如果有偏好的署名或单独的安装文档，也可以写在这里。
     validations:
       required: true
+  - type: input
+    id: icon
+    attributes:
+      label: 插件图标链接（选填）
+      description: 把 PNG 图片放在上面填写的插件仓库里，再粘贴图片文件的 GitHub 链接。推荐 256 × 256 像素的方图，最大 1 MiB，每边不超过 1024 像素。留空会使用默认图标。
+      placeholder: https://github.com/作者/插件仓库/blob/main/icon.png
+    validations:
+      required: false
