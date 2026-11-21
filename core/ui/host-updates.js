@@ -115,7 +115,7 @@ function confirmUpdate(app) {
   if (!version || !ui.data.supported || ui.watching || ui.submitting) return;
   app.dialog("更新 WhaleLife 并重启？",
     `<p class="official-dialog-text">将从 ${e(versionLabel(ui.data.current))} 更新到 <strong>${e(versionLabel(version))}</strong>。重启期间控制台会短暂断开，重新进入后可查看结果。</p>
-    <p class="host-confirm-note">已安装的插件、配置和数据会保留。如果新版启动失败，系统会恢复旧版。</p>`,
+    <p class="host-confirm-note">预检失败会恢复旧版。新版正式接管后，插件和会话产生的新数据会保留。</p>`,
     async () => {
       if (ui !== app.hostUpdate || ui.reading || ui.submitting || ui.watching || ui.data?.latest?.version !== version)
         throw Error("更新状态已变化，请关闭并重新查看。");

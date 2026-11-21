@@ -29,6 +29,22 @@ export async function boot(
   hostUpdates?: HostUpdates,
   hostStarting?: () => boolean,
 ) {
+  // Older installation-root workers call boot() even for a reversible trial.
+  if (process.send && hostStarting && process.argv[4] === "trial")
+    throw Error("安装根目录的启动器需要手动升级后才能安全更新本体。请退出 WhaleLife，保留实例资料，更新根目录的程序文件后重启。");
+  return initialize(root, hostUpdates, hostStarting, false);
+}
+
+export function prepareHostTrial(root: string, hostUpdates?: HostUpdates) {
+  return initialize(root, hostUpdates, () => true, true);
+}
+
+async function initialize(
+  root: string,
+  hostUpdates: HostUpdates | undefined,
+  hostStarting: (() => boolean) | undefined,
+  trial: boolean,
+) {
   const config = JSON.parse(
     (await readFile(resolve(root, "config/config.json"), "utf8")).replace(
       /^\uFEFF/,
@@ -143,10 +159,12 @@ export async function boot(
   services.web = web;
   await runtime.builtin("web", web);
   await runtime.bus.start();
-  await runtime.scan();
-  await toolOrder.remember(tools.entries.keys());
-  runtime.events.emit("whalelife/ready", { at: new Date().toISOString() });
-  logger.info("核心就绪");
+  if (!trial) {
+    await runtime.scan();
+    await toolOrder.remember(tools.entries.keys());
+    runtime.events.emit("whalelife/ready", { at: new Date().toISOString() });
+    logger.info("核心就绪");
+  }
   let closing: Promise<void> | undefined;
   const close = () => {
     if (closing) return closing;

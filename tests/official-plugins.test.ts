@@ -57,17 +57,17 @@ test("停用的社区插件仍保护其经审核的必需插件，重读安装�
   assert.match(plan.reason, /请先卸载依赖它的插件：示例/);
 });
 
-async function isolatedManager(root: string, plugins: unknown[], installedBuilds: unknown[] = []) {
+async function isolatedManager(root: string, plugins: unknown[], installedBuilds: unknown[] = [], version = "0.1.0") {
   const core = join(root, "core"), market = join(root, "market");
   await mkdir(core);
   await mkdir(join(market, "inventories"), { recursive: true });
   for (const file of ["official-plugins.ts", "official-package-files.ts", "official-package-download.ts",
-    "community-install-receipts.ts", "plugin-state.ts", "memory.ts"]) {
+    "community-install-receipts.ts", "plugin-state.ts", "package-host-range.ts", "memory.ts"]) {
     await copyFile(new URL("../core/" + file, import.meta.url), join(core, file));
   }
   await writeFile(join(market, "official-releases.json"), JSON.stringify({ plugins, installedBuilds }));
   await writeFile(join(market, "catalog.json"), JSON.stringify({ official: [], community: [] }));
-  await writeFile(join(root, "package.json"), JSON.stringify({ type: "module", version: "0.1.0" }));
+  await writeFile(join(root, "package.json"), JSON.stringify({ type: "module", version }));
   return (await import(pathToFileURL(join(core, "official-plugins.ts")).href)).OfficialPlugins as typeof OfficialPlugins;
 }
 
@@ -182,6 +182,24 @@ test("official children install the latest compatible parent and reuse an intact
   await f.apply("surf");
   await writeFile(join(f.root, "plugins/surf/index.ts"), "// locally changed");
   assert.equal((await plan()).action, null);
+});
+
+test("host 0.1.1 installs and reuses the 0.1.0 registry's parent without selecting a future or capped build", async t => {
+  const f = await fixture(t, false, "0.22.0", "0.23.0");
+  const [parent, child] = f.packages.map(p => p.entry);
+  for (const [version, hostRange] of [["0.24.0", "0.1.2"], ["0.25.0", ">=0.1.0 <0.1.1"]]) {
+    const build = (await f.createParent(version)).entry.verifiedReleases[0];
+    parent.verifiedReleases.push({ ...build, hostRange });
+  }
+  const LocalManager = await isolatedManager(f.root, [parent, child], [], "0.1.1");
+  const manager = new LocalManager(f.runtime);
+  const plan = async (id: string) => (await manager.list()).plugins.find(p => p.id === id)!;
+  assert.deepEqual((await plan("bilibili")).steps.map(s => s.version), ["0.23.0", "1.0.0"]);
+  await manager.apply(await plan("surf"));
+  const reuse = await plan("bilibili");
+  assert.deepEqual(reuse.steps.map(s => [s.action, s.version]), [["reuse", "0.23.0"], ["install", "1.0.0"]]);
+  await manager.apply(reuse);
+  assert.equal(f.runtime.records.get("surf/bilibili")?.status, "active");
 });
 
 test("a shared official parent satisfies the child's floor and other consumers' exact pins in either dependency order", async t => {

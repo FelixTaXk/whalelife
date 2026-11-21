@@ -128,10 +128,9 @@ export async function startWeb(config: any, services: any, runtime: any) {
       res.end(JSON.stringify(value));
     };
     try {
+      if (services.hostStarting?.()) return send(503, { error: "本体正在启动，请稍后重试。" });
       if (!allowedOrigin(req)) return send(403, { error: "来源无效" });
       const pathname = req.url?.split("?", 1)[0] ?? "";
-      if (services.hostStarting?.() && (pathname.startsWith("/api/") || pathname.startsWith("/plugins/")))
-        return send(503, { error: "本体更新正在验证启动，请稍后重试。" });
       if (req.method === "GET" && pathname === "/market") {
         res.writeHead(308, { Location: "/market/" + req.url!.slice(pathname.length) });
         return res.end();

@@ -10,7 +10,7 @@
 
 | 插件 | 收录版本 | 作者 | 用途 | 必需插件 | 相关链接 |
 | --- | --- | --- | --- | --- | --- |
-| QQ | v0.22.0 | iinukami 和贡献者 | 在 QQ 私聊里延续 WhaleLife 的对话，和白名单好友收发消息。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-qq/blob/main/README.md#%E6%96%B0%E5%AE%89%E8%A3%85%E4%B8%8E-napcat-%E7%A6%BB%E7%BA%BF%E7%BB%84%E4%BB%B6>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-qq>) · [反馈](<https://github.com/iinukami/whalelife-plugin-qq/issues>) |
+| QQ | v0.23.0 | iinukami 和贡献者 | 在 QQ 私聊里延续 WhaleLife 的对话，和白名单好友收发消息。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-qq/blob/main/README.md#%E6%96%B0%E5%AE%89%E8%A3%85%E4%B8%8E-napcat-%E7%A6%BB%E7%BA%BF%E7%BB%84%E4%BB%B6>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-qq>) · [反馈](<https://github.com/iinukami/whalelife-plugin-qq/issues>) |
 | QQ 空间 | v0.5.2 | iinukami 和贡献者 | 浏览好友的空间动态，发表说说，并按白名单设置点赞、评论。 | QQ | [安装说明](<https://github.com/iinukami/whalelife-plugin-qzone/blob/main/README.md#%E6%9C%8D%E5%8A%A1%E8%BE%B9%E7%95%8C>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-qzone>) · [反馈](<https://github.com/iinukami/whalelife-plugin-qzone/issues>) |
 | 自主性 | v0.6.3 | iinukami 和贡献者 | 让伙伴记下未完成的念头和约定，在你允许的时段主动接续对话。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-autonomy/blob/main/README.md#%E5%BC%80%E5%8F%91%E4%B8%8E%E6%9E%84%E5%BB%BA>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-autonomy>) · [反馈](<https://github.com/iinukami/whalelife-plugin-autonomy/issues>) |
 | 图库 | v0.1.2 | iinukami 和贡献者 | 在本地收藏图片和表情，编辑描述与标签，按含义找回需要的那张图。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-gallery/blob/main/README.md#%E5%BC%80%E5%8F%91%E4%B8%8E%E6%9E%84%E5%BB%BA>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-gallery>) · [反馈](<https://github.com/iinukami/whalelife-plugin-gallery/issues>) |
@@ -42,7 +42,7 @@
 
 | 字段 | 说明 |
 | --- | --- |
-| `version`、`hostRange` | 插件 SemVer 版本与已验证的 WhaleLife 主程序兼容范围。只验证一个主程序版本时填写该版本。 |
+| `version`、`hostRange` | 插件版本与适用的 WhaleLife 正式版本。单写 `0.1.0` 表示最低实测宿主。可用 `>=0.1.0 <0.2.0` 或 `<=` 上界限制范围，用 `=0.1.0` 指定单一版本。 |
 | `platform`、`arch` | 适用系统和架构，使用 Node.js 的标识。 |
 | `dependencies` | 该发行版本依赖的插件标识到兼容范围的映射。 |
 | `sourceCommit`、`sha256` | 公开源码提交和对应安装包的 SHA-256。已有发布资产可另附 `assetUrl`。 |

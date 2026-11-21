@@ -56,7 +56,7 @@ const readme = [
   [
     "| 字段 | 说明 |",
     "| --- | --- |",
-    "| `version`、`hostRange` | 插件 SemVer 版本与已验证的 WhaleLife 主程序兼容范围。只验证一个主程序版本时填写该版本。 |",
+    "| `version`、`hostRange` | 插件版本与适用的 WhaleLife 正式版本。单写 `0.1.0` 表示最低实测宿主。可用 `>=0.1.0 <0.2.0` 或 `<=` 上界限制范围，用 `=0.1.0` 指定单一版本。 |",
     "| `platform`、`arch` | 适用系统和架构，使用 Node.js 的标识。 |",
     "| `dependencies` | 该发行版本依赖的插件标识到兼容范围的映射。 |",
     "| `sourceCommit`、`sha256` | 公开源码提交和对应安装包的 SHA-256。已有发布资产可另附 `assetUrl`。 |",

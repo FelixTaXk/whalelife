@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { reviewedCommunityEntries } from "../../core/community-reviews.ts";
+import { parseHostRange } from "../../core/package-host-range.ts";
 
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
 const context = { window: {}, URL };
@@ -76,6 +77,7 @@ for (const [index, plugin] of manifest.plugins.entries()) {
       assert.ok(typeof release[key] === "string" && release[key].trim(), plugin.id + ": missing " + key);
     }
     assert.match(release.sourceCommit, /^[a-f0-9]{40}$/);
+    assert.ok(parseHostRange(release.hostRange), plugin.id + ": invalid hostRange");
     assert.match(release.sha256, /^[a-f0-9]{64}$/);
     assert.ok(!hashes.has(release.sha256), "Duplicate official asset");
     hashes.add(release.sha256);

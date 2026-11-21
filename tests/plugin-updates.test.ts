@@ -35,10 +35,11 @@ function serve(t: TestContext, replies: Map<string, unknown>) {
 }
 
 test("updates compare local installations to compatible verified packages or public author releases without disclosing them", async t => {
-  const newest = asset("1.10.0");
+  const newest = { ...asset("1.10.0"), hostRange: "0.0.9" };
   const publicEntries = [{ ...child, verifiedReleases: [
     asset("1.9.0"), newest, { ...asset("3.0.0"), recognitionOnly: true }, { ...asset("4.0.0"), platform: "other" },
     { ...asset("5.0.0"), arch: "other" }, { ...asset("6.0.0"), hostRange: "other" },
+    { ...asset("6.1.0"), hostRange: "99.0.0" }, { ...asset("6.2.0"), hostRange: ">=0.0.1 <" + host },
     { ...asset("7.0.0"), delivery: "inventory" }, { ...asset("8.0.0"), inventorySha256: "invalid" },
     { ...asset("9.0.0"), assetUrl: "https://example.net/download" }, asset("20.0.0-pre.1")
   ] }];
@@ -135,4 +136,17 @@ test("community checks honor the author's stable Release, full local ID, current
     await make().list(installed, unrecognized);
   }
   assert.ok(requests.every(r => [catalogURL, registryURL, latestURL("color-note")].includes(r.address)));
+});
+
+test("community notices respect reviewed host and platform restrictions on the author's latest release", async t => {
+  const latest = "2.0.0", replies = new Map<string, unknown>([[latestURL(author.id), stable("v" + latest)]]);
+  serve(t, replies);
+  const release = { version: latest, hostRange: "0.0.9", platform: "any", arch: "any" };
+  for (const [review, expected] of [
+    [release, true], [{ ...release, hostRange: "99.0.0" }, false], [{ ...release, hostRange: "=0.0.9" }, false],
+    [{ ...release, platform: "unavailable" }, false], [{ ...release, arch: "unavailable" }, false],
+  ] as const) {
+    replies.set(catalogURL, { ...catalog, community: [{ ...author, verifiedReleases: [review] }] });
+    assert.equal((await make().list([installed[1]], unrecognized)).updates.length, Number(expected));
+  }
 });

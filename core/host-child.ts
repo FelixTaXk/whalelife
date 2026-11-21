@@ -28,12 +28,18 @@ async function start() {
     else process.exit(1); // No initialized application can drain a partial startup.
   };
   process.on("disconnect", stop);
-  process.on("message", (packet: any) => {
+  process.on("message", async (packet: any) => {
     if (packet?.type === "host-stop") stop();
     if ((packet?.type === "host-probe" || packet?.type === "host-serving") && !closing && app) {
-      const plugins = activePlugins();
-      if (packet.type === "host-serving" && Array.isArray(packet.required) && packet.required.every((id: string) => plugins.includes(id))) serving = true;
-      process.send?.({ type: "host-confirmed", id: packet.id, version, plugins });
+      try {
+        if (mode === "trial") {
+          if (packet.type === "host-serving") throw Error("预检进程不能接管服务");
+          await app.runtime.checkInstalledPlugins(packet.required);
+        } else if (packet.type === "host-serving") serving = true;
+        if (!closing) process.send?.({ type: "host-confirmed", id: packet.id, version, plugins: activePlugins() });
+      } catch (error: any) {
+        if (!closing) process.send?.({ type: "host-confirmed", id: packet.id, version, plugins: [], error: error.message });
+      }
     }
     if (packet?.type === "host-activation-error") {
       activation?.reject(Error(String(packet.error)));
@@ -46,7 +52,7 @@ async function start() {
   const manifest = JSON.parse(await readFile(join(program, "package.json"), "utf8"));
   version = manifest.version;
   const load = (file: string) => import(pathToFileURL(join(program, "core", file)).href);
-  const { boot: bootVersion } = await load("index.ts");
+  const candidate = await load("index.ts");
   const { HostUpdates } = await load("host-updates.ts");
   const updates = new HostUpdates(root, manifest.version, (version: string) => {
     if (!serving || closing || !app || !process.connected) throw Error("本体正在启动或关闭，请稍后确认更新");
@@ -58,7 +64,10 @@ async function start() {
       });
     });
   });
-  app = await bootVersion(root, updates, () => !serving);
+  if (mode === "trial") {
+    if (typeof candidate.prepareHostTrial !== "function") throw Error("新版程序缺少安全预检入口，已取消更新");
+    app = await candidate.prepareHostTrial(root, updates, () => true);
+  } else app = await candidate.boot(root, updates, () => !serving);
   shutdown = installProcessLifecycle(app!);
   process.send!({ type: "host-ready", version: manifest.version, plugins: activePlugins() });
 }

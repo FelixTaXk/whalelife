@@ -25,44 +25,101 @@ export interface HostUpdateState {
   active: string | null;
   pending: string | null;
   phase?: "preparing" | "trial" | "handover";
+  // Older trials booted real plugins and may already have delivered external work.
+  preflightOnly?: true;
   delivery?: { previous: string | null; plugins: string[] };
   lastResult: { status: Outcome; version: string; message: string; at: string } | null;
 }
-export async function readHostUpdateState(root: string): Promise<HostUpdateState> {
-  const path = join(hostUpdateDirectory(root), "state.json");
+function parseState(raw: string): HostUpdateState {
+  const s = JSON.parse(raw);
+  if (s?.windowsJournal === true) throw Error("缺少本体更新事务数据库，请保留现有资料与快照，核对 state.sqlite 后重启。");
+  if (!s || !(s.active === null || validVersion(s.active)) ||
+    !(s.pending === null || (validVersion(s.pending) && ["preparing", "trial", "handover"].includes(s.phase))) ||
+    (s.delivery !== undefined && !(s.pending === null && validVersion(s.active) && s.delivery &&
+      (s.delivery.previous === null || validVersion(s.delivery.previous)) &&
+      Array.isArray(s.delivery.plugins) && s.delivery.plugins.every((id: unknown) => typeof id === "string"))) ||
+    !(s.lastResult === null || (s.lastResult && validVersion(s.lastResult.version) &&
+      ["updated", "failed", "rolled-back"].includes(s.lastResult.status) &&
+      typeof s.lastResult.message === "string" && typeof s.lastResult.at === "string")))
+    throw Error("本体更新状态无效，请检查状态文件");
+  return s;
+}
+async function readJSON(dir: string) {
+  const path = join(dir, "state.json");
   try {
-    if (!await directoryAt(root, base)) return { active: null, pending: null, lastResult: null };
     const stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) throw Error("本体状态文件异常");
-    const s = JSON.parse(await readFile(path, "utf8"));
-    if (!s || !(s.active === null || validVersion(s.active)) ||
-      !(s.pending === null || (validVersion(s.pending) && ["preparing", "trial", "handover"].includes(s.phase))) ||
-      (s.delivery !== undefined && !(s.pending === null && validVersion(s.active) && s.delivery &&
-        (s.delivery.previous === null || validVersion(s.delivery.previous)) &&
-        Array.isArray(s.delivery.plugins) && s.delivery.plugins.every((id: unknown) => typeof id === "string"))) ||
-      !(s.lastResult === null || (s.lastResult && validVersion(s.lastResult.version) &&
-        ["updated", "failed", "rolled-back"].includes(s.lastResult.status) &&
-        typeof s.lastResult.message === "string" && typeof s.lastResult.at === "string")))
-      throw Error("本体更新状态无效，请检查状态文件");
-    return s;
+    return parseState(await readFile(path, "utf8"));
   } catch (error: any) {
     if (error.code === "ENOENT") return { active: null, pending: null, lastResult: null };
     throw error;
   }
 }
+// Windows does not provide POSIX directory fsync for a replaced JSON file. Keep
+// the decision in a FULL-sync SQLite transaction and mirror it for older programs.
+async function windowsJournal(dir: string, create: boolean) {
+  const path = join(dir, "state.sqlite");
+  const stat = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+  if (!stat && (!create || process.platform !== "win32")) return;
+  if (stat && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)) throw Error("本体更新事务数据库无效");
+  const { DatabaseSync } = await import("node:sqlite");
+  if (!stat) {
+    const initial = await readJSON(dir);
+    const tmp = join(dir, "state-" + randomUUID() + ".sqlite.tmp");
+    try {
+      const first = new DatabaseSync(tmp);
+      try {
+        first.exec("PRAGMA synchronous=EXTRA; BEGIN IMMEDIATE; CREATE TABLE host_state (id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL)");
+        first.prepare("INSERT INTO host_state VALUES (1, ?)").run(JSON.stringify(initial));
+        first.exec("COMMIT");
+      } finally { first.close(); }
+      // Publish only a complete database. A crash before this rename leaves the old
+      // JSON authoritative and a later launch can start the migration again.
+      await rename(tmp, path);
+    } finally { await unlink(tmp).catch((e) => { if (e.code !== "ENOENT") throw e; }); }
+  }
+  const db = new DatabaseSync(path);
+  try {
+    db.exec("PRAGMA busy_timeout=5000; PRAGMA synchronous=EXTRA");
+    return db;
+  } catch (error) { db.close(); throw error; }
+}
+export async function readHostUpdateState(root: string): Promise<HostUpdateState> {
+  const dir = await directoryAt(root, base);
+  if (!dir) return { active: null, pending: null, lastResult: null };
+  const db = await windowsJournal(dir, false);
+  if (!db) return readJSON(dir);
+  try {
+    const record = db.prepare("SELECT state FROM host_state WHERE id=1").get();
+    if (typeof record?.state !== "string") throw Error("本体更新事务记录缺失，请保留现场并核对 state.sqlite");
+    return parseState(record.state);
+  } finally { db.close(); }
+}
 async function save(root: string, state: HostUpdateState) {
   const dir = (await directoryAt(root, base, true))!;
   const tmp = join(dir, "state-" + randomUUID() + ".tmp");
+  const db = await windowsJournal(dir, true);
   try {
+    if (db) {
+      db.exec("BEGIN IMMEDIATE");
+      if (db.prepare("UPDATE host_state SET state=? WHERE id=1").run(JSON.stringify(state)).changes !== 1)
+        throw Error("本体更新事务记录缺失");
+    }
     const out = await open(tmp, "wx", 0o600);
-    try { await out.writeFile(JSON.stringify(state)); await out.sync(); }
+    try { await out.writeFile(JSON.stringify(db ? { ...state, windowsJournal: true } : state)); await out.sync(); }
     finally { await out.close(); }
     await rename(tmp, join(dir, "state.json"));
-    if (process.platform !== "win32") {
+    if (db) db.exec("COMMIT");
+    else {
       const folder = await open(dir, "r");
       try { await folder.sync(); } finally { await folder.close(); }
     }
-  } finally { await unlink(tmp).catch((e) => { if (e.code !== "ENOENT") throw e; }); }
+  } finally {
+    db?.close(); // Also rolls back an incomplete transaction if the JSON mirror failed.
+    await unlink(tmp).catch((e) => { if (e.code !== "ENOENT") throw e; });
+  }
 }
 
 // Kernel-owned locks disappear with the owner even if it crashes. No PID is used to signal or kill a process.
@@ -105,7 +162,7 @@ export async function holdHostLock(root: string, role: "manager" | "worker", wai
   }
 }
 
-type Health = { version: string; plugins: string[] };
+type Health = { version: string; plugins: string[]; error?: string };
 type Activation = { version: string; plugins: string[] };
 const childEntry = fileURLToPath(new URL("./host-child.ts", import.meta.url));
 function deferred<T>() {
@@ -162,7 +219,10 @@ function launch(root: string, program: string, trial: boolean) {
 const result = (status: Outcome, version: string, message: string) => ({ status, version, message, at: new Date().toISOString() });
 async function recover(root: string, state: HostUpdateState, message: string) {
   if (!state.pending) return state;
-  if (state.phase === "trial" || state.phase === "handover") await restoreHostBackup(root);
+  if (state.phase === "trial" || state.phase === "handover") {
+    if (state.preflightOnly !== true) throw Error("旧启动器的更新中断，插件可能已执行外部操作。请先复制整个实例目录，核对现有插件投递记录及 .whalelife-updates/backup；确认要保留的程序和资料后再恢复启动。现场、旧快照和 state.json 均已保留。");
+    await restoreHostBackup(root);
+  }
   const restored: HostUpdateState = { active: state.active, pending: null, lastResult: result("rolled-back", state.pending, message) };
   await save(root, restored);
   return restored;
@@ -185,10 +245,9 @@ export async function runHostSupervisor(instanceRoot: string, options: { healthT
     let state = await readHostUpdateState(root);
     let previousPlugins: string[] = [];
     if (state.delivery) {
-      // The worker confirmed that it could take over, but an orderly handover was never
-      // recorded. Retry its health check without discarding or replacing the rollback image.
-      previousPlugins = state.delivery.plugins;
-      state = { active: state.delivery.previous, pending: state.active, phase: "trial", lastResult: null };
+      // In the older protocol this selected worker may already have accepted writes.
+      // Treat an outstanding acknowledgement as committed, including if its next boot fails.
+      state = { active: state.active, pending: null, lastResult: result("updated", state.active!, "沿用上次接管选定的版本，已保留现有资料") };
       await save(root, state);
     } else {
       state = await recover(root, state, "上次更新中断，已恢复之前的版本");
@@ -212,49 +271,39 @@ export async function runHostSupervisor(instanceRoot: string, options: { healthT
         if (!health) throw Error(reason || child.error());
         if (version !== null && health.version !== version) throw Error("启动的程序版本和确认的更新版本不同");
         if (trial) {
-          // A full boot and a separate live check catch a child or a plugin failing just after ready.
+          // The trial runs core startup with all plugin code and user APIs gated.
           if (await Promise.race([child.exit.then(() => true), delay(500, false)])) throw Error("新版启动后立即退出");
           const checked = await child.health(false);
           if (!checked || checked.version !== version) throw Error("新版未通过启动后的健康检查");
-          const active = new Set(checked.plugins);
-          const missing = previousPlugins.filter(id => !active.has(id));
-          if (missing.length) throw Error("原先运行的插件未能启动：" + missing.join("、"));
+          if (checked.error) throw Error(checked.error);
           if (stopping) throw Error("更新在启动检查期间中断");
           state = { ...state, phase: "handover" };
           await save(root, state);
           // Keep public traffic gated during the final readiness round trip. Interruption here
           // leaves the previous active version and its complete rollback snapshot in the journal.
           const armed = await child.health(false, previousPlugins);
-          if (!armed || armed.version !== version || previousPlugins.some(id => !armed.plugins.includes(id)) || stopping)
+          if (armed?.error) throw Error(armed.error);
+          if (!armed || armed.version !== version || stopping)
             throw Error("新版未能确认接管服务");
-          const updated: HostUpdateState = { active: version, pending: null, lastResult: result("updated", version!, "新版已启动，原有插件检查通过") };
-          const delivering: HostUpdateState = { ...updated, delivery: { previous: state.active, plugins: previousPlugins } };
-          await save(root, delivering);
-          // Selection is durable. A separate command opens traffic. Its receipt is journalled
-          // before the old backup is cleaned, including when resuming after a parent crash.
-          const serving = await child.health(true, previousPlugins);
-          if (!serving || serving.version !== version || previousPlugins.some(id => !serving.plugins.includes(id))) {
-            await save(root, state);
-            throw Error("新版未能接管服务，已撤回版本切换");
-          }
-          // Traffic is already open. If disk writes fail now, keep the verified version serving
-          // and retain its backup. A later request or restart can finish recording delivery.
-          try { await save(root, updated); state = updated; }
-          catch (error: any) { state = delivering; writeLogOutput("接管确认暂未写入，已保留备份：" + error.message, "stderr"); }
-        } else if (!await child.health(true)) throw Error("本体启动后未响应健康检查");
-        if (state.lastResult && !state.delivery) await cleanBackup();
+          child.stop();
+          const status = await child.exit;
+          child = undefined;
+          if (status !== 0 || stopping) throw Error("新版预检未正常结束");
+          // No worker is running. Make the selection irreversible before forking a
+          // process capable of importing installed plugins or serving real requests.
+          const selected: HostUpdateState = { active: version, pending: null, lastResult: result("updated", version!, "新版核心及原有插件文件已通过预检，已切换版本") };
+          await save(root, selected);
+          state = selected;
+          continue;
+        }
+        if (!await child.health(true)) throw Error("本体启动后未响应健康检查");
+        if (state.lastResult) await cleanBackup();
         let next: Activation | null;
         for (;;) {
           next = await child.next();
           if (!next || stopping) { if (stopping) child.stop(); return await child.exit; }
           try {
             if (next.version === health.version) throw Error("本体已运行该版本");
-            if (state.delivery) {
-              const { delivery: _finished, ...record } = state;
-              await save(root, record);
-              state = record;
-              await cleanBackup();
-            }
             const preparing: HostUpdateState = { ...state, pending: next.version, phase: "preparing" };
             await save(root, preparing);
             state = preparing;
@@ -268,7 +317,7 @@ export async function runHostSupervisor(instanceRoot: string, options: { healthT
         try {
           if (status !== 0 || stopping) throw Error("原实例未正常结束，已取消切换");
           await prepareHostBackup(root);
-          const testing: HostUpdateState = { ...state, phase: "trial" };
+          const testing: HostUpdateState = { ...state, phase: "trial", preflightOnly: true };
           await save(root, testing);
           state = testing;
         } catch (error: any) {
@@ -288,6 +337,11 @@ export async function runHostSupervisor(instanceRoot: string, options: { healthT
         child = undefined;
       }
       if (!trial) throw Error(reason);
+      // A disk error at commit can have an uncertain result. Only the durable
+      // journal may authorize restoration, even while the same manager is alive.
+      state = await readHostUpdateState(root);
+      if (state.pending === null && state.active === version) continue;
+      if (state.pending !== version) throw Error("更新事务记录与当前预检不符，已保留现场：" + reason);
       state = await recover(root, state, reason);
       await cleanBackup();
     }

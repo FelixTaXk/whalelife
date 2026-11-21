@@ -3,8 +3,9 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import { readFileSync } from "node:fs";
+import { compatibleHostFloor } from "./package-host-range.ts";
 
-type Entry = { id: string; repository: string };
+type Entry = { id: string; repository: string; verifiedReleases?: Metadata[] };
 type Installed = { id: string; version?: string; builtin?: boolean; repository?: unknown };
 type Recognition = { plugins: { runtimeId: string; installedVersion: string | null; installed: boolean }[]; recognizedRuntimeIds: string[] };
 type Notice = Entry & { runtimeId: string; source: "official" | "community"; installedVersion: string; latestVersion: string; url: string };
@@ -81,7 +82,7 @@ function verifiedTarget(entry: Metadata, installed: string, host: string, platfo
   let best: Target | undefined;
   for (const release of Array.isArray(entry.verifiedReleases) ? entry.verifiedReleases : []) {
     if (!release || release.recognitionOnly || release.delivery !== "github-release" || release.platform !== platform ||
-        release.arch !== arch || release.hostRange !== host || !newer(release.version, best?.version ?? installed) ||
+        release.arch !== arch || !compatibleHostFloor(release.hostRange, host) || !newer(release.version, best?.version ?? installed) ||
         !/^[0-9a-f]{64}$/.test(release.sha256) || !/^[0-9a-f]{64}$/.test(release.inventorySha256) ||
         !Number.isSafeInteger(release.sizeBytes) || release.sizeBytes <= 0) continue;
     const tag = "v" + release.version, asset = release.composition?.packagePart?.assetUrl ?? release.assetUrl;
@@ -165,6 +166,9 @@ export class PluginUpdates {
         await Promise.all(candidates.slice(i, i + 4).map(async ({ entry, path, version }) => {
           const target = authorTarget(entry, await this.read("https://api.github.com/repos/" + path + "/releases/latest"));
           if (!target || !newer(target.version, version)) return;
+          const reviewed = Array.isArray(entry.verifiedReleases) ? entry.verifiedReleases.filter(r => r?.version === target.version) : [];
+          if (reviewed.length && !reviewed.some(r => compatibleHostFloor(r.hostRange, this.host) &&
+              (r.platform === "any" || r.platform === process.platform) && (r.arch === "any" || r.arch === process.arch))) return;
           updates.push({ id: entry.id, runtimeId: entry.id, repository: entry.repository, installedVersion: version,
             latestVersion: target.version, url: target.url, source: "community" });
         }));

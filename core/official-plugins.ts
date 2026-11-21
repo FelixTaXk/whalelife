@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { inspectOfficialFiles, installOfficialFiles, uninstallOfficialFiles } from "./official-package-files.ts";
 import { ensureOfficialPackage } from "./official-package-download.ts";
+import { compareVersions as compare, compatibleHostFloor, stableVersion } from "./package-host-range.ts";
 import type { Runtime } from "./runtime.ts";
 import { readCommunityInstalls, type CommunityInstallReceipt } from "./community-install-receipts.ts";
 
@@ -33,15 +34,6 @@ const registry: { plugins: Entry[]; installedBuilds?: InstalledBuild[] } = read(
 const cards: Card[] = read("../market/catalog.json").official;
 const hostVersion: string = read("../package.json").version;
 type Requirement = { version: string; minimum: boolean };
-const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-function compare(left: string, right: string) {
-  const a = stableVersion.exec(left), b = stableVersion.exec(right);
-  if (!a || !b) return Number(Boolean(a)) - Number(Boolean(b));
-  for (let i = 1; i <= 3; i++) {
-    if (a[i] !== b[i]) return a[i].length - b[i].length || (a[i] < b[i] ? -1 : 1);
-  }
-  return 0;
-}
 const satisfies = (version: string, required: Requirement) => version === required.version ||
   (required.minimum && stableVersion.test(required.version) && compare(version, required.version) > 0);
 
@@ -94,16 +86,16 @@ export class PluginPackages {
     const record = runtime.records.get(pathId);
     const releases = entry.verifiedReleases.filter(r => (r.platform === process.platform || (entry.community && r.platform === "any")) &&
       (r.arch === process.arch || (entry.community && r.arch === "any")))
-      .sort((a, b) => compare(b.version, a.version));
-    const eligible = releases.filter(r => !r.recognitionOnly && r.hostRange === hostVersion);
+      .sort((a, b) => compare(b.version, a.version) || compare(
+        compatibleHostFloor(b.hostRange, hostVersion) ?? "", compatibleHostFloor(a.hostRange, hostVersion) ?? ""));
+    const eligible = releases.filter(r => !r.recognitionOnly && compatibleHostFloor(r.hostRange, hostVersion));
     const target = eligible[0];
     const item: Item = { entry, pathId, eligible, target, installedVersion: record?.manifest.version, installed: !!record,
       enabled: runtime.pluginState.enabled(pathId), active: record?.status === "active", reason: "" };
-    const candidates = record ? releases.filter(r => r.version === item.installedVersion)
-      .sort((a, b) => Number(b.hostRange === hostVersion) - Number(a.hostRange === hostVersion)) : target ? [target] : [];
+    const candidates = record ? releases.filter(r => r.version === item.installedVersion) : target ? [target] : [];
     if (!candidates.length) {
       item.reason = record ? "当前安装版本未匹配已验证的发行包，无法确认程序文件归属。"
-        : releases.length ? "当前 WhaleLife 没有兼容版本，请先升级 WhaleLife。" : "此平台还没有验证过的发行包。";
+        : releases.length ? "此插件没有适用于当前 WhaleLife 版本的发行包。" : "此平台还没有验证过的发行包。";
       return item;
     }
     if (entry.community && !record) {
@@ -173,7 +165,7 @@ export class PluginPackages {
           }
           const release = part.installed ? part.existing : part.eligible.find(r => required.every(rule => satisfies(r.version, rule)));
           if (part.reason || !release) throw Error(part.entry.name + "：" + (part.reason || "没有同时符合依赖要求的已验证发行包。"));
-          if (required.some(r => r.minimum) && release.hostRange !== hostVersion)
+          if (part.installed && !compatibleHostFloor(release.hostRange, hostVersion))
             throw Error(part.entry.name + "的已安装版本尚未验证适用于当前 WhaleLife。");
           if (part.installed && part.enabled && !part.active) throw Error("请先在插件管理中恢复" + part.entry.name + "，再重试。");
           add(part, !part.installed ? "install" : part.enabled ? "reuse" : "enable", release);
