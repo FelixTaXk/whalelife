@@ -215,7 +215,8 @@ export function renderPlugins(app) {
   </section>
   <footer class="community-plugin-notice">
     <strong>社区插件免责声明</strong>
-    <p>社区插件由第三方作者开发和维护。商店审核仅覆盖所测版本和环境，WhaleLife 不保证社区插件的安全性或稳定性。遇到问题，可在商店的插件详情中点「反馈问题」联系作者。</p>
+    <p>社区插件由第三方作者自由创作并维护。官方插件延续 WhaleLife 主干的设计风格和操作习惯，社区插件的使用体验可能与主干有所不同，请在安装前自行斟酌。</p>
+    <p>商店审核仅覆盖所测版本和环境，WhaleLife 不保证社区插件的安全性或稳定性。遇到问题，可在商店的插件详情中点「反馈问题」联系作者。</p>
   </footer>`;
 }
 export function bindPlugins(app) {
