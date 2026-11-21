@@ -34,6 +34,13 @@ const pages = {
   logs: { name: "运行日志", render: renderLogs, bind: bindLogs },
 };
 const $ = (id) => document.getElementById(id);
+const pinStorageKey = "whalelife.sidebar.pinnedPlugins";
+function readPinnedPlugins() {
+  try {
+    const value = JSON.parse(localStorage.getItem(pinStorageKey) || "[]");
+    return Array.isArray(value) ? [...new Set(value.filter(id => typeof id === "string"))] : [];
+  } catch { return []; }
+}
 const storeRoute = () => /^#market(?:\/([a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*))?$/.exec(location.hash);
 document
   .querySelectorAll("[data-icon]")
@@ -53,6 +60,7 @@ class ConsoleApp {
   sessionSync = 0;
   sessionReady = false;
   sessionChanging = false;
+  pinnedPlugins = readPinnedPlugins();
   state = {
     page: "overview",
     config: null,
@@ -69,6 +77,33 @@ class ConsoleApp {
   };
   constructor() {
     this.state.page = this.pageFromHash();
+    const pluginNav = $("extension-nav");
+    pluginNav.addEventListener("mousedown", event => {
+      // Keep the plugin editor focused. Moving focus out of its iframe would refresh the host.
+      if (event.button === 0 && document.activeElement?.tagName === "IFRAME" && event.target.closest("[data-pin-plugin]")) {
+        event.preventDefault();
+      }
+    });
+    pluginNav.addEventListener("click", event => {
+      const pin = event.target.closest("[data-pin-plugin]");
+      if (!pin) return;
+      const restoreFocus = pin === document.activeElement;
+      const page = pin.previousElementSibling.dataset.page;
+      const id = pin.dataset.pinPlugin;
+      const pins = this.pinnedPlugins;
+      this.pinnedPlugins = pins.includes(id) ? pins.filter(p => p !== id) : [id, ...pins];
+      try { localStorage.setItem(pinStorageKey, JSON.stringify(this.pinnedPlugins)); }
+      catch { /* The preference still works for this tab when storage is unavailable. */ }
+      this.renderNavigation();
+      if (restoreFocus) {
+        pluginNav.querySelector(`[data-page="${CSS.escape(page)}"] + button`)?.focus({ preventScroll: true });
+      }
+    });
+    window.addEventListener("storage", event => {
+      if (event.key !== null && event.key !== pinStorageKey) return;
+      this.pinnedPlugins = readPinnedPlugins();
+      if (this.authenticated) this.renderNavigation();
+    });
     window.addEventListener("hashchange", () => {
       this.storeNavigating = false;
       const route = storeRoute();
@@ -375,22 +410,28 @@ class ConsoleApp {
       button.disabled = false;
     }
   }
-  render(preserveExtension = false) {
-    if ($("store-drawer").open) return;
-    if (!this.state.config || !this.state.status) return;
-    const page = pages[this.state.page] || extensionPage(this);
-    const navigation = extensionNavigation(this.state.status);
-    $("extension-nav").innerHTML = navigation;
-    $("extension-nav-group").hidden = !navigation;
-    $("breadcrumb").textContent = page.name;
-    document.title = page.name + " · WhaleLife";
+  renderNavigation() {
+    const navigation = extensionNavigation(this.state.status, this.pinnedPlugins);
+    if (navigation !== this.navigationMarkup) {
+      $("extension-nav").innerHTML = navigation;
+      $("extension-nav-group").hidden = !navigation;
+      this.navigationMarkup = navigation;
+    }
     const active = extensionActiveKey(this.state.status, this.state.page);
-    document.querySelectorAll("[data-page]").forEach((a) => {
+    $("sidebar").querySelectorAll("[data-page]").forEach((a) => {
       a.classList.toggle("active", a.dataset.page === active);
       if (a.dataset.page === active)
         a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
     });
+  }
+  render(preserveExtension = false) {
+    if ($("store-drawer").open) return;
+    if (!this.state.config || !this.state.status) return;
+    const page = pages[this.state.page] || extensionPage(this);
+    this.renderNavigation();
+    $("breadcrumb").textContent = page.name;
+    document.title = page.name + " · WhaleLife";
     const count = availableModels(this.state.config).length;
     $("nav-model-count").textContent = count;
     $("nav-model-count").title = `${count} 个已启用且配置有效的模型`;

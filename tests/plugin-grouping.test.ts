@@ -41,6 +41,24 @@ test("opt-in groups cards and sidebar while retaining real counts, parent featur
   assert.deepEqual(status, before, "rendering cannot mutate plugin lifecycle or page registrations");
 });
 
+test("pinning sorts only the sidebar, preserving grouped entries and page order within each plugin", () => {
+  const status = fixture();
+  status.pluginPages.push({ owner: "qq-extra", title: "第二个页面", path: "/plugins/qq-extra/more", navigation: true });
+  const before = structuredClone(status);
+  const pinned = ["missing", "qq-extra", "qq"];
+  const links = (pins: string[]) => [...ui.extensionNavigation(status, pins).matchAll(/data-page="([^"]+)"/g)].map(match => match[1]);
+  const group = ui.pluginKey("qq");
+  const first = ui.extensionKey("/plugins/qq-extra/settings");
+  const second = ui.extensionKey("/plugins/qq-extra/more");
+  assert.deepEqual(links(pinned), [first, second, group]);
+  assert.deepEqual(links([]), [group, first, second]);
+  assert.deepEqual(status, before);
+  status.plugins.find((p: any) => p.id === "qq-extra").status = "stopped";
+  assert.deepEqual(links(pinned), [group]);
+  status.plugins.find((p: any) => p.id === "qq-extra").status = "active";
+  assert.deepEqual(links(pinned), [first, second, group]);
+});
+
 test("legacy manifests keep independent cards, navigation, settings links and plain pages", () => {
   for (const value of [undefined, false]) {
     const status = fixture(false); if (value === false) status.plugins[0].console = { groupChildren: false };

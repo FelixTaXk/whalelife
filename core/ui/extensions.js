@@ -123,13 +123,24 @@ export function extensionPage(app) {
     ? `<div class="page-heading"><div><h1>${e(entry.title)}</h1><p>${e(entry.owner)}</p></div><a class="btn" href="#plugins">返回插件管理</a></div><section class="panel extension-panel"><iframe class="extension-frame" title="${e(entry.title)}" src="${e(entry.path)}"></iframe></section>`
     : '<div class="panel empty">插件已停用或页面已移除。<a href="#plugins">返回插件管理</a></div>' };
 }
-export function extensionNavigation(status) {
-  const seen = new Set();
-  return extensionEntries(status).filter(p => p.navigation).map(p => {
-    const root = pluginGroup(status, p.owner), key = root ? pluginKey(root.id) : extensionKey(p.path);
-    if (root && seen.has(key)) return "";
+export function extensionNavigation(status, pinned = []) {
+  const order = new Map(pinned.map((id, index) => [id, index]));
+  const seen = new Set(), rows = [];
+  for (const page of extensionEntries(status)) {
+    if (!page.navigation) continue;
+    const root = pluginGroup(status, page.owner);
+    const key = root ? pluginKey(root.id) : extensionKey(page.path);
+    if (seen.has(key)) continue;
     seen.add(key);
-    return `<a href="#${key}" data-page="${key}">${icon("puzzle")}<span>${e(root?.name || p.title)}</span></a>`;
+    rows.push({ key, id: root?.id || page.owner, title: root?.name || page.title });
+  }
+  // Keep the host's registry order intact when sorting this sidebar.
+  const rank = row => order.get(row.id) ?? pinned.length;
+  return rows.sort((left, right) => rank(left) - rank(right)).map(({ key, id, title }) => {
+    const pressed = order.has(id);
+    const label = e((pressed ? "取消置顶" : "置顶") + "「" + title + "」");
+    return `<div class="plugin-nav-row"><a href="#${e(key)}" data-page="${e(key)}">${icon("puzzle")}<span>${e(title)}</span></a>
+      <button type="button" class="plugin-nav-pin" data-pin-plugin="${e(id)}" aria-pressed="${pressed}" aria-label="${label}" title="${label}">${icon("pin")}</button></div>`;
   }).join("");
 }
 export function extensionSettings(status, owner) {

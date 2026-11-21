@@ -282,6 +282,37 @@ nav a.active:before {
   border-radius: 5px;
   margin-left: auto;
 }
+.plugin-nav-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px;
+}
+.plugin-nav-row a span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-nav-pin {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: #73798b;
+  background: transparent;
+}
+.plugin-nav-pin .icon { width: 15px; height: 15px; }
+.plugin-nav-pin:hover, .plugin-nav-pin[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.plugin-nav-pin[aria-pressed="true"] .icon { fill: currentColor; }
+@media (pointer: coarse) {
+  .plugin-nav-pin { width: 40px; height: 40px; }
+}
 .sidebar-bottom {
   margin-top: auto;
   border-top: 1px solid var(--line);

@@ -18,6 +18,7 @@ const paths = {
   terminal:
     '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  pin: '<path d="m16 3 5 5-2 1-4 4-.5 3.5-2 2-7-7 2-2L11 9l4-4zM9 15l-6 6"/>',
   arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
   back: '<path d="M19 12H5m5-5-5 5 5 5"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
