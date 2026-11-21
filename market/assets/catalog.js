@@ -42,7 +42,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "gallery",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "name": "图库",
       "author": "iinukami 和贡献者",
       "description": "在本地收藏图片和表情，编辑描述与标签，按含义找回需要的那张图。",
