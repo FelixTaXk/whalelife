@@ -209,6 +209,19 @@
           "bundledPluginIds": ["studio/image", "studio/promptkit", "studio/video"]
         }
       ]
+    },
+    {
+      "id": "thinking-space",
+      "version": "0.1.0",
+      "name": "思维空间",
+      "author": "SSSSmallSlimeSmile",
+      "description": "把多个插件的工具组合成可重复运行的技能，在技能库或画布中编辑和试跑。Windows x64 已验证，手动安装请下载提交 819abcf 的源码 ZIP。",
+      "repository": "https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space",
+      "installation": "https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space/blob/819abcf10c8614e5c2886241c3b4a8321cc3285b/README.md#二怎么装",
+      "feedback": "https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space/issues",
+      "dependencies": [],
+      "collected": "2026-11-21",
+      "stars": 0
     }
   ]
 }
