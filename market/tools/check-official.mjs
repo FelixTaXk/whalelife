@@ -113,6 +113,8 @@ for (const [index, plugin] of manifest.plugins.entries()) {
     assert.ok(release.dependencies && typeof release.dependencies === "object" && !Array.isArray(release.dependencies));
     for (const [dep, range] of Object.entries(release.dependencies)) {
       assert.ok(ids.includes(dep) && dep !== plugin.id && typeof range === "string" && range.trim());
+      if (dep === plugin.parentId)
+        assert.match(range, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, plugin.id + ": expected a minimum stable parent version");
     }
     assert.deepEqual(Object.keys(release.dependencies).sort(), [...plugin.requiredPlugins].sort());
   }

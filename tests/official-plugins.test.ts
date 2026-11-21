@@ -12,13 +12,13 @@ import { recordCommunityInstalls } from "../core/community-install-receipts.ts";
 import { startWeb } from "../core/web.ts";
 
 const hash = (b: Buffer) => createHash("sha256").update(b).digest("hex");
-async function fixture(t: TestContext, broken = false, required = "1.0.0") {
+async function fixture(t: TestContext, broken = false, required = "1.0.0", parentVersion = "1.0.0") {
   const root = await temporaryDirectory("whale-official-manager-");
   const cache = join(root, ".artifacts/official-packages");
   await mkdir(cache, { recursive: true });
-  const create = async (id: string, parentId: string | null, body: string) => {
+  const create = async (id: string, parentId: string | null, body: string, version = "1.0.0") => {
     const files = [
-      ["plugin.yaml", JSON.stringify({ id, name: id, version: "1.0.0", description: "fixture", depends: parentId ? [parentId] : [] })],
+      ["plugin.yaml", JSON.stringify({ id, name: id, version, description: "fixture", depends: parentId ? [parentId] : [] })],
       ["index.ts", body],
     ].map(([path, code]) => ({ path, bytes: Buffer.from(code) }));
     const header = { format: 1, files: files.map(f => ({ path: f.path, size: f.bytes.length, sha256: hash(f.bytes) })) };
@@ -26,11 +26,12 @@ async function fixture(t: TestContext, broken = false, required = "1.0.0") {
     const sha256 = hash(packed);
     await writeFile(join(cache, sha256 + ".wlpkg.gz"), packed);
     const entry = { id, name: id, repository: "", requiredPlugins: parentId ? [parentId] : [], parentId,
-      verifiedReleases: [{ version: "1.0.0", hostRange: "0.1.0", platform: process.platform, arch: process.arch, sha256,
+      verifiedReleases: [{ version, hostRange: "0.1.0", platform: process.platform, arch: process.arch, sha256,
         dependencies: parentId ? { [parentId]: required } : {} }] };
     return { entry, files, packed, inventory: Buffer.from(JSON.stringify(header) + "\n") };
   };
-  const parent = await create("surf", null, 'export function apply(ctx){ctx.provide("surf",{ ping(){return true} })}');
+  const createParent = (version: string) => create("surf", null, 'export function apply(ctx){ctx.provide("surf",{ ping(){return true} })}', version);
+  const parent = await createParent(parentVersion);
   const child = await create("bilibili", "surf", broken ? 'export function apply(){throw Error("test initialization failure")}' : "export function apply(){}");
   const runtime = new Runtime(root, { info() {}, warn() {}, error() {} } as any);
   t.after(() => runtime.bus.stop());
@@ -39,7 +40,7 @@ async function fixture(t: TestContext, broken = false, required = "1.0.0") {
   const manager = new OfficialPlugins(runtime, [parent.entry, child.entry]);
   const get = async (id: string) => (await manager.list()).plugins.find(p => p.id === id)!;
   const apply = async (id: string) => manager.apply(await get(id));
-  return { root, runtime, manager, get, apply, parentFiles: parent.files, packages: [parent, child] };
+  return { root, runtime, manager, get, apply, createParent, parentFiles: parent.files, packages: [parent, child] };
 }
 
 test("停用的社区插件仍保护其经审核的必需插件，重读安装记录不依赖在线目录", async t => {
@@ -148,6 +149,65 @@ test("install previews missing dependencies, rejects stale plans, and uninstalls
   assert.equal(f.runtime.records.get("surf").status, "active");
   assert.equal(f.runtime.records.has("surf/bilibili"), false);
   await f.apply("surf");
+});
+
+test("official children install the latest compatible parent and reuse an intact installed release above their floor", async t => {
+  const f = await fixture(t, false, "0.22.0", "0.22.0");
+  const releases = f.packages[0].entry.verifiedReleases;
+  const next = (await f.createParent("0.23.0")).entry.verifiedReleases[0];
+  releases.push(next);
+  const plan = () => f.get("bilibili");
+  releases.push((await f.createParent("0.9.0")).entry.verifiedReleases[0]);
+  releases.push((await f.createParent("2.0.0-rc.1")).entry.verifiedReleases[0]);
+  const fresh = await plan();
+  assert.deepEqual(fresh.steps.map(s => [s.action, s.version]), [["install", "0.23.0"], ["install", "1.0.0"]]);
+  await f.apply("surf");
+  await assert.rejects(f.manager.apply(fresh), /刷新/);
+  const later = (await f.createParent("1.0.0")).entry.verifiedReleases[0];
+  releases.push(later);
+  assert.deepEqual((await plan()).steps.map(s => [s.action, s.version]), [["reuse", "0.23.0"], ["install", "1.0.0"]]);
+  await f.runtime.action("surf", "stop");
+  const stopped = await plan();
+  assert.equal(stopped.steps[0].action, "enable");
+  await f.manager.apply(stopped);
+  assert.equal(f.runtime.records.get("surf/bilibili")?.status, "active");
+  await f.apply("bilibili");
+  next.hostRange = "0.2.0";
+  assert.equal((await plan()).action, null);
+  next.hostRange = "0.1.0";
+  await f.apply("surf");
+  assert.equal((await plan()).steps[0].version, "1.0.0");
+  later.hostRange = "0.2.0";
+  assert.equal((await plan()).steps[0].version, "0.23.0");
+  await f.apply("surf");
+  await writeFile(join(f.root, "plugins/surf/index.ts"), "// locally changed");
+  assert.equal((await plan()).action, null);
+});
+
+test("a shared official parent satisfies the child's floor and other consumers' exact pins in either dependency order", async t => {
+  const f = await fixture(t, false, "0.22.0", "0.22.0");
+  const [parent, child] = f.packages.map(p => p.entry);
+  parent.verifiedReleases.push((await f.createParent("0.23.0")).entry.verifiedReleases[0]);
+  // The community manager presents official children under their full runtime IDs.
+  const childId = "surf/bilibili";
+  const flatChild = { ...child, id: childId, parentId: null };
+  const pinned: Record<string, string> = { surf: "0.22.0", [childId]: "1.0.0" };
+  const consumer = { ...parent, id: "consumer", community: true, requiredPlugins: [childId, "surf"],
+    verifiedReleases: [{ ...parent.verifiedReleases[0], dependencies: pinned }] };
+  const manager = new OfficialPlugins(f.runtime, [parent, flatChild, consumer], [], [], {
+    async available() {}, async verify() {}, async installed() {},
+  });
+  const plan = async () => (await manager.list()).plugins.find(p => p.id === "consumer")!;
+  for (const order of [[childId, "surf"], ["surf", childId]]) {
+    consumer.requiredPlugins = order;
+    assert.deepEqual((await plan()).steps.map(s => [s.id, s.version]), [["surf", "0.22.0"], [childId, "1.0.0"], ["consumer", "0.22.0"]]);
+  }
+  pinned.surf = "0.21.0";
+  parent.verifiedReleases.push((await f.createParent("0.21.0")).entry.verifiedReleases[0]);
+  assert.equal((await plan()).action, null);
+  delete pinned.surf;
+  consumer.requiredPlugins = [childId];
+  assert.equal((await plan()).steps[0].version, "0.23.0");
 });
 
 test("failed activation removes fresh packages and restores an existing disabled or active dependency", async t => {
