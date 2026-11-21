@@ -25,6 +25,10 @@ node market/tools/review-community-icon.mjs sample "$url"
    node tools/build-community-package.mjs ../my-plugin ../release-output
    ```
 
+   如果插件 ID 是 `my-plugin`、`plugin.yaml` 中的版本是 `1.2.0`，生成的附件就是 `../release-output/my-plugin-1.2.0.wlpkg.gz`。终端同时输出 `filename`、`sizeBytes` 和 `sha256`，可直接复制到发行说明。
+
+   `.wlpkg.gz` 使用 WhaleLife 发行包格式。gzip 解压后，首行是 UTF-8 JSON 文件清单，含 `format: 1` 和按顺序排列的 `files`。每项记录相对路径 `path`、字节数 `size` 和该文件的 `sha256`。换行后紧接各文件的原始字节，顺序与清单一致。GitHub 自动生成的 `Source code (zip)` 和 `Source code (tar.gz)` 是供手动安装使用的源码归档。请将工具生成的 `.wlpkg.gz` 作为商店安装附件。
+
    默认使用 Git 跟踪的文件，要求已跟踪文件与所选提交一致。如果需要构建或捆绑运行依赖，先按照插件自己的发布流程生成干净的发行目录，再将这个目录交给工具。可以使用实际运行 ID 为子插件命名。
 
    ```sh

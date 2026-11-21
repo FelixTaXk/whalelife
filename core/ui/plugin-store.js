@@ -288,9 +288,11 @@ export function bindStore(app, container = app.content, opening = true) {
   if (search) search.oninput = () => { state.storeSearch = search.value; paint(); scroll.scrollTop = 0; };
   const submit = root.querySelector("[data-store-submit]");
   if (submit) submit.onclick = () => app.dialog("提交社区插件",
-    `<p>首次投稿请附上公开 GitHub 仓库链接和一句话介绍，也可以填写仓库里的图标链接。维护者会在投稿 Issue 回复，收录后即可关帖。</p>
-     <p>只换图标时，提交新图片链接即可单独审图。插件程序有更新时，请在原仓库升版并发布正式 GitHub Release。审核通过后，用户手动检查更新时就能看到适合本机的新版。</p>
-     <p class="official-help">${externalLink(submissionURL, "填写收录申请")}</p>`);
+    `<p>首次投稿请填写公开 GitHub 仓库链接和一句话介绍，仓库内的 PNG 图标链接可选。</p>
+     <p><strong>手动安装</strong>　在仓库 README 写明安装步骤和依赖即可投稿。通过审核后，商店会提供「安装说明」。</p>
+     <p><strong>一键安装与更新</strong>　用 WhaleLife 打包工具生成 <code>.wlpkg.gz</code>，上传到自己仓库对应版本的正式 GitHub Release。在发行说明中写明附件字节数、SHA-256、适用的 WhaleLife 版本、系统、架构及必需插件的版本。每个新版附件单独审核。</p>
+     <p>收录后可关闭投稿 Issue。只换图标时，在原 Issue 留下新图链接即可。</p>
+     <p class="official-help">${externalLink(submissionURL, "填写收录申请")} · ${externalLink("https://github.com/iinukami/whalelife/blob/main/market/community-packages.md#作者打包", "打包命令与格式说明")}</p>`);
   listing.onclick = event => {
     const card = event.target.closest("[data-store-entry]");
     const install = event.target.closest("[data-community-install]");
