@@ -277,6 +277,35 @@ window.WHALELIFE_CATALOG = {
           "dependencies": {}
         }
       ]
+    },
+    {
+      "id": "surf/douyin",
+      "version": "0.1.5",
+      "name": "抖音",
+      "author": "FelixTaXk",
+      "description": "在「网上冲浪」里浏览抖音推荐、搜索视频、观看片段、阅读评论并参与互动。",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-douyin",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-douyin/blob/26b0d7c37521c687c6bb57f51591c32ba650cb96/README.md#装在哪",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-douyin/issues",
+      "dependencies": [
+        "surf"
+      ],
+      "collected": "2026-11-22",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.1.5",
+          "hostRange": "0.1.1",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-douyin/releases/download/v0.1.5/douyin-0.1.5-win32-x64.wlpkg.gz",
+          "sizeBytes": 71636,
+          "sha256": "bbb7d08f099a320573c426c975bb49a7c56faa25c63df322b794ee63668039bf",
+          "dependencies": {
+            "surf": "0.1.1"
+          }
+        }
+      ]
     }
   ]
 };

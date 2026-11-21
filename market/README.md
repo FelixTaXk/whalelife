@@ -23,6 +23,7 @@
 
 | 插件 | 收录版本 | 作者 | 用途 | 必需插件 | 相关链接 |
 | --- | --- | --- | --- | --- | --- |
+| 抖音 | v0.1.5 | FelixTaXk | 在「网上冲浪」里浏览抖音推荐、搜索视频、观看片段、阅读评论并参与互动。 | 网上冲浪 | [安装说明](<https://github.com/FelixTaXk/whalelife-community-douyin/blob/26b0d7c37521c687c6bb57f51591c32ba650cb96/README.md#%E8%A3%85%E5%9C%A8%E5%93%AA>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-douyin>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-douyin/issues>) |
 | 表情包工坊 | v0.2.1 | FelixTaXk | 需要先在本机安装 Python 和 Pillow。给图片加字幕、气泡或描边，成品可收藏到官方图库。商店会一并安装缺少的图库插件。 | 图库 | [安装说明](<https://github.com/FelixTaXk/whalelife-community-meme/blob/main/README.md#%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-meme>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-meme/issues>) |
 | 日程 | v0.4.0 | FelixTaXk | 按作息生成每日日程，可查看、编辑并保存。公开版 WhaleLife 支持这些功能。若要在每轮聊天中自动加入当前和下一项日程，需要作者提供的宿主补丁。 | — | [安装说明](<https://github.com/FelixTaXk/whalelife-community-schedule/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-schedule>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-schedule/issues>) |
 | 画室 | v0.2.6 | FelixTaXk | 用本地 ComfyUI、SD-WebUI 或兼容接口生成图片，附带视频和提示词小抄。看图与绘制蒙版需 Python 和 Pillow。 | — | [安装说明](<https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-studio>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-studio/issues>) |
