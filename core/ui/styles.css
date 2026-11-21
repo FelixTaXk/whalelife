@@ -287,11 +287,23 @@ nav a.active:before {
   -webkit-touch-callout: none;
   user-select: none;
 }
-#extension-nav a span {
+.plugin-nav-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.plugin-nav-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.plugin-pin-indicator {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
+}
+.plugin-pin-indicator .icon { width: 13px; height: 13px; }
 .plugin-nav-menu {
   position: fixed;
   inset: auto;

@@ -137,8 +137,10 @@ export function extensionNavigation(status, pinned = []) {
   // Keep the host's registry order intact when sorting this sidebar.
   const rank = row => order.get(row.id) ?? pinned.length;
   return rows.sort((left, right) => rank(left) - rank(right)).map(({ key, id, title }) => {
-    const hint = order.has(id) ? "已置顶，右键取消置顶" : "右键置顶";
-    return `<a href="#${e(key)}" data-page="${e(key)}" data-pin-plugin="${e(id)}" aria-haspopup="menu" aria-keyshortcuts="Shift+F10" title="${e(title)} · ${hint}">${icon("puzzle")}<span>${e(title)}</span></a>`;
+    const isPinned = order.has(id);
+    const hint = isPinned ? "已置顶，右键取消置顶" : "右键置顶";
+    const indicator = isPinned ? `<span class="plugin-pin-indicator" role="img" aria-label="已置顶">${icon("pin")}</span>` : "";
+    return `<a href="#${e(key)}" data-page="${e(key)}" data-pin-plugin="${e(id)}" aria-haspopup="menu" aria-keyshortcuts="Shift+F10" title="${e(title)} · ${hint}">${icon("puzzle")}<span class="plugin-nav-label"><span class="plugin-nav-title">${e(title)}</span>${indicator}</span></a>`;
   }).join("");
 }
 export function extensionSettings(status, owner) {

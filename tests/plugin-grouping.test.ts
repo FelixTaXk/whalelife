@@ -54,6 +54,11 @@ test("pinning sorts only the sidebar, preserving grouped entries and page order 
   const second = ui.extensionKey("/plugins/qq-extra/more");
   assert.deepEqual(links(pinned), [first, second, group]);
   assert.deepEqual(links([]), [group, first, second]);
+  const pinnedNav = ui.extensionNavigation(status, ["qq"]);
+  const marked = [...pinnedNav.matchAll(/data-pin-plugin="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)]
+    .filter(match => match[2].includes('aria-label="已置顶"'));
+  assert.deepEqual(marked.map(match => match[1]), ["qq"]);
+  assert.doesNotMatch(ui.extensionNavigation(status, []), /plugin-pin-indicator/);
   assert.deepEqual(status, before);
   status.plugins.find((p: any) => p.id === "qq-extra").status = "stopped";
   assert.deepEqual(links(pinned), [group]);
