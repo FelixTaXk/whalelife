@@ -282,36 +282,51 @@ nav a.active:before {
   border-radius: 5px;
   margin-left: auto;
 }
-.plugin-nav-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 2px;
+#extension-nav a {
+  min-width: 0;
+  -webkit-touch-callout: none;
+  user-select: none;
 }
-.plugin-nav-row a span {
+#extension-nav a span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.plugin-nav-pin {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
+.plugin-nav-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 4px;
+  min-width: 126px;
+  max-width: calc(100vw - 16px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 6px 22px #272b3921;
+  color: var(--text);
+}
+.plugin-nav-menu [role="menuitem"] {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 9px;
+  padding: 7px 12px;
   border: 0;
   border-radius: 7px;
-  color: #73798b;
   background: transparent;
+  color: inherit;
+  font-size: 13px;
+  white-space: nowrap;
 }
-.plugin-nav-pin .icon { width: 15px; height: 15px; }
-.plugin-nav-pin:hover, .plugin-nav-pin[aria-pressed="true"] {
+.plugin-nav-menu .icon { width: 16px; height: 16px; }
+.plugin-nav-menu [role="menuitem"]:hover,
+.plugin-nav-menu [role="menuitem"]:focus-visible {
   color: var(--accent);
   background: var(--accent-soft);
+  outline-offset: -2px;
 }
-.plugin-nav-pin[aria-pressed="true"] .icon { fill: currentColor; }
 @media (pointer: coarse) {
-  .plugin-nav-pin { width: 40px; height: 40px; }
+  .plugin-nav-menu [role="menuitem"] { min-height: 44px; }
 }
 .sidebar-bottom {
   margin-top: auto;

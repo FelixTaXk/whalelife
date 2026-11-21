@@ -77,30 +77,10 @@ class ConsoleApp {
   };
   constructor() {
     this.state.page = this.pageFromHash();
-    const pluginNav = $("extension-nav");
-    pluginNav.addEventListener("mousedown", event => {
-      // Keep the plugin editor focused. Moving focus out of its iframe would refresh the host.
-      if (event.button === 0 && document.activeElement?.tagName === "IFRAME" && event.target.closest("[data-pin-plugin]")) {
-        event.preventDefault();
-      }
-    });
-    pluginNav.addEventListener("click", event => {
-      const pin = event.target.closest("[data-pin-plugin]");
-      if (!pin) return;
-      const restoreFocus = pin === document.activeElement;
-      const page = pin.previousElementSibling.dataset.page;
-      const id = pin.dataset.pinPlugin;
-      const pins = this.pinnedPlugins;
-      this.pinnedPlugins = pins.includes(id) ? pins.filter(p => p !== id) : [id, ...pins];
-      try { localStorage.setItem(pinStorageKey, JSON.stringify(this.pinnedPlugins)); }
-      catch { /* The preference still works for this tab when storage is unavailable. */ }
-      this.renderNavigation();
-      if (restoreFocus) {
-        pluginNav.querySelector(`[data-page="${CSS.escape(page)}"] + button`)?.focus({ preventScroll: true });
-      }
-    });
+    this.bindPinMenu();
     window.addEventListener("storage", event => {
       if (event.key !== null && event.key !== pinStorageKey) return;
+      this.closePinMenu();
       this.pinnedPlugins = readPinnedPlugins();
       if (this.authenticated) this.renderNavigation();
     });
@@ -173,6 +153,127 @@ class ConsoleApp {
     $("dialog").addEventListener("cancel", (event) => {
       if (this.dialogBusy) event.preventDefault();
     });
+  }
+  bindPinMenu() {
+    const nav = $("extension-nav");
+    const linkFor = event => event.target.closest("a[data-pin-plugin]");
+    let menu, item, trigger, hold, suppressTap;
+    const cancelHold = () => {
+      if (hold) clearTimeout(hold.timer);
+      hold = null;
+    };
+    const close = () => {
+      cancelHold();
+      if (trigger) menu.hidePopover();
+    };
+    const open = (link, x, y, input = "mouse") => {
+      if (!menu) {
+        menu = document.createElement("div");
+        menu.className = "plugin-nav-menu";
+        menu.setAttribute("role", "menu");
+        menu.innerHTML = `<button type="button" role="menuitem">${icon("pin")}<span></span></button>`;
+        item = menu.firstElementChild;
+        document.body.append(menu);
+        menu.addEventListener("beforetoggle", event => {
+          if (event.newState === "closed") {
+            trigger?.removeAttribute("aria-expanded");
+            trigger = null;
+          }
+        });
+        // Keep pointer interactions in the sidebar from taking focus out of a plugin editor.
+        item.addEventListener("mousedown", event => event.preventDefault());
+        item.addEventListener("click", () => {
+          if (!trigger) return;
+          const { page, pinPlugin: id } = trigger.dataset;
+          const restoreFocus = document.activeElement === item || document.activeElement === trigger;
+          close();
+          const pins = this.pinnedPlugins;
+          this.pinnedPlugins = pins.includes(id) ? pins.filter(p => p !== id) : [id, ...pins];
+          try { localStorage.setItem(pinStorageKey, JSON.stringify(this.pinnedPlugins)); }
+          catch { /* Keep the tab preference if browser storage is unavailable. */ }
+          this.renderNavigation();
+          if (restoreFocus) nav.querySelector(`[data-page="${CSS.escape(page)}"]`)?.focus({ preventScroll: true });
+        });
+        item.addEventListener("keydown", event => {
+          if (event.key !== "Escape" && event.key !== "Tab") return;
+          if (event.key === "Escape") event.preventDefault();
+          const link = trigger;
+          close();
+          link?.focus({ preventScroll: true });
+        });
+      }
+      // A long press opens before the initial finger lifts. Native light-dismiss would
+      // treat that same release as an outside click, so dismiss touch menus on the next press.
+      const mode = input === "touch" ? "manual" : "auto";
+      if (menu.popover !== mode) {
+        close();
+        menu.popover = mode;
+      }
+      trigger?.removeAttribute("aria-expanded");
+      trigger = link;
+      trigger.setAttribute("aria-expanded", "true");
+      menu.setAttribute("aria-label", link.textContent.trim());
+      item.lastElementChild.textContent = this.pinnedPlugins.includes(link.dataset.pinPlugin) ? "取消置顶" : "置顶";
+      menu.showPopover();
+      const { width, height } = menu.getBoundingClientRect();
+      menu.style.left = Math.max(4, Math.min(x, document.documentElement.clientWidth - width - 4)) + "px";
+      menu.style.top = Math.max(4, Math.min(y, document.documentElement.clientHeight - height - 4)) + "px";
+      if (input === "keyboard") item.focus({ preventScroll: true });
+    };
+    nav.addEventListener("mousedown", event => {
+      if (event.button === 2 && linkFor(event)) event.preventDefault();
+    });
+    nav.addEventListener("contextmenu", event => {
+      const link = linkFor(event);
+      if (!link) return;
+      event.preventDefault();
+      const touch = hold || event.pointerType === "touch" || suppressTap === link;
+      if (touch) suppressTap = link;
+      cancelHold();
+      open(link, event.clientX, event.clientY, touch ? "touch" : "mouse");
+    });
+    nav.addEventListener("keydown", event => {
+      const link = linkFor(event);
+      if (!link || !(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) return;
+      event.preventDefault();
+      const { left, bottom } = link.getBoundingClientRect();
+      open(link, left, bottom, "keyboard");
+    });
+    nav.addEventListener("pointerdown", event => {
+      cancelHold();
+      suppressTap = null;
+      const link = linkFor(event);
+      if (!link || event.pointerType !== "touch" || !event.isPrimary) return;
+      const { clientX: x, clientY: y } = event;
+      hold = { x, y, timer: setTimeout(() => {
+        hold = null;
+        suppressTap = link;
+        open(link, x, y, "touch");
+      }, 550) };
+    });
+    nav.addEventListener("pointermove", event => {
+      if (hold && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > 8) cancelHold();
+    });
+    nav.addEventListener("pointerup", cancelHold);
+    nav.addEventListener("pointercancel", cancelHold);
+    nav.addEventListener("touchend", event => {
+      // A completed long press must not also synthesize a tap on the link or menu.
+      if (suppressTap && linkFor(event) === suppressTap) {
+        event.preventDefault();
+        suppressTap = null;
+      }
+    }, { passive: false });
+    window.addEventListener("pointerdown", event => {
+      if (trigger && menu.popover === "manual" && !menu.contains(event.target)) close();
+    }, true);
+    window.addEventListener("keydown", event => {
+      if (trigger && menu.popover === "manual" && event.key === "Escape") close();
+    });
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("hashchange", close);
+    window.addEventListener("blur", close);
+    this.closePinMenu = close;
   }
   pageFromHash() {
     if (storeRoute()) return history.state?.storeOrigin === "overview" ? "overview" : "plugins";
@@ -413,6 +514,7 @@ class ConsoleApp {
   renderNavigation() {
     const navigation = extensionNavigation(this.state.status, this.pinnedPlugins);
     if (navigation !== this.navigationMarkup) {
+      this.closePinMenu();
       $("extension-nav").innerHTML = navigation;
       $("extension-nav-group").hidden = !navigation;
       this.navigationMarkup = navigation;
@@ -595,6 +697,7 @@ class ConsoleApp {
     const wasUpdating = resetHostUpdateSession(this);
     this.reloadAfterHostUpdate = wasUpdating;
     this.authenticated = false;
+    this.closePinMenu();
     this.hideStore();
     this.generation++;
     this.chatWS?.close();

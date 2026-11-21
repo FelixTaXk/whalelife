@@ -27,6 +27,8 @@ test("opt-in groups cards and sidebar while retaining real counts, parent featur
   assert.match(cards, /href="#plugin:qq"/);
   const nav = ui.extensionNavigation(status);
   assert.equal((nav.match(/data-page="plugin:qq"/g) || []).length, 1);
+  assert.match(nav, /<a [^>]*data-pin-plugin="qq"[^>]*aria-haspopup="menu"/);
+  assert.doesNotMatch(nav, /<button\b/);
   assert.doesNotMatch(nav, /QQ 空间|深层子插件|核心/);
   assert.match(nav, /独立插件/);
   const parent = render(status, ui.pluginKey("qq"));
