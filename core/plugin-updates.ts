@@ -3,6 +3,8 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import { readFileSync } from "node:fs";
+import { readPublishedCommunityReviews } from "./community-reviews.ts";
+import type { ReviewedCommunityEntry } from "./community-packages.ts";
 
 type Entry = { id: string; repository: string };
 type Installed = { id: string; version?: string; builtin?: boolean; repository?: unknown };
@@ -10,10 +12,10 @@ type Recognition = { plugins: { runtimeId: string; installedVersion: string | nu
 type Notice = Entry & { runtimeId: string; source: "official" | "community"; installedVersion: string; latestVersion: string; url: string };
 type Target = { version: string; url: string };
 type Metadata = Record<string, any>;
+type CommunityVersions = (reviews: ReviewedCommunityEntry[], ids: ReadonlySet<string>) => Promise<Map<string, string>>;
 
 const market = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/";
 const repoPattern = /^https:\/\/github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\/?$/;
-const idPattern = /^[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/;
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const bundled = (file: string) => JSON.parse(readFileSync(new URL(file, import.meta.url), "utf8"));
 
@@ -46,25 +48,12 @@ function newer(target: string, installed: string) {
   return current.prerelease;
 }
 
-function communityEntries(catalog: Metadata | null): Entry[] | null {
-  if (!Array.isArray(catalog?.official) || !Array.isArray(catalog.community)) return null;
-  const seen = new Set<string>();
-  for (const entry of [...catalog.official, ...catalog.community]) {
-    if (!entry || typeof entry.id !== "string" || !idPattern.test(entry.id) || !repoPath(entry.repository) || seen.has(entry.id)) return null;
-    seen.add(entry.id);
-  }
-  return catalog.community;
-}
-
-// These metadata reads never forward a browser's Origin, cookies or installed versions.
-// Both allowed hosts and all paths are derived from public project catalogs.
+// Only the public official registry is read here. No local installation data is sent.
 async function readJSON(address: string, signal: AbortSignal): Promise<Metadata> {
   const response = await fetch(address, { redirect: "error", credentials: "omit", referrerPolicy: "no-referrer",
     headers: { Accept: "application/json" }, signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) });
   if (!response.ok || !response.body) {
     await response.body?.cancel();
-    // A public repository with no formal Release legitimately has no latest version.
-    if (response.status === 404 && address.startsWith("https://api.github.com/repos/")) return {};
     throw Error("无法读取公开发行资料");
   }
   const reader = response.body.getReader(), chunks: Uint8Array[] = [];
@@ -99,25 +88,19 @@ function verifiedTarget(entry: Metadata, installed: string, host: string, platfo
   return best;
 }
 
-function authorTarget(entry: Entry, release: Metadata | null): Target | undefined {
-  if (release?.draft !== false || release.prerelease !== false || typeof release.tag_name !== "string") return;
-  const tag = release.tag_name, version = tag.replace(/^v/, "");
-  const parsed = parseVersion(version);
-  if (parsed && !parsed.prerelease) return { version, url: entry.repository.replace(/\/$/, "") + "/releases/tag/" + encodeURIComponent(tag) };
-}
-
 export class PluginUpdates {
-  private catalog: Metadata;
   private registry: Metadata;
   private host: string = bundled("../package.json").version;
   private cache = new Map<string, { expires: number; value: Promise<Metadata | null> }>();
   private last?: { key: string; updates: Notice[]; incomplete?: boolean };
   private lastCheck = 0;
   private signal: AbortSignal;
+  private reviewing?: Promise<ReviewedCommunityEntry[]>;
+  private communityVersions: CommunityVersions;
 
-  constructor(signal: AbortSignal, catalog = bundled("../market/catalog.json"), registry = bundled("../market/official-releases.json")) {
+  constructor(signal: AbortSignal, communityVersions: CommunityVersions, registry = bundled("../market/official-releases.json")) {
     this.signal = signal;
-    this.catalog = catalog;
+    this.communityVersions = communityVersions;
     this.registry = registry;
   }
 
@@ -138,7 +121,8 @@ export class PluginUpdates {
       !plugin.builtin && plugin.id === row.runtimeId && plugin.version === row.installedVersion &&
       (plugin.repository == null || repoPath(plugin.repository)?.toLowerCase() === repoPath(row.repository)?.toLowerCase())));
     if (this.last.key === installationKey(installed)) return { updates, checked: true, incomplete: this.last.incomplete };
-    return { updates };
+    // An installed dependency may no longer satisfy a previously recommended community release.
+    return { updates: updates.filter(row => row.source === "official") };
   }
 
   async list(installed: Installed[], recognize: () => Promise<Recognition>) {
@@ -148,9 +132,9 @@ export class PluginUpdates {
       this.last = { key: installationKey(installed), updates: [] };
       return { updates: [] };
     }
-    const [published, publicRegistry] = await Promise.all([this.read(market + "catalog.json"), this.read(market + "official-releases.json")]);
-    const publishedCommunity = communityEntries(published);
-    const community = publishedCommunity ?? communityEntries(this.catalog) ?? [];
+    const hasOfficial = this.registry.plugins.some((entry: Metadata) =>
+      local.has(entry.parentId ? entry.parentId + "/" + entry.id : entry.id));
+    const publicRegistry = hasOfficial ? await this.read(market + "official-releases.json") : null;
     const publicPlugins = publicRegistry?.schemaVersion === 1 && Array.isArray(publicRegistry.plugins) ? publicRegistry.plugins : null;
     let incomplete = false;
     const updates: Notice[] = [];
@@ -178,27 +162,31 @@ export class PluginUpdates {
           plan.installed && plan.runtimeId === item.runtimeId && plan.installedVersion === item.installedVersion)) updates.push(item);
       }
     };
-    // Match full local IDs before requesting metadata. Only the public repository goes to GitHub.
-    const authors = async () => {
-      if (!publishedCommunity && [...local.keys()].some(id => !reserved.has(id))) incomplete = true;
-      const candidates = community.flatMap(entry => {
-        const plugin = local.get(entry.id), path = repoPath(entry.repository)!;
-        if (!plugin?.version || reserved.has(entry.id) || (plugin.repository != null &&
-          repoPath(plugin.repository)?.toLowerCase() !== path.toLowerCase())) return [];
-        return [{ entry, path, version: plugin.version }];
-      });
-      for (let i = 0; i < candidates.length; i += 4) {
-        await Promise.all(candidates.slice(i, i + 4).map(async ({ entry, path, version }) => {
-          const release = await this.read("https://api.github.com/repos/" + path + "/releases/latest");
-          if (!release) { incomplete = true; return; }
-          const target = authorTarget(entry, release);
-          if (!target || !newer(target.version, version)) return;
-          updates.push({ id: entry.id, runtimeId: entry.id, repository: entry.repository, installedVersion: version,
-            latestVersion: target.version, url: target.url, source: "community" });
-        }));
+    const community = async () => {
+      if (![...local.keys()].some(id => !reserved.has(id))) return;
+      try {
+        // Recheck the published approvals on each manual check, including revocations.
+        this.reviewing ??= readPublishedCommunityReviews(this.signal).finally(() => { this.reviewing = undefined; });
+        const reviews = await this.reviewing;
+        const candidates = reviews.filter(entry => {
+          const plugin = local.get(entry.id);
+          return plugin?.version && !reserved.has(entry.id) && (plugin.repository == null ||
+            repoPath(plugin.repository)?.toLowerCase() === repoPath(entry.repository)?.toLowerCase()) &&
+            entry.verifiedReleases?.some(release => newer(release.version, plugin.version!));
+        });
+        if (!candidates.length) return;
+        const targets = await this.communityVersions(reviews, new Set(candidates.map(entry => entry.id)));
+        for (const { id, repository } of candidates) {
+          const version = targets.get(id), installedVersion = local.get(id)!.version!;
+          if (!version || !newer(version, installedVersion)) continue;
+          updates.push({ id, runtimeId: id, repository, source: "community", installedVersion, latestVersion: version,
+            url: repository.replace(/\/$/, "") + "/releases/tag/v" + version });
+        }
+      } catch {
+        incomplete = true;
       }
     };
-    await Promise.all([official(), authors()]);
+    await Promise.all([official(), community()]);
     updates.sort((a, b) => a.runtimeId.localeCompare(b.runtimeId, "en"));
     if (check === this.lastCheck) this.last = { key: installationKey(installed), updates, incomplete };
     return incomplete ? { updates, incomplete: true } : { updates };

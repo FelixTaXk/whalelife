@@ -6,20 +6,24 @@ import { WebSocket } from "ws";
 import { Logger } from "../core/logger.ts";
 import { startWeb } from "../core/web.ts";
 
-test("the plugin update GET returns a local snapshot and only the check POST contacts the author", async t => {
+test("the plugin update GET returns a local snapshot and only the check POST fetches the market approvals", async t => {
   const browserFetch = globalThis.fetch;
   const upstream: string[] = [];
   const plugin = { id: "test-notice", version: "1.0.0", repository: "https://github.com/example/test-notice" };
-  const authorRelease = "https://api.github.com/repos/example/test-notice/releases/latest";
+  const catalog = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json";
+  const entry = { ...plugin, name: "Notice", description: "Notice", installation: plugin.repository, dependencies: [],
+    verifiedReleases: [{ version: "1.1.0", hostRange: "0.1.0", platform: "any", arch: "any", sha256: "a".repeat(64),
+      assetUrl: plugin.repository + "/releases/download/v1.1.0/test-notice.wlpkg.gz", sizeBytes: 100, dependencies: {} }] };
   t.mock.method(globalThis, "fetch", async (input: string) => {
     upstream.push(input);
-    if (input.endsWith("/catalog.json")) return Response.json({ official: [], community: [plugin] });
-    if (input.endsWith("/official-releases.json")) return Response.json({ schemaVersion: 1, plugins: [] });
-    if (input === authorRelease) return Response.json({ tag_name: "v1.1.0", draft: false, prerelease: false });
+    if (input === catalog) return Response.json({ official: [], community: [entry] });
     return new Response(null, { status: 404 });
   });
-  const logger = new Logger(await temporaryDirectory("whale-update-web-"));
-  const app = await startWeb({ web: { port: 0 } }, { logger }, { list: () => [plugin] });
+  const root = await temporaryDirectory("whale-update-web-");
+  const logger = new Logger(root);
+  const runtime = { root, list: () => [plugin], records: new Map([[plugin.id, { manifest: plugin }]]),
+    pluginState: { load: async () => {}, enabled: () => true }, managePackages: (run: () => unknown) => run() };
+  const app = await startWeb({ web: { port: 0 } }, { logger }, runtime);
   t.after(() => app.close());
   const address = app.server.address();
   assert.ok(address && typeof address === "object");
@@ -34,7 +38,7 @@ test("the plugin update GET returns a local snapshot and only the check POST con
     method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" }, body: "{}",
   }).then(res => res.json());
   assert.equal(checked.updates[0]?.latestVersion, "1.1.0");
-  assert.deepEqual(upstream.filter(url => url === authorRelease), [authorRelease]);
+  assert.deepEqual(upstream, [catalog]);
   const count = upstream.length;
   assert.deepEqual((await snapshot()).updates, checked.updates);
   assert.equal(upstream.length, count);

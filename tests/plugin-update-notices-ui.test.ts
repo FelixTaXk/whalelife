@@ -128,6 +128,9 @@ test("management and store share an explicit check; binding, rendering and waiti
   await nextTurn();
   assert.match(renderPlugins(refreshed), /发现 3 个插件可更新。部分版本信息暂时无法核实/);
   assert.match(renderStore(refreshed), /有更新/);
+  const withChangedDependency = { ...refreshed.state, storeDetail: note.id,
+    status: { plugins: [...status.plugins, { id: "other-dependency", version: "2.0.0" }] } };
+  assert.doesNotMatch(renderStore({ state: withChangedDependency }), /有更新|查看新版/);
   assert.equal(paths.length, 4);
 });
 

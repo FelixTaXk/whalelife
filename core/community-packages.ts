@@ -110,6 +110,10 @@ export class CommunityPackages {
     });
   }
 
+  compatibleUpdateVersions(ids: ReadonlySet<string>) {
+    return this.manager.compatibleUpdateVersions(ids);
+  }
+
   async list() {
     const { plugins } = await this.manager.list();
     return { plugins: plugins.filter(p => this.ids.has(p.id)).map(p => {

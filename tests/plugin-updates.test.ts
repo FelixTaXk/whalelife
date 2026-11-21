@@ -2,26 +2,42 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { PluginUpdates } from "../core/plugin-updates.ts";
+import { CommunityPackages } from "../core/community-packages.ts";
+import type { Runtime } from "../core/runtime.ts";
+import { temporaryDirectory } from "./temporary-directory.ts";
 
 const host: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const catalogURL = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json";
 const registryURL = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/official-releases.json";
 const github = "https://github.com/example/";
-const card = (id: string) => ({ id, name: id, repository: github + id });
+const card = (id: string) => ({ id, name: id, description: id, installation: github + id, dependencies: [] as string[], repository: github + id });
 const author = card("color-note");
-const catalog = { official: [card("child")], community: [author] };
+const review = (entry: typeof author, version: string, dependencies: Record<string, string> = {}) => ({
+  version, hostRange: host, platform: "any", arch: "any", sizeBytes: 100, sha256: "a".repeat(64), dependencies,
+  assetUrl: entry.repository + "/releases/download/v" + version + "/plugin.wlpkg.gz",
+});
+const reviewed = { ...author, verifiedReleases: [review(author, "1.10.0")] };
+const catalog = { official: [card("child")], community: [reviewed] };
 const child = { ...card("child"), parentId: "parent" };
 const asset = (version: string) => ({ version, hostRange: host, platform: process.platform, arch: process.arch,
   delivery: "github-release", sizeBytes: 100, sha256: "a".repeat(64), inventorySha256: "b".repeat(64),
   assetUrl: child.repository + "/releases/download/v" + version + "/child.wlpkg.gz" });
 const registry = { schemaVersion: 1, plugins: [{ ...child, verifiedReleases: [asset("1.1.0")] }] };
-const make = () => new PluginUpdates(new AbortController().signal, catalog, registry);
 const installed = [{ id: "parent/child", version: "1.0.0" }, { id: "color-note", version: "1.9.0" }];
+function make(plugins = installed) {
+  return new PluginUpdates(new AbortController().signal, async (reviews, ids) => {
+    const runtime = {
+      root: await temporaryDirectory("whale-reviewed-notices-"),
+      records: new Map(plugins.map(p => [p.id, { manifest: p, status: "active" }])),
+      pluginState: { load: async () => {}, enabled: () => true },
+      managePackages: (run: () => unknown) => run(),
+    };
+    return new CommunityPackages(runtime as unknown as Runtime, reviews).compatibleUpdateVersions(ids);
+  }, registry);
+}
 const recognized = async () => ({ plugins: [{ runtimeId: "parent/child", installed: true, installedVersion: "1.0.0" }],
   recognizedRuntimeIds: ["parent/child"] });
 const unrecognized = async () => ({ plugins: [], recognizedRuntimeIds: [] });
-const latestURL = (id: string) => "https://api.github.com/repos/example/" + id + "/releases/latest";
-const stable = (tag_name: string) => ({ tag_name, draft: false, prerelease: false });
 
 function serve(t: TestContext, replies: Map<string, unknown>) {
   const requests: { address: string; init: RequestInit }[] = [];
@@ -34,7 +50,7 @@ function serve(t: TestContext, replies: Map<string, unknown>) {
   return requests;
 }
 
-test("updates compare local installations to compatible verified packages or public author releases without disclosing them", async t => {
+test("updates compare local installations to compatible reviewed packages without disclosing them", async t => {
   const newest = asset("1.10.0");
   const publicEntries = [{ ...child, verifiedReleases: [
     asset("1.9.0"), newest, { ...asset("3.0.0"), recognitionOnly: true }, { ...asset("4.0.0"), platform: "other" },
@@ -43,9 +59,8 @@ test("updates compare local installations to compatible verified packages or pub
     { ...asset("9.0.0"), assetUrl: "https://example.net/download" }, asset("20.0.0-pre.1")
   ] }];
   const replies = new Map<string, unknown>([
-    [catalogURL, { ...catalog, community: [author, ...Array.from({ length: 120 }, (_, i) => card("absent-" + i))] }],
+    [catalogURL, { ...catalog, community: [reviewed, ...Array.from({ length: 120 }, (_, i) => card("absent-" + i))] }],
     [registryURL, { schemaVersion: 1, plugins: publicEntries }],
-    [latestURL("color-note"), stable("v1.10.0")],
   ]);
   const requests = serve(t, replies);
   const service = make();
@@ -63,13 +78,12 @@ test("updates compare local installations to compatible verified packages or pub
     assert.equal(init.credentials, "omit");
     assert.equal(init.redirect, "error");
     assert.equal(init.referrerPolicy, "no-referrer");
-    assert.deepEqual(init.headers, { Accept: "application/json" });
     assert.equal(init.body, undefined);
   }
   assert.deepEqual((await service.list([], recognized)).updates, []);
   assert.deepEqual((await service.list([{ id: "color-note", version: "2.0.0" }], recognized)).updates, []);
   assert.deepEqual((await service.list(installed, async () => { throw Error("inventory busy"); })).updates.map(p => p.source), ["community"]);
-  assert.equal(requests.length, 3);
+  assert.deepEqual(requests.map(r => r.address), [registryURL, catalogURL, catalogURL, catalogURL]);
 });
 
 test("a fresh instance makes no public requests and unlisted installations do not trigger any author queries", async t => {
@@ -79,12 +93,11 @@ test("a fresh instance makes no public requests and unlisted installations do no
   assert.deepEqual(await service.list([], recognized), { updates: [] });
   assert.equal(requests.length, 0);
   assert.deepEqual(await service.list([{ id: "private", version: "1.0.0" }], unrecognized), { updates: [] });
-  assert.deepEqual(requests.map(r => r.address).sort(), [catalogURL, registryURL].sort());
+  assert.deepEqual(requests.map(r => r.address), [catalogURL]);
 });
 
 test("reading the last manual result is local, and notices disappear for removed or replaced installations", async t => {
-  const calls = serve(t, new Map<string, unknown>([[catalogURL, catalog], [registryURL, registry],
-    [latestURL(author.id), stable("v2.0.0")]]));
+  const calls = serve(t, new Map<string, unknown>([[catalogURL, catalog], [registryURL, registry]]));
   const service = make();
   assert.deepEqual(service.snapshot(installed), { updates: [] });
   assert.equal(calls.length, 0);
@@ -92,16 +105,19 @@ test("reading the last manual result is local, and notices disappear for removed
   assert.equal(updates.length, 2);
   assert.deepEqual(service.snapshot(installed), { updates, checked: true, incomplete: false });
   assert.deepEqual(service.snapshot([{ ...installed[0], version: "9.0.0" }, { ...installed[1], repository: github + "other" }]), { updates: [] });
-  assert.equal(calls.length, 3);
+  assert.deepEqual(service.snapshot([...installed, { id: "new-dependency", version: "1.0.0" }]).updates.map(p => p.source), ["official"]);
+  assert.equal(calls.length, 2);
 });
 
-test("no published author release is distinct from an interrupted or rate-limited manual check", async t => {
-  const replies = new Map<string, unknown>([[catalogURL, catalog], [registryURL, registry]]);
+test("manual-only entries have no approved update; a failed catalog check does not use old approvals", async t => {
+  const replies = new Map<string, unknown>([[catalogURL, { ...catalog, community: [author] }]]);
   serve(t, replies);
   assert.deepEqual(await make().list([installed[1]], recognized), { updates: [] });
-  for (const failure of [new Response(null, {status: 403}), new Response(null, {status: 429}), Error("offline")]) {
-    replies.set(latestURL(author.id), failure);
-    const service = make();
+  const service = make();
+  replies.set(catalogURL, catalog);
+  assert.equal((await service.list([installed[1]], recognized)).updates.length, 1);
+  for (const failure of [new Response(null, {status: 403}), new Response(null, {status: 429}), Error("offline"), {community:{}}]) {
+    replies.set(catalogURL, failure);
     assert.deepEqual(await service.list([installed[1]], recognized), { updates: [], incomplete: true });
     assert.deepEqual(service.snapshot([installed[1]]), { updates: [], checked: true, incomplete: true });
   }
@@ -135,29 +151,52 @@ test("foreign registry identities, duplicated parents and incompatible official 
   }
 });
 
-test("community checks honor the author's stable Release, full local ID, current listing and declared repository", async t => {
-  const replies = new Map<string, unknown>([[catalogURL, catalog]]);
+test("only current, correctly identified approvals can recommend the highest reviewed compatible version", async t => {
+  const approved = review(author, "1.10.0");
+  const releases = [
+    review(author, "1.9.0"), approved,
+    { ...review(author, "2.0.0"), platform: process.platform === "win32" ? "linux" : "win32" },
+    { ...review(author, "3.0.0"), arch: process.arch === "x64" ? "arm64" : "x64" },
+    { ...review(author, "4.0.0"), hostRange: "99.0.0" },
+  ];
+  const replies = new Map<string, unknown>([[catalogURL, { ...catalog, community: [{
+    ...author, version: "9.0.0", verifiedReleases: releases,
+  }] }]]);
   const requests = serve(t, replies);
-  for (const data of [stable("1.9.0+other"), stable("v1.8.9"), stable("tomorrow"), stable("v2.0"),
-    stable("v02.0.0"), stable("v2.0.0-preview.1"), { ...stable("v2.0.0"), prerelease: true },
-    { ...stable("v2.0.0"), draft: true }, { tag_name: "v2.0.0" }, Error("offline"),
-    new Response(null, { status: 429 }), new Response("{")]) {
-    replies.set(latestURL("color-note"), data);
-    assert.deepEqual((await make().list(installed, unrecognized)).updates, []);
-  }
-  replies.set(latestURL("color-note"), stable("1.9.0+build"));
-  const pre = await make().list([{ id: "color-note", version: "1.9.0-rc.1" }], unrecognized);
-  assert.equal(pre.updates[0]?.latestVersion, "1.9.0+build");
-  replies.set(latestURL("color-note"), stable("v2.0.0"));
+  const service = make();
+  assert.equal((await service.list([installed[1]], unrecognized)).updates[0]?.latestVersion, approved.version);
   for (const plugin of [{ id: "else/color-note", version: "1.0.0" }, { ...installed[1], builtin: true },
+    { ...installed[1], version: "1.10.0" }, { ...installed[1], version: "2.0.0" },
     { ...installed[1], repository: github + "other" }, { ...installed[1], version: "1.9.0-beta.01" }]) {
-    assert.deepEqual((await make().list([plugin], unrecognized)).updates, []);
+    assert.deepEqual((await service.list([plugin], unrecognized)).updates, []);
   }
   replies.set(catalogURL, { ...catalog, community: [] });
-  assert.deepEqual((await make().list(installed, unrecognized)).updates, []);
-  for (const repository of ["http://github.com/a/b", "https://github.com@private.test/a/b", "https://github.com/a/.."]) {
-    replies.set(catalogURL, { ...catalog, community: [{ ...author, repository }] });
-    await make().list(installed, unrecognized);
+  assert.deepEqual(await service.list([installed[1]], unrecognized), { updates: [] });
+  for (const invalid of [{ ...approved, sha256: "invalid" }, { ...approved, assetUrl: "https://example.net/file.wlpkg.gz" }]) {
+    replies.set(catalogURL, { ...catalog, community: [{ ...author, verifiedReleases: [invalid] }] });
+    assert.deepEqual(await service.list([installed[1]], unrecognized), { updates: [], incomplete: true });
   }
-  assert.ok(requests.every(r => [catalogURL, registryURL, latestURL("color-note")].includes(r.address)));
+  assert.ok(requests.every(r => r.address === catalogURL));
+});
+
+test("reviewed notices follow the install planner through missing, conflicting and cyclic dependencies", async t => {
+  const dep = card("note-engine"), leaf = card("note-layout");
+  const packagedDep = { ...dep, dependencies: [leaf.id], verifiedReleases: [review(dep, "1.0.0", { [leaf.id]: "1.0.0" })] };
+  const packagedLeaf = { ...leaf, verifiedReleases: [review(leaf, "1.0.0")] };
+  const candidate = { ...author, dependencies: [dep.id], verifiedReleases: [
+    review(author, "2.0.0", { [dep.id]: "1.0.0" }), review(author, "3.0.0", { [dep.id]: "2.0.0" }),
+  ] };
+  const replies = new Map<string, unknown>();
+  const requests = serve(t, replies);
+  const root = [installed[1]];
+  replies.set(catalogURL, { ...catalog, community: [candidate, packagedDep, packagedLeaf] });
+  assert.equal((await make(root).list(root, unrecognized)).updates[0]?.latestVersion, "2.0.0");
+  const wrong = [...root, { id: leaf.id, version: "0.9.0" }];
+  assert.deepEqual((await make(wrong).list(wrong, unrecognized)).updates.map(row => row.id), [leaf.id]);
+  replies.set(catalogURL, { ...catalog, community: [candidate, packagedDep] });
+  assert.deepEqual((await make(root).list(root, unrecognized)).updates, []);
+  replies.set(catalogURL, { ...catalog, community: [candidate, packagedDep,
+    { ...leaf, dependencies: [dep.id], verifiedReleases: [review(leaf, "1.0.0", { [dep.id]: "1.0.0" })] }] });
+  assert.deepEqual((await make(root).list(root, unrecognized)).updates, []);
+  assert.ok(requests.every(r => r.address === catalogURL));
 });

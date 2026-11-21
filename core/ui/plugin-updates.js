@@ -7,6 +7,7 @@ import { api, escapeHTML as e } from "./api.js";
 const repositoryKey = url => typeof url === "string" ? url.replace(/\/$/, "").toLowerCase() : "";
 
 function isInstalled(state, update) {
+  if (update.source === "community" && state?.pluginUpdatesKey && state.pluginUpdatesKey !== installedKey(state)) return false;
   return state?.status?.plugins?.some(plugin =>
     !plugin.builtin && plugin.id === update.runtimeId && plugin.version === update.installedVersion &&
     (update.source !== "community" || plugin.repository == null || repositoryKey(plugin.repository) === repositoryKey(update.repository)));
@@ -129,6 +130,7 @@ async function restorePluginUpdates(app) {
     const { updates, checked, incomplete } = await api("/api/plugin-updates");
     // An explicit check takes precedence over an earlier local snapshot read.
     if (state.pluginUpdateCheck || !Array.isArray(updates)) return;
+    state.pluginUpdatesKey = key;
     state.pluginUpdates = updates;
     if (checked && key === installedKey(state)) {
       state.pluginUpdateCheck = { key, pending: false, message: updateSummary(state, updates, incomplete) };
@@ -149,10 +151,13 @@ export async function loadPluginUpdates(app) {
   try {
     const { updates, incomplete } = await api("/api/plugin-updates/check", {});
     if (!Array.isArray(updates)) throw Error("插件更新结果格式有误，请稍后重试。");
+    state.pluginUpdatesKey = check.key;
     state.pluginUpdates = updates;
     check.message = updateSummary(state, updates, incomplete);
     paintUpdates(app);
   } catch (error) {
+    state.pluginUpdates = state.pluginUpdates?.filter(update => update.source !== "community") ?? [];
+    paintUpdates(app);
     check.message = "检查插件更新失败：" + error.message;
   } finally {
     check.pending = false;

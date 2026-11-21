@@ -49,7 +49,8 @@ export async function startWeb(config: any, services: any, runtime: any) {
   };
   const hostUpdates: HostUpdates = services.hostUpdates ?? new HostUpdates(runtime.root,
     JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version);
-  const pluginUpdates = new PluginUpdates(lifetime.signal);
+  const pluginUpdates = new PluginUpdates(lifetime.signal, (reviews, ids) =>
+    new CommunityPackages(runtime, reviews).compatibleUpdateVersions(ids));
   let officialRead: ReturnType<typeof official.list> | undefined;
   let lastOfficial: { time: number; result: Awaited<ReturnType<typeof official.list>> } | undefined;
   function officialList(forNotice = false) {

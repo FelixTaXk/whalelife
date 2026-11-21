@@ -191,6 +191,31 @@ export class PluginPackages {
     const items = await Promise.all(this.entries.map(entry => this.inspect(entry)));
     return new Map(items.map(item => [item.entry.id, item]));
   }
+
+  async compatibleUpdateVersions(ids: ReadonlySet<string>) {
+    return this.runtime.managePackages(async () => {
+      const items = await this.snapshot();
+      const versions = new Map<string, string>();
+      for (const id of ids) {
+        const current = items.get(id);
+        if (!current?.entry.community || !current.installed) continue;
+        // Preview the replacement using the install planner's host, platform and dependency checks.
+        // This plan stays local to the query and never authorizes replacing the installed files.
+        const replacement = { ...current, installed: false, installedVersion: undefined, existing: undefined, reason: "" };
+        const preview = new Map(items).set(id, replacement);
+        for (const target of current.eligible) {
+          replacement.eligible = [target];
+          replacement.target = target;
+          if (this.plan(replacement, preview).action === "install") {
+            versions.set(id, target.version);
+            break;
+          }
+        }
+      }
+      return versions;
+    });
+  }
+
   async list() {
     return this.runtime.managePackages(async () => {
       const items = await this.snapshot();

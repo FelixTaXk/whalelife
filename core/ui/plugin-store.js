@@ -248,7 +248,8 @@ export function bindStore(app, container = app.content, opening = true) {
   if (search) search.oninput = () => { state.storeSearch = search.value; paint(); scroll.scrollTop = 0; };
   const submit = root.querySelector("[data-store-submit]");
   if (submit) submit.onclick = () => app.dialog("提交社区插件",
-    `<p>在 WhaleLife 主仓提一条 GitHub Issue，附上公开 GitHub 仓库链接和一句话介绍。维护者核对后会在同一条 Issue 回复。</p>
+    `<p>首次投稿请附上公开 GitHub 仓库链接和一句话介绍。维护者会在投稿 Issue 回复，收录后即可关帖。</p>
+     <p>后续请在原仓库升版并发布正式 GitHub Release。维护者会收到发版通知。审核通过后，用户手动检查更新时就能看到适合本机的新版。</p>
      <p class="official-help">${externalLink(submissionURL, "填写收录申请")}</p>`);
   listing.onclick = event => {
     const card = event.target.closest("[data-store-entry]");
