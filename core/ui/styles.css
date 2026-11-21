@@ -800,13 +800,34 @@ main {
 .plugin-hub-heading { align-items: center; margin-bottom: 16px; }
 #installed-plugins .plugin-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
 .community-plugin-notice {
-  margin-top: 24px;
-  max-width: 76ch;
+  margin-top: 12px;
+  max-width: 40rem;
   color: #646b7b;
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: 13px;
 }
-.community-plugin-notice strong { font-weight: 600; }
+.community-plugin-notice summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  min-height: 44px;
+  border-radius: 4px;
+  cursor: pointer;
+  list-style: none;
+}
+.community-plugin-notice summary::-webkit-details-marker { display: none; }
+.community-plugin-notice summary:is(:hover, :focus-visible) { color: var(--accent); }
+.community-plugin-notice summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.community-plugin-notice summary .icon { width: 15px; height: 15px; }
+.community-plugin-notice summary .icon:last-child { width: 12px; height: 12px; }
+.community-plugin-notice details[open] summary .icon:last-child { transform: rotate(90deg); }
+.community-plugin-notice-copy {
+  margin-left: 7px;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+  line-height: 1.8;
+}
+.community-plugin-notice-copy p + p { margin-top: 6px; }
 #installed-plugins .plugin-card { display: flex; flex-direction: column; }
 #installed-plugins .plugin-card p { color: #636b7b; font-size: 13px; line-height: 1.6; }
 #installed-plugins .plugin-card .plugin-error { color: #a34958; }
