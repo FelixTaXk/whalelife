@@ -197,6 +197,36 @@ window.WHALELIFE_CATALOG = {
           ]
         }
       ]
+    },
+    {
+      "id": "studio",
+      "version": "0.2.2",
+      "name": "画室",
+      "author": "FelixTaXk",
+      "description": "用本地 ComfyUI、SD-WebUI 或兼容接口生成图片，附带视频和提示词小抄。看图与绘制蒙版需 Python 和 Pillow。",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-studio",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#手动安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-studio/issues",
+      "dependencies": [],
+      "collected": "2026-11-21",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.2.2",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-studio/releases/download/v0.2.2/studio-0.2.2-win32-x64.wlpkg.gz",
+          "sizeBytes": 120344,
+          "sha256": "c6e37794d7fe77617ca4344e8d6a9a11c2b9c73fcb5164044b0e51abb0871767",
+          "dependencies": {},
+          "bundledPluginIds": [
+            "studio/image",
+            "studio/promptkit",
+            "studio/video"
+          ]
+        }
+      ]
     }
   ]
 };
