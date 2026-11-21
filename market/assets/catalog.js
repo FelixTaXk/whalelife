@@ -7,7 +7,7 @@ window.WHALELIFE_CATALOG = {
   "official": [
     {
       "id": "qq",
-      "version": "0.23.0",
+      "version": "0.24.0",
       "name": "QQ",
       "author": "iinukami 和贡献者",
       "description": "在 QQ 私聊里延续 WhaleLife 的对话，和白名单好友收发消息。",
@@ -42,7 +42,7 @@ window.WHALELIFE_CATALOG = {
     },
     {
       "id": "gallery",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "name": "图库",
       "author": "iinukami 和贡献者",
       "description": "在本地收藏图片和表情，编辑描述与标签，按含义找回需要的那张图。",
