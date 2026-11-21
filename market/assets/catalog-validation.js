@@ -8,6 +8,9 @@
   const pluginId = value =>
     typeof value === "string" && /^[a-z][a-z0-9-]*(\/[a-z][a-z0-9-]*)*$/.test(value);
   const validVersion = value => typeof value === "string" && /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/.test(value);
+  const reviewedIcon = /^assets\/community-icons\/[0-9a-f]{64}\.png$/;
+  scope.whaleLifeCommunityIconURL = entry => typeof entry?.icon === "string" && reviewedIcon.test(entry.icon)
+    ? "https://raw.githubusercontent.com/iinukami/whalelife/main/market/" + entry.icon : null;
 
   function releaseVersion(entry) {
     if (validVersion(entry?.version)) return entry.version;

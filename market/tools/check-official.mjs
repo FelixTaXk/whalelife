@@ -8,12 +8,19 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { reviewedCommunityEntries } from "../../core/community-reviews.ts";
 import { parseHostRange } from "../../core/package-host-range.ts";
+import { inspectCommunityIcon } from "./review-community-icon.mjs";
 
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
 const context = { window: {}, URL };
 runInNewContext(read("../assets/catalog-validation.js"), context);
 export const catalog = JSON.parse(read("../catalog.json"));
 assert.ok(context.window.isWhaleLifeCatalog(catalog), "Invalid plugin catalog");
+for (const entry of catalog.community) {
+  if (entry.icon === undefined) continue;
+  assert.ok(context.window.whaleLifeCommunityIconURL(entry), entry.id + ": invalid reviewed icon path");
+  const bytes = readFileSync(new URL("../" + entry.icon, import.meta.url));
+  assert.equal(entry.icon, "assets/community-icons/" + inspectCommunityIcon(bytes).sha256 + ".png", entry.id + ": icon digest mismatch");
+}
 const reviewedCommunity = reviewedCommunityEntries(catalog);
 function checkDisplayVersion(card, releases) {
   const versions = releases.filter(release => !release.recognitionOnly).map(release => release.version);
