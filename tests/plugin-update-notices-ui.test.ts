@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
-const { renderStore } = await import(new URL("../core/ui/plugin-store.js", import.meta.url).href);
+const { renderStore, bindStore } = await import(new URL("../core/ui/plugin-store.js", import.meta.url).href);
+const { renderPlugins, bindPlugins } = await import(new URL("../core/ui/views.js", import.meta.url).href);
 const { loadPluginUpdates } = await import(new URL("../core/ui/plugin-updates.js", import.meta.url).href);
 const { pluginCard } = await import(new URL("../core/ui/extensions.js", import.meta.url).href);
 const entry = (id: string, name: string) => {
@@ -51,6 +53,82 @@ test("a stale notice cannot attach to a changed local install or a different sto
   }
   const transferred = { official: [], community: [{ ...note, repository: "https://github.com/other/color-note" }] };
   assert.doesNotMatch(renderStore({ state: { ...state, publishedStore: transferred, storeDetail: note.id } }), /有更新|查看新版/);
+});
+
+test("management and store share an explicit check; binding, rendering and waiting do not start one", async t => {
+  const paths: string[] = [];
+  let reply!: (response: Response) => void;
+  let localReads = 0, localReply!: (response: Response) => void;
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    if (path === "/api/official-plugins") return Response.json({plugins: []});
+    if (path === "/api/plugin-updates") {
+      localReads++;
+      return new Promise<Response>(resolve => { localReply = resolve; });
+    }
+    paths.push(path);
+    assert.equal(init.method, "POST");
+    return new Promise<Response>(resolve => { reply = resolve; });
+  });
+  const controls = () => {
+    const button = { disabled: false, onclick: () => Promise.resolve() }, status = { textContent: "" };
+    return { button, status, querySelectorAll(selector: string) {
+      if (selector === "[data-check-plugin-updates]") return [button];
+      if (selector === "[data-plugin-check-status]") return [status];
+      return [];
+    }, addEventListener() {} };
+  };
+  const store = { ...controls(), querySelector: () => ({}), dispatchEvent() {} };
+  const content = { ...controls(), ownerDocument: { getElementById: (id: string) => id === "plugin-store" ? store : null } };
+  const app = { state: { ...state, page: "plugins", communityPlugins: [] }, content };
+  const bind = () => {
+    bindPlugins(app);
+    bindStore(app, { querySelector: () => store }, false);
+  };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  bind();
+  t.mock.timers.tick(60 * 60_000);
+  bind();
+  assert.deepEqual(paths, []);
+  assert.equal(localReads, 1);
+  assert.match(renderPlugins(app), /data-check-plugin-updates/);
+  assert.match(renderStore(app), /data-check-plugin-updates/);
+
+  const pending = content.button.onclick();
+  assert.equal(store.button.disabled, true);
+  await store.button.onclick();
+  bind();
+  assert.deepEqual(paths, ["/api/plugin-updates/check"]);
+  reply(Response.json({ updates: state.pluginUpdates }));
+  await pending;
+  localReply(Response.json({ updates: [], checked: true }));
+  await nextTurn();
+  assert.equal(content.button.disabled, false);
+  assert.equal(store.status.textContent, "发现 3 个插件可更新。");
+  assert.match(renderPlugins(app), /发现 3 个插件可更新/);
+  assert.match(renderStore(app), /发现 3 个插件可更新/);
+  const partial = store.button.onclick();
+  reply(Response.json({ updates: [], incomplete: true }));
+  await partial;
+  assert.match(content.status.textContent, /暂时无法核实/);
+  assert.doesNotMatch(content.status.textContent, /未发现/);
+
+  const retry = store.button.onclick();
+  reply(Response.json({ updates: [] }));
+  await retry;
+  assert.equal(content.status.textContent, "未发现可用的插件更新。");
+  const failed = content.button.onclick();
+  reply(Response.json({ error: "服务不可用" }, { status: 503 }));
+  await failed;
+  assert.match(store.status.textContent, /检查插件更新失败.*服务不可用/);
+  assert.equal(paths.length, 4);
+  const refreshed = { state: { ...state, page: "plugins", communityPlugins: [], pluginUpdates: [] }, content };
+  bindPlugins(refreshed);
+  assert.equal(localReads, 2);
+  localReply(Response.json({ updates: state.pluginUpdates, checked: true, incomplete: true }));
+  await nextTurn();
+  assert.match(renderPlugins(refreshed), /发现 3 个插件可更新。部分版本信息暂时无法核实/);
+  assert.match(renderStore(refreshed), /有更新/);
+  assert.equal(paths.length, 4);
 });
 
 test("a collapsed group reports only outdated descendants and clears the count when they are updated", async t => {

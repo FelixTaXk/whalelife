@@ -15,6 +15,7 @@ import {
 import { icon, whale } from "./icons.js";
 import { renderContextMeter } from "./context.js";
 import { hostUpdateContent } from "./host-updates.js";
+import { bindPluginUpdateCheck, checkPluginsButton, checkPluginsStatus } from "./plugin-updates.js";
 
 const typeIcon = (type) =>
   type === "embedding" ? "vector" : type === "chat" ? "chat" : "sliders";
@@ -204,15 +205,18 @@ export function renderPlugins(app) {
   const cards = visiblePluginCards(app.state.status);
   return `<header class="page-heading plugin-hub-heading">
     <div><h1>插件管理</h1><p>${plugins.length} 个扩展插件${cards.length !== plugins.length ? ` · ${cards.length} 个入口` : ""}</p></div>
-    <a class="btn primary store-launch" href="#market" aria-haspopup="dialog" aria-controls="store-drawer">${icon("cube")}插件商店</a>
+    <div class="plugin-heading-actions">${checkPluginsButton(app.state)}
+      <a class="btn primary store-launch" href="#market" aria-haspopup="dialog" aria-controls="store-drawer">${icon("cube")}插件商店</a></div>
   </header>
   <section id="installed-plugins" aria-label="已安装插件">
+    ${checkPluginsStatus(app.state)}
     <div data-official-read-status role="status"></div>
     <div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p, app.state)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}
   </section>`;
 }
 export function bindPlugins(app) {
   bindPluginActions(app);
+  bindPluginUpdateCheck(app, app.content);
 }
 
 export function renderChat(app) {

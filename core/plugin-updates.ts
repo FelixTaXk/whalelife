@@ -23,6 +23,11 @@ function repoPath(value: unknown) {
   if (path && ![".", ".."].includes(path.split("/")[1])) return path;
 }
 
+function installationKey(plugins: Installed[]) {
+  return JSON.stringify(plugins.filter(p => !p.builtin && parseVersion(p.version))
+    .map(p => [p.id, p.version, p.repository]).sort());
+}
+
 function parseVersion(value: unknown) {
   if (typeof value !== "string" || value.length > 256 || value.trim() !== value) return;
   const match = semver.exec(value);
@@ -58,6 +63,8 @@ async function readJSON(address: string, signal: AbortSignal): Promise<Metadata>
     headers: { Accept: "application/json" }, signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) });
   if (!response.ok || !response.body) {
     await response.body?.cancel();
+    // A public repository with no formal Release legitimately has no latest version.
+    if (response.status === 404 && address.startsWith("https://api.github.com/repos/")) return {};
     throw Error("无法读取公开发行资料");
   }
   const reader = response.body.getReader(), chunks: Uint8Array[] = [];
@@ -104,6 +111,8 @@ export class PluginUpdates {
   private registry: Metadata;
   private host: string = bundled("../package.json").version;
   private cache = new Map<string, { expires: number; value: Promise<Metadata | null> }>();
+  private last?: { key: string; updates: Notice[]; incomplete?: boolean };
+  private lastCheck = 0;
   private signal: AbortSignal;
 
   constructor(signal: AbortSignal, catalog = bundled("../market/catalog.json"), registry = bundled("../market/official-releases.json")) {
@@ -123,11 +132,27 @@ export class PluginUpdates {
     return entry.value;
   }
 
+  snapshot(installed: Installed[]) {
+    if (!this.last) return { updates: [] };
+    const updates = this.last.updates.filter(row => installed.some(plugin =>
+      !plugin.builtin && plugin.id === row.runtimeId && plugin.version === row.installedVersion &&
+      (plugin.repository == null || repoPath(plugin.repository)?.toLowerCase() === repoPath(row.repository)?.toLowerCase())));
+    if (this.last.key === installationKey(installed)) return { updates, checked: true, incomplete: this.last.incomplete };
+    return { updates };
+  }
+
   async list(installed: Installed[], recognize: () => Promise<Recognition>) {
+    const check = ++this.lastCheck;
     const local = new Map(installed.filter(p => !p.builtin && parseVersion(p.version)).map(p => [p.id, p]));
-    if (!local.size) return { updates: [] };
+    if (!local.size) {
+      this.last = { key: installationKey(installed), updates: [] };
+      return { updates: [] };
+    }
     const [published, publicRegistry] = await Promise.all([this.read(market + "catalog.json"), this.read(market + "official-releases.json")]);
-    const community = communityEntries(published) ?? communityEntries(this.catalog) ?? [];
+    const publishedCommunity = communityEntries(published);
+    const community = publishedCommunity ?? communityEntries(this.catalog) ?? [];
+    const publicPlugins = publicRegistry?.schemaVersion === 1 && Array.isArray(publicRegistry.plugins) ? publicRegistry.plugins : null;
+    let incomplete = false;
     const updates: Notice[] = [];
     const reserved = new Set<string>();
     const officialCandidates: Notice[] = [];
@@ -137,9 +162,9 @@ export class PluginUpdates {
       reserved.add(runtimeId);
       const installedVersion = local.get(runtimeId)?.version;
       if (!installedVersion) continue;
-      const matches = publicRegistry?.schemaVersion === 1 && Array.isArray(publicRegistry.plugins)
-        ? publicRegistry.plugins.filter((other: Metadata) => other?.id === id && other.repository === repository &&
-          other.parentId === entry.parentId && other.name === entry.name) : [];
+      if (!publicPlugins) incomplete = true;
+      const matches = publicPlugins?.filter((other: Metadata) => other?.id === id && other.repository === repository &&
+          other.parentId === entry.parentId && other.name === entry.name) ?? [];
       let target = verifiedTarget(entry, installedVersion, this.host, process.platform, process.arch);
       if (matches.length === 1) target = verifiedTarget(matches[0], target?.version ?? installedVersion, this.host, process.platform, process.arch) ?? target;
       if (target) officialCandidates.push({ id, runtimeId, repository, installedVersion, latestVersion: target.version, url: target.url, source: "official" });
@@ -147,7 +172,7 @@ export class PluginUpdates {
     const official = async () => {
       if (!officialCandidates.length) return;
       const recognition = await recognize().catch(() => null);
-      if (!recognition) return;
+      if (!recognition) { incomplete = true; return; }
       for (const item of officialCandidates) {
         if (recognition.recognizedRuntimeIds.includes(item.runtimeId) && recognition.plugins.some(plan =>
           plan.installed && plan.runtimeId === item.runtimeId && plan.installedVersion === item.installedVersion)) updates.push(item);
@@ -155,6 +180,7 @@ export class PluginUpdates {
     };
     // Match full local IDs before requesting metadata. Only the public repository goes to GitHub.
     const authors = async () => {
+      if (!publishedCommunity && [...local.keys()].some(id => !reserved.has(id))) incomplete = true;
       const candidates = community.flatMap(entry => {
         const plugin = local.get(entry.id), path = repoPath(entry.repository)!;
         if (!plugin?.version || reserved.has(entry.id) || (plugin.repository != null &&
@@ -163,7 +189,9 @@ export class PluginUpdates {
       });
       for (let i = 0; i < candidates.length; i += 4) {
         await Promise.all(candidates.slice(i, i + 4).map(async ({ entry, path, version }) => {
-          const target = authorTarget(entry, await this.read("https://api.github.com/repos/" + path + "/releases/latest"));
+          const release = await this.read("https://api.github.com/repos/" + path + "/releases/latest");
+          if (!release) { incomplete = true; return; }
+          const target = authorTarget(entry, release);
           if (!target || !newer(target.version, version)) return;
           updates.push({ id: entry.id, runtimeId: entry.id, repository: entry.repository, installedVersion: version,
             latestVersion: target.version, url: target.url, source: "community" });
@@ -171,6 +199,8 @@ export class PluginUpdates {
       }
     };
     await Promise.all([official(), authors()]);
-    return { updates: updates.sort((a, b) => a.runtimeId.localeCompare(b.runtimeId, "en")) };
+    updates.sort((a, b) => a.runtimeId.localeCompare(b.runtimeId, "en"));
+    if (check === this.lastCheck) this.last = { key: installationKey(installed), updates, incomplete };
+    return incomplete ? { updates, incomplete: true } : { updates };
   }
 }

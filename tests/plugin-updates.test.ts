@@ -82,6 +82,31 @@ test("a fresh instance makes no public requests and unlisted installations do no
   assert.deepEqual(requests.map(r => r.address).sort(), [catalogURL, registryURL].sort());
 });
 
+test("reading the last manual result is local, and notices disappear for removed or replaced installations", async t => {
+  const calls = serve(t, new Map<string, unknown>([[catalogURL, catalog], [registryURL, registry],
+    [latestURL(author.id), stable("v2.0.0")]]));
+  const service = make();
+  assert.deepEqual(service.snapshot(installed), { updates: [] });
+  assert.equal(calls.length, 0);
+  const { updates } = await service.list(installed, recognized);
+  assert.equal(updates.length, 2);
+  assert.deepEqual(service.snapshot(installed), { updates, checked: true, incomplete: false });
+  assert.deepEqual(service.snapshot([{ ...installed[0], version: "9.0.0" }, { ...installed[1], repository: github + "other" }]), { updates: [] });
+  assert.equal(calls.length, 3);
+});
+
+test("no published author release is distinct from an interrupted or rate-limited manual check", async t => {
+  const replies = new Map<string, unknown>([[catalogURL, catalog], [registryURL, registry]]);
+  serve(t, replies);
+  assert.deepEqual(await make().list([installed[1]], recognized), { updates: [] });
+  for (const failure of [new Response(null, {status: 403}), new Response(null, {status: 429}), Error("offline")]) {
+    replies.set(latestURL(author.id), failure);
+    const service = make();
+    assert.deepEqual(await service.list([installed[1]], recognized), { updates: [], incomplete: true });
+    assert.deepEqual(service.snapshot([installed[1]]), { updates: [], checked: true, incomplete: true });
+  }
+});
+
 test("offline official fallback respects fingerprints, runtime paths and installed versions", async t => {
   const replies = new Map<string, unknown>([[registryURL, Error("offline")], [catalogURL, Error("offline")]]);
   serve(t, replies);

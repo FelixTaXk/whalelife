@@ -5,7 +5,7 @@ import { setImmediate as turn } from "node:timers/promises";
 const { bindHostUpdate, hostUpdateContent, resetHostUpdateSession } =
   await import(new URL("../core/ui/host-updates.js", import.meta.url).href);
 const ready = {
-  current: "0.1.0", phase: "idle", supported: true,
+  current: "0.1.0", phase: "idle", supported: true, checked: true,
   latest: { version: "0.1.1", url: "https://github.com/iinukami/whalelife/releases/tag/v0.1.1" },
 };
 
@@ -110,14 +110,30 @@ test("offline checks can be retried, and only the host's returned outcome is sho
   assert.doesNotMatch(hostUpdateContent({ hostUpdate: { data: { ...ready, supported: false } } }), /data-host-action="open"/);
 });
 
-test("opening the overview shows the checked release status before a manual refresh", async t => {
+test("opening and idling on the overview only read local status; a click checks GitHub", async t => {
   const view = overview();
-  t.mock.method(globalThis, "fetch", async () => Response.json({ ...ready, latest: null }));
+  const paths: string[] = [];
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  t.mock.method(globalThis, "fetch", async (path: string) => {
+    paths.push(path);
+    return Response.json({ ...ready, latest: null, checked: path.endsWith("/check") });
+  });
   t.after(() => resetHostUpdateSession(view.app));
   bindHostUpdate(view.app);
   assert.doesNotMatch(view.slot.innerHTML, /暂无更高的正式版本/);
   await turn();
-  assert.match(view.slot.innerHTML, /当前版本 v0\.1\.0 · 暂无更高的正式版本/);
+  assert.match(view.slot.innerHTML, /当前版本 v0\.1\.0 · 尚未检查更新/);
   assert.match(view.slot.innerHTML, /GitHub 正式发行版/);
   assert.doesNotMatch(view.slot.innerHTML, /data-host-action="open"|>发行说明</);
+  t.mock.timers.tick(60 * 60_000);
+  bindHostUpdate(view.app);
+  await turn();
+  assert.deepEqual(paths, ["/api/host-update"]);
+  view.click("check");
+  view.click("check");
+  await turn();
+  assert.match(view.slot.innerHTML, /暂无更高的正式版本/);
+  t.mock.timers.tick(60 * 60_000);
+  await turn();
+  assert.deepEqual(paths, ["/api/host-update", "/api/host-update/check"]);
 });

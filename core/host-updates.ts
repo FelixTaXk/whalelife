@@ -19,9 +19,8 @@ export class HostUpdates {
   current: string;
   private activate?: (version: string) => void | Promise<void>;
   private request: typeof fetch;
-  private release: HostRelease | null = null;
+  private release?: HostRelease | null;
   private checking?: Promise<void>;
-  private checkedUntil = 0;
   private phase: "idle" | "preparing" | "restarting" = "idle";
   private error?: string;
   private failed?: Result;
@@ -33,16 +32,14 @@ export class HostUpdates {
     this.request = request;
   }
 
-  async status(force = false) {
-    if (this.phase === "idle" && (force || Date.now() >= this.checkedUntil)) {
+  async check() {
+    if (this.phase === "idle") {
       this.checking ??= latestHostRelease(this.current, this.request).then(release => {
         this.release = release;
         this.error = undefined;
-        this.checkedUntil = Date.now() + 10 * 60_000;
       }).catch((error: unknown) => {
-        this.release = null;
+        this.release = undefined;
         this.error = "检查官方发行版本失败：" + errorMessage(error);
-        this.checkedUntil = Date.now() + 60_000;
       }).finally(() => { this.checking = undefined; });
       await this.checking;
     }
@@ -53,7 +50,7 @@ export class HostUpdates {
     const stored = this.activate ? await readHostUpdateState(this.root) : undefined;
     const lastResult = this.failed ?? stored?.lastResult ?? undefined;
     return { current: this.current, latest: this.release ? { version: this.release.version, url: this.release.url } : null,
-      phase: this.phase, supported: !!this.activate, lastResult, error: this.error };
+      checked: this.release !== undefined, phase: this.phase, supported: !!this.activate, lastResult, error: this.error };
   }
 
   async apply(input: {version?: unknown; confirmed?: unknown} | null) {
@@ -68,7 +65,7 @@ export class HostUpdates {
     void this.prepare(release).catch((error: unknown) => {
       this.failed = { status: "failed", version: release.version, message: errorMessage(error), at: new Date().toISOString() };
       this.phase = "idle";
-      this.checkedUntil = 0;
+      this.release = undefined;
     });
     return this.view();
   }

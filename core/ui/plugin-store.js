@@ -5,7 +5,7 @@
 import { api, escapeHTML as e } from "./api.js";
 import { icon } from "./icons.js";
 import { bindOfficialActions, confirmCommunityInstall, officialBadge, renderStoreInstall } from "./official-plugins.js";
-import { storeUpdate, updateBadge, updateDetails } from "./plugin-updates.js";
+import { bindPluginUpdateCheck, checkPluginsButton, checkPluginsStatus, storeUpdate, updateBadge, updateDetails } from "./plugin-updates.js";
 import "../../market/assets/catalog-validation.js";
 
 const bundledURL = "/market/catalog.json";
@@ -166,12 +166,14 @@ export function renderStore(app) {
   const hideSort = current === "official" || !(catalog?.community.length > 1);
   return `<div id="plugin-store">
     ${state.storeDetail ? "" : `<header class="store-page-heading"><h1 id="store-heading" tabindex="-1">插件商店</h1>
-      <button type="button" class="btn small" data-store-submit>提交插件</button></header>
+      <div class="plugin-heading-actions">${checkPluginsButton(state)}
+        <button type="button" class="btn small" data-store-submit>提交插件</button></div></header>
     <div class="store-toolbar"><nav data-store-views aria-label="插件分类">${Object.entries(views).map(([key, name]) =>
       `<button type="button" data-store-view="${key}" aria-pressed="${current === key}">${name}</button>`).join("")}</nav>
       <label class="store-search">${icon("search")}<input type="search" data-store-search aria-label="搜索插件" placeholder="搜索插件" value="${e(state.storeSearch || "")}"></label>
       <label class="store-sort"${hideSort ? " hidden" : ""}>社区排序
       <select data-store-sort><option value="stars">GitHub 星标</option><option value="date"${state.storeSort === "date" ? " selected" : ""}>最近收录</option></select></label></div>`}
+    ${state.storeDetail ? "" : checkPluginsStatus(state)}
     <div data-official-read-status role="status">${state.officialReadError ? e(state.officialReadError) + ' <button class="btn small" type="button" data-official-retry>重试</button>' : ""}</div>
     <div class="store-scroll${state.storeDetail ? " store-detail" : ""}" data-store-scroll>
       <div data-store-results>${storeBody(state)}</div>
@@ -266,6 +268,7 @@ export function bindStore(app, container = app.content, opening = true) {
     }
   };
   bindOfficialActions(app, root, opening);
+  bindPluginUpdateCheck(app, root);
   if (opening && state.communityPlugins) {
     state.communityPlugins = null;
     paint();

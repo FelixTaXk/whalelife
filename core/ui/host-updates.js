@@ -6,7 +6,6 @@ import { api, escapeHTML as e } from "./api.js";
 import { icon } from "./icons.js";
 
 const endpoint = "/api/host-update";
-const refreshInterval = 15 * 60_000;
 const versionLabel = value => /^\d/.test(value) ? "v" + value : value;
 const active = data => data?.phase === "preparing" || data?.phase === "restarting";
 
@@ -36,7 +35,7 @@ export function hostUpdateContent(app) {
   } else if (latest?.version && !error) {
     title = "WhaleLife " + versionLabel(latest.version) + " 可更新";
   } else if (data?.supported && !error && data.phase === "idle") {
-    status = "暂无更高的正式版本";
+    status = data.checked ? "暂无更高的正式版本" : "尚未检查更新";
   }
   if (!busy && data?.supported === false && !error) {
     status = "当前安装方式不支持一键更新";
@@ -47,9 +46,9 @@ export function hostUpdateContent(app) {
   const result = !busy && resultLabel
     ? `<p class="host-update-result ${last.status === "updated" ? "ok" : "warning"}">上次更新 · ${e(resultLabel)}${last.version ? "（" + e(versionLabel(last.version)) + "）" : ""}${last.message ? "。" + e(last.message) : ""}</p>` : "";
   const release = !busy && !error && latest ? releaseLink(latest.url) : "";
-  const button = busy ? "" : available
-    ? '<button type="button" class="btn small primary" data-host-action="open">查看更新</button>'
-    : `<button type="button" class="btn small" data-host-action="check"${ui.reading ? " disabled" : ""}>${ui.reading ? "检查中…" : "检查更新"}</button>`;
+  const open = available
+    ? `<button type="button" class="btn small primary" data-host-action="open"${ui.reading ? " disabled" : ""}>查看更新</button>` : "";
+  const button = busy ? "" : open + `<button type="button" class="btn small" data-host-action="check"${ui.reading ? " disabled" : ""}>${ui.checking ? "检查中…" : "检查更新"}</button>`;
   return `<div class="host-update-line"><span class="host-update-icon${available ? " available" : ""}">${icon(busy ? "refresh" : "download")}</span>
     <div class="host-update-copy" role="status"><strong>${e(title)}</strong><small>${info ? e(info) + " · " : ""}<a class="host-release-link" href="https://github.com/iinukami/whalelife/releases" target="_blank" rel="noopener noreferrer">GitHub 正式发行版</a></small>${result}
     ${error && !busy ? `<p class="host-update-result warning">${e(error)}</p>` : ""}</div>
@@ -67,30 +66,27 @@ function paint(app) {
 function schedule(app) {
   const ui = app.hostUpdate;
   clearTimeout(ui.timer);
-  if (!app.authenticated || (!ui.watching && app.state.page !== "overview")) return;
-  ui.timer = setTimeout(() => {
-    if (ui.watching || app.state.page === "overview") void read(app);
-  }, ui.watching ? 2000 : Math.max(1000, ui.nextRead - Date.now()));
+  if (app.authenticated && ui.watching)
+    ui.timer = setTimeout(() => void read(app), 2000);
 }
 
-async function read(app, force = false) {
+async function read(app, checkRelease = false) {
   const ui = app.hostUpdate;
   if (ui.reading || ui.submitting || !app.authenticated) return;
   ui.reading = true;
+  ui.checking = checkRelease;
   paint(app);
   try {
-    const data = await api(endpoint + (force ? "/check" : ""), force ? {} : undefined, AbortSignal.timeout(20_000));
+    const data = await api(checkRelease ? endpoint + "/check" : endpoint, checkRelease ? {} : undefined, AbortSignal.timeout(20_000));
     if (ui !== app.hostUpdate) return;
     ui.data = data;
     ui.error = "";
     ui.watching = active(data);
     ui.reconnecting = false;
     ui.disconnectedAt = 0;
-    ui.nextRead = Date.now() + refreshInterval;
   } catch (error) {
     if (ui !== app.hostUpdate) return;
     if (error.status === 401) return app.requireLogin();
-    ui.nextRead = Date.now() + 60_000;
     if (ui.watching) {
       ui.reconnecting = true;
       ui.disconnectedAt ||= Date.now();
@@ -103,6 +99,7 @@ async function read(app, force = false) {
   } finally {
     if (ui === app.hostUpdate) {
       ui.reading = false;
+      ui.checking = false;
       paint(app);
       schedule(app);
     }
@@ -151,7 +148,8 @@ function confirmUpdate(app) {
 }
 
 export function bindHostUpdate(app) {
-  const ui = app.hostUpdate ??= { nextRead: 0 };
+  const firstRead = !app.hostUpdate;
+  const ui = app.hostUpdate ??= {};
   const slot = app.content.querySelector("[data-host-update]");
   slot.onclick = event => {
     const button = event.target.closest("[data-host-action]");
@@ -159,7 +157,7 @@ export function bindHostUpdate(app) {
     if (button.dataset.hostAction === "open") confirmUpdate(app);
     else void read(app, true);
   };
-  if (!ui.reading && !ui.submitting && Date.now() >= ui.nextRead) void read(app);
+  if (firstRead) void read(app);
 }
 
 export function resetHostUpdateSession(app) {

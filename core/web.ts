@@ -217,15 +217,20 @@ export async function startWeb(config: any, services: any, runtime: any) {
         finally { lastOfficial = undefined; }
       }
       if (pathname === "/api/host-update" && req.method === "GET")
-        return send(200, await hostUpdates.status());
+        return send(200, await hostUpdates.view());
       if (["/api/host-update/check", "/api/host-update/apply"].includes(pathname) && req.method === "POST") {
         if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
           return send(415, { error: "请使用 JSON 提交操作。" });
         const input = await body(req, 4096);
-        if (pathname.endsWith("/check")) return send(200, await hostUpdates.status(true));
+        if (pathname.endsWith("/check")) return send(200, await hostUpdates.check());
         return send(202, await hostUpdates.apply(input));
       }
-      if (pathname === "/api/plugin-updates" && req.method === "GET") {
+      if (pathname === "/api/plugin-updates" && req.method === "GET")
+        return send(200, pluginUpdates.snapshot(runtime.list()));
+      if (pathname === "/api/plugin-updates/check" && req.method === "POST") {
+        if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
+          return send(415, { error: "请使用 JSON 提交操作。" });
+        await body(req, 4096);
         return send(200, await pluginUpdates.list(runtime.list(), () => officialList(true)));
       }
       if (pathname === "/api/official-plugins" && req.method === "GET") return send(200, await officialList());

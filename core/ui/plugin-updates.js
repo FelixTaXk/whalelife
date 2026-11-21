@@ -76,26 +76,86 @@ function paintUpdates(app) {
   app.content.ownerDocument.getElementById("plugin-store")?.dispatchEvent(new Event("plugin-updates"));
 }
 
-export async function loadPluginUpdates(app) {
-  const plugins = app.state.status?.plugins;
-  if (!Array.isArray(plugins)) return;
-  const key = JSON.stringify(plugins.filter(p => !p.builtin).map(p => [p.id, p.version, repositoryKey(p.repository)]).sort());
-  const previous = app.pluginUpdateRead;
-  if (previous?.key === key && Date.now() < previous.nextRead) return;
-  // Frequent console renders share this read. A changed installation may start a fresh one.
-  const read = { key, nextRead: Infinity };
-  app.pluginUpdateRead = read;
-  try {
-    const { updates } = await api("/api/plugin-updates");
-    if (app.pluginUpdateRead !== read || !Array.isArray(updates)) return;
-    if (JSON.stringify(updates) !== JSON.stringify(app.state.pluginUpdates ?? [])) {
-      app.state.pluginUpdates = updates;
-      paintUpdates(app);
+function installedKey(state) {
+  return JSON.stringify((state.status?.plugins || []).filter(p => !p.builtin)
+    .map(p => [p.id, p.version, repositoryKey(p.repository)]).sort());
+}
+
+export function checkPluginsButton(state) {
+  const busy = state.pluginUpdateCheck?.pending;
+  return `<button type="button" class="btn small" data-check-plugin-updates${busy ? " disabled" : ""}>${busy ? "检查中…" : "检查插件更新"}</button>`;
+}
+
+function checkMessage(state) {
+  const check = state.pluginUpdateCheck;
+  return check && check.key === installedKey(state) ? check.message : "";
+}
+
+export function checkPluginsStatus(state) {
+  return `<p class="plugin-check-status" data-plugin-check-status role="status">${e(checkMessage(state))}</p>`;
+}
+
+function paintCheckControls(app) {
+  const store = app.content.ownerDocument.getElementById("plugin-store");
+  const { pending } = app.state.pluginUpdateCheck;
+  for (const root of [app.content, store]) {
+    if (!root) continue;
+    for (const button of root.querySelectorAll("[data-check-plugin-updates]")) {
+      button.disabled = pending;
+      button.textContent = pending ? "检查中…" : "检查插件更新";
     }
-    read.nextRead = Date.now() + 5 * 60_000;
+    for (const slot of root.querySelectorAll("[data-plugin-check-status]")) slot.textContent = checkMessage(app.state);
+  }
+}
+
+export function bindPluginUpdateCheck(app, root) {
+  const buttons = root.querySelectorAll("[data-check-plugin-updates]");
+  for (const button of buttons) {
+    button.onclick = () => loadPluginUpdates(app);
+  }
+  if (buttons.length && !app.pluginUpdateSnapshotRead && !app.state.pluginUpdateCheck) void restorePluginUpdates(app);
+}
+
+function updateSummary(state, updates, incomplete) {
+  const count = updates.filter(update => isInstalled(state, update)).length;
+  const found = count ? `发现 ${count} 个插件可更新。` : "";
+  return incomplete ? found + "部分版本信息暂时无法核实，请稍后重试。" : found || "未发现可用的插件更新。";
+}
+
+async function restorePluginUpdates(app) {
+  app.pluginUpdateSnapshotRead = true;
+  const state = app.state, key = installedKey(state);
+  try {
+    const { updates, checked, incomplete } = await api("/api/plugin-updates");
+    // An explicit check takes precedence over an earlier local snapshot read.
+    if (state.pluginUpdateCheck || !Array.isArray(updates)) return;
+    state.pluginUpdates = updates;
+    if (checked && key === installedKey(state)) {
+      state.pluginUpdateCheck = { key, pending: false, message: updateSummary(state, updates, incomplete) };
+      paintCheckControls(app);
+    }
+    paintUpdates(app);
   } catch {
-    // Release availability is independent of local plugin management.
+    // The check button remains usable if the previous local result could not be read.
+  }
+}
+
+export async function loadPluginUpdates(app) {
+  const state = app.state;
+  if (state.pluginUpdateCheck?.pending) return;
+  const check = { key: installedKey(state), pending: true, message: "" };
+  state.pluginUpdateCheck = check;
+  paintCheckControls(app);
+  try {
+    const { updates, incomplete } = await api("/api/plugin-updates/check", {});
+    if (!Array.isArray(updates)) throw Error("插件更新结果格式有误，请稍后重试。");
+    state.pluginUpdates = updates;
+    check.message = updateSummary(state, updates, incomplete);
+    paintUpdates(app);
+  } catch (error) {
+    check.message = "检查插件更新失败：" + error.message;
   } finally {
-    if (read.nextRead === Infinity) read.nextRead = Date.now() + 60_000;
+    check.pending = false;
+    paintCheckControls(app);
   }
 }

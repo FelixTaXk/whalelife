@@ -3,7 +3,7 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import { api, escapeHTML as e } from "./api.js";
-import { loadPluginUpdates, renderManageUpdate } from "./plugin-updates.js";
+import { renderManageUpdate } from "./plugin-updates.js";
 
 const stepNames = { install: "安装", enable: "启用", reuse: "沿用", uninstall: "卸载" };
 export const officialBadge = '<span class="store-official-badge">官方</span>';
@@ -221,6 +221,5 @@ export function bindOfficialActions(app, root = app.content, readPlan = true) {
   // Delegate from either the management page or the open store.
   app.officialActionClick ??= event => handleClick(app, event);
   root.addEventListener("click", app.officialActionClick);
-  if (root !== app.content || app.state.page === "plugins") void loadPluginUpdates(app);
   if (readPlan) void refresh(app);
 }
