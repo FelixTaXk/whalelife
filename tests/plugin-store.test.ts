@@ -44,6 +44,46 @@ test("the drawer filters cards by official name, ID and author without changing 
   assert.match(renderStore({ state: { ...state, storeDetail: "retired" } }), /未找到这个插件/);
 });
 
+test("cards and details show catalog versions before local plans load and keep a different installed version visible", () => {
+  const gallery = { ...first, version: "1.10.0" };
+  const manual = { ...popular, version: "0.1.0" };
+  const catalog = { official: [gallery], community: [manual, recent] };
+  const oldPublic = { official: [first], community: [popular, recent] };
+  const state = { bundledStore: catalog, publishedStore: oldPublic };
+  // A previously published catalog can arrive after the newer bundled one.
+  for (const storeDetail of [null, gallery.id, manual.id, recent.id]) {
+    const html = renderStore({state: {...state, storeDetail}});
+    for (const [id, text] of [[gallery.id, "收录版本 v1.10.0"], [manual.id, "收录版本 v0.1.0"], [recent.id, "版本未提供"]]) {
+      if (!storeDetail || storeDetail === id) assert.ok(html.includes('<span class="store-version">' + text + '</span>'));
+    }
+    assert.doesNotMatch(html, /store-card-version|data-community-install|data-official-action/);
+  }
+  const plan = {...gallery, installed: true, installedVersion: "1.9.0"};
+  for (const storeDetail of [null, gallery.id]) {
+    assert.match(renderStore({state: {...state, storeDetail, officialPlugins:[plan]}}), /收录版本 v1\.10\.0 · 已装 v1\.9\.0/);
+  }
+  const compatible = {...gallery, installed:false, action:"install", version:"1.8.0"};
+  assert.match(renderStore({state: {...state, officialPlugins:[compatible]}}), /收录版本 v1\.10\.0 · 本机可装 v1\.8\.0/);
+  const mismatch = renderStore({state:{...state, storeDetail:manual.id, publishedStore:{official:[], community:[{...popular, repository:"https://github.com/other/popular"}]},
+    status:{plugins:[{...manual, version:"7.7.7"}]}}});
+  assert.match(mismatch, /版本未提供/);
+  assert.doesNotMatch(mismatch, /v0\.1\.0|v7\.7\.7/);
+});
+
+test("a legacy public community catalog supplies the newest reviewed distribution before a local install plan loads", () => {
+  const release = (version: string) => ({version, assetUrl: popular.repository + "/releases/download/v" + version + "/sample.wlpkg.gz",
+    sizeBytes: 123, sha256: "a".repeat(64)});
+  const legacy = {...popular, verifiedReleases: [release("0.2.9"), release("0.2.10"), {...release("3.0.0"), recognitionOnly:true},
+    {...release("9.0.0"), assetUrl:"https://github.com/elsewhere/elsewhere/releases/download/v9/package"}]};
+  const state = {bundledStore:{official:[], community:[{...popular, version:"0.1.0"}]}, publishedStore:{official:[], community:[legacy]}};
+  for (const storeDetail of [null, popular.id]) {
+    const html = renderStore({state:{...state, storeDetail}});
+    assert.match(html, /收录版本 v0\.2\.10/);
+    assert.doesNotMatch(html, /v9\.0\.0|v3\.0\.0|v0\.1\.0|data-community-install=/);
+  }
+  assert.match(renderStore({state:{...state, storeDetail:popular.id}}), /安装说明/);
+});
+
 test("the store labels official cards and details by catalog section, including before local plans load", () => {
   const community = { ...popular, name: first.name, author: first.author };
   const state = { bundledStore: { official: [first], community: [community] } };

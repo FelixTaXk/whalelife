@@ -3,8 +3,27 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 (() => {
+  // The public file:// page loads this as a classic script. The console imports the same module.
+  const scope = typeof window === "undefined" ? globalThis : window;
   const pluginId = value =>
     typeof value === "string" && /^[a-z][a-z0-9-]*(\/[a-z][a-z0-9-]*)*$/.test(value);
+  const validVersion = value => typeof value === "string" && /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/.test(value);
+
+  function releaseVersion(entry) {
+    if (validVersion(entry?.version)) return entry.version;
+    if (!Array.isArray(entry?.verifiedReleases)) return null;
+    // Older published community catalogs carry the reviewed package records directly.
+    let latest = null;
+    for (const release of entry.verifiedReleases) {
+      if (!validVersion(release?.version) || release.recognitionOnly || !Number.isSafeInteger(release.sizeBytes) || release.sizeBytes <= 0 ||
+        !/^[a-f0-9]{64}$/.test(release.sha256) || !publicLink(release.assetUrl)?.href.startsWith(entry.repository + "/releases/download/")) continue;
+      if (!latest || release.version.localeCompare(latest, "en", { numeric:true }) > 0) latest = release.version;
+    }
+    return latest;
+  }
+
+  scope.whaleLifeCatalogVersion = (entry, bundled) => releaseVersion(entry) || releaseVersion(bundled?.find(item =>
+    item.id === entry.id && item.repository === entry.repository && item.name === entry.name));
 
   function publicLink(value) {
     if (typeof value !== "string" || !/^https:\/\//i.test(value) || /[\s\\\u0000-\u001f\u007f]/u.test(value)) return null;
@@ -19,6 +38,7 @@
 
   function validEntry(entry) {
     if (!entry || !pluginId(entry.id)) return false;
+    if (entry.version !== undefined && !validVersion(entry.version)) return false;
     for (const field of ["name", "author", "description"]) {
       if (typeof entry[field] !== "string" || !entry[field].trim()) return false;
     }
@@ -37,7 +57,7 @@
     return Number.isFinite(date.valueOf()) && date.toISOString().slice(0, 10) === value;
   }
 
-  window.isWhaleLifeCatalog = value => {
+  scope.isWhaleLifeCatalog = value => {
     if (!value || !Array.isArray(value.official) || !Array.isArray(value.community)) return false;
     const seen = new Set();
     for (const entries of [value.official, value.community]) {

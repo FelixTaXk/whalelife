@@ -15,6 +15,7 @@ import { OfficialPlugins } from "./official-plugins.ts";
 import { CommunityPackages } from "./community-packages.ts";
 import { readPublishedCommunityReviews } from "./community-reviews.ts";
 import { PluginUpdates } from "./plugin-updates.ts";
+import { HostUpdates } from "./host-updates.ts";
 import { CacheDiagnostics } from "./cache-diagnostics.ts";
 
 const marketFiles = new Map([
@@ -46,6 +47,8 @@ export async function startWeb(config: any, services: any, runtime: any) {
       throw Object.assign(Error("暂时无法核对社区插件的审核记录。请稍后重试，或查看作者的安装说明。"), { status: 503 });
     }
   };
+  const hostUpdates: HostUpdates = services.hostUpdates ?? new HostUpdates(runtime.root,
+    JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version);
   const pluginUpdates = new PluginUpdates(lifetime.signal);
   let officialRead: ReturnType<typeof official.list> | undefined;
   let lastOfficial: { time: number; result: Awaited<ReturnType<typeof official.list>> } | undefined;
@@ -73,6 +76,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
     "official-plugins.js",
     "plugin-store.js",
     "plugin-updates.js",
+    "host-updates.js",
     "personas.js",
     "memory.js",
     "context.js",
@@ -126,6 +130,8 @@ export async function startWeb(config: any, services: any, runtime: any) {
     try {
       if (!allowedOrigin(req)) return send(403, { error: "来源无效" });
       const pathname = req.url?.split("?", 1)[0] ?? "";
+      if (services.hostStarting?.() && (pathname.startsWith("/api/") || pathname.startsWith("/plugins/")))
+        return send(503, { error: "本体更新正在验证启动，请稍后重试。" });
       if (req.method === "GET" && pathname === "/market") {
         res.writeHead(308, { Location: "/market/" + req.url!.slice(pathname.length) });
         return res.end();
@@ -209,6 +215,15 @@ export async function startWeb(config: any, services: any, runtime: any) {
         const reviews = await reviewedPackages();
         try { return send(200, await new CommunityPackages(runtime, reviews).apply(input)); }
         finally { lastOfficial = undefined; }
+      }
+      if (pathname === "/api/host-update" && req.method === "GET")
+        return send(200, await hostUpdates.status());
+      if (["/api/host-update/check", "/api/host-update/apply"].includes(pathname) && req.method === "POST") {
+        if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
+          return send(415, { error: "请使用 JSON 提交操作。" });
+        const input = await body(req, 4096);
+        if (pathname.endsWith("/check")) return send(200, await hostUpdates.status(true));
+        return send(202, await hostUpdates.apply(input));
       }
       if (pathname === "/api/plugin-updates" && req.method === "GET") {
         return send(200, await pluginUpdates.list(runtime.list(), () => officialList(true)));
@@ -514,7 +529,7 @@ export async function startWeb(config: any, services: any, runtime: any) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 65536 });
   server.on("upgrade", (req, socket, head) => {
     if (
-      !allowedOrigin(req) ||
+      services.hostStarting?.() || !allowedOrigin(req) ||
       !authorized(req) ||
       !["/ws/logs", "/ws/chat"].includes(req.url ?? "")
     ) {

@@ -23,9 +23,11 @@ import { MemoryEngine } from "./memory-engine.ts";
 import { registerMemoryTools } from "./memory-tools.ts";
 import { pluginServices } from "./plugin-services.ts";
 import { ExecutionArchive, registerExecutionTools } from "./execution-archive.ts";
-import { runMain } from "./process-lifecycle.ts";
+import type { HostUpdates } from "./host-updates.ts";
 export async function boot(
   root = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
+  hostUpdates?: HostUpdates,
+  hostStarting?: () => boolean,
 ) {
   const config = JSON.parse(
     (await readFile(resolve(root, "config/config.json"), "utf8")).replace(
@@ -83,6 +85,8 @@ export async function boot(
   const toolOrder = await RegisteredToolOrder.open(resolve(root, "config/tool-order.json"), logger);
   const runtime = new Runtime(root, logger, config.plugin_runtime);
   const services: any = {
+    hostUpdates,
+    hostStarting,
     diagnostics,
     logger,
     memory,
@@ -171,5 +175,11 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  void runMain(boot);
+  const { runHostSupervisor } = await import("./host-supervisor.ts");
+  try { process.exitCode = await runHostSupervisor(resolve(dirname(fileURLToPath(import.meta.url)), "..")); }
+  catch (error) {
+    const { writeLogOutput } = await import("./log-output.ts");
+    writeLogOutput("WhaleLife 启动失败：" + (error instanceof Error ? error.message : String(error)), "stderr");
+    process.exitCode = 1;
+  }
 }

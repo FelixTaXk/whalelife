@@ -6,6 +6,7 @@ import { api, escapeHTML as e } from "./api.js";
 import { icon } from "./icons.js";
 import { bindOfficialActions, confirmCommunityInstall, officialBadge, renderStoreInstall } from "./official-plugins.js";
 import { storeUpdate, updateBadge, updateDetails } from "./plugin-updates.js";
+import "../../market/assets/catalog-validation.js";
 
 const bundledURL = "/market/catalog.json";
 const publishedURL = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json";
@@ -36,13 +37,21 @@ function localPlan(state, entry, official) {
     (item.action === "installed" || item.action === "blocked" || (item.action === "install" && item.version && item.planKey)));
 }
 
-function art(entry, official, plan) {
+function art(entry, official) {
   const theme = official && artNames.has(entry.id) ? entry.id : "generic";
-  const installed = official ? plan?.installed : plan?.action === "installed";
-  const version = installed ? plan.installedVersion || plan.version : plan?.version;
   return `<span class="store-art" data-art="${theme}" aria-hidden="true">
-    <span class="store-object"><i></i><em></em><u></u></span>
-    <span class="store-card-version">${version ? "v" + e(version) : ""}</span></span>`;
+    <span class="store-object"><i></i><em></em><u></u></span></span>`;
+}
+
+function versionLine(state, entry, official, plan, update) {
+  const planVersion = plan?.installed && plan.recognized === false ? null : plan?.version;
+  const listed = globalThis.whaleLifeCatalogVersion(entry, state.bundledStore?.[official ? "official" : "community"]) || planVersion;
+  const installed = official ? plan?.installed : plan?.action === "installed";
+  const installedVersion = installed ? plan.installedVersion || plan.version : update?.installedVersion;
+  const labels = [listed ? "收录版本 v" + listed : "版本未提供"];
+  if (installedVersion && installedVersion !== listed) labels.push("已装 v" + installedVersion);
+  if (plan?.action === "install" && plan.version && plan.version !== listed) labels.push("本机可装 v" + plan.version);
+  return `<span class="store-version">${labels.map(e).join(" · ")}</span>`;
 }
 
 function card(state, entry, official) {
@@ -51,9 +60,10 @@ function card(state, entry, official) {
   const installed = (official ? plan?.installed : plan?.action === "installed") || !!update;
   const status = installed ? icon("check") + "已安装" : plan?.action === "install" ? "可安装" : "";
   return `<button type="button" class="store-card" data-store-entry="${e(entry.id)}">
-    ${art(entry, official, plan)}<span class="store-card-body"><span class="store-card-line">
+    ${art(entry, official)}<span class="store-card-body"><span class="store-card-line">
     <span class="store-name-line"><strong>${e(entry.name)}</strong>${official ? officialBadge : ""}${updateBadge(update)}</span>
     <span class="store-card-status"${installed ? " data-installed" : ""}>${status}</span></span>
+    ${versionLine(state, entry, official, plan, update)}
     <span class="store-description">${e(entry.description)}</span></span></button>`;
 }
 
@@ -99,9 +109,10 @@ function detail(state, catalog) {
     externalLink(entry.repository, "原仓库 · 加星"),
     externalLink(entry.feedback, "反馈问题"),
   ].join("");
-  return `${art(entry, !!officialEntry, plan)}
+  return `${art(entry, !!officialEntry)}
     <div class="store-detail-body">${officialEntry ? "" : '<small class="store-kind">社区插件</small>'}
       <div class="store-name-line"><h1 id="store-heading" tabindex="-1">${e(entry.name)}</h1>${officialEntry ? officialBadge : ""}${updateBadge(update)}</div>
+      ${versionLine(state, entry, !!officialEntry, plan, update)}
       <p class="store-description">${e(entry.description)}</p>
       <dl class="store-facts"><div><dt>作者</dt><dd>${e(entry.author)}</dd></div>
         <div><dt>插件依赖</dt><dd>${e(dependencies || "无")}</dd></div></dl>
@@ -228,19 +239,7 @@ export function bindStore(app, container = app.content, opening = true) {
     paint();
     void readCommunityPlans(app);
   });
-  // Official plan reads and public catalog reads can finish in either order.
-  // A plan refresh only changes the list badges; the installer updates its own detail slot.
-  app.storeOfficialChange = () => {
-    if (!state.storeDetail) paint();
-    else if (root.isConnected) {
-      const version = listing.querySelector(".store-card-version");
-      const entry = (state.publishedStore || state.bundledStore)?.official.find(item => item.id === state.storeDetail);
-      if (!entry) { paint(); return; }
-      const plan = localPlan(state, entry, true);
-      const number = plan?.installed ? plan.installedVersion : plan?.version;
-      if (version) version.textContent = number ? "v" + number : "";
-    }
-  };
+  app.storeOfficialChange = paint;
   for (const button of controls) button.onclick = () => { state.storeView = button.dataset.storeView; paint(); scroll.scrollTop = 0; };
   if (sort) sort.onchange = () => { state.storeSort = sort.value; paint(); scroll.scrollTop = 0; };
   const search = root.querySelector("[data-store-search]");

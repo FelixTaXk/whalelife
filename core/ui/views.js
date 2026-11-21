@@ -14,6 +14,7 @@ import {
 } from "./api.js";
 import { icon, whale } from "./icons.js";
 import { renderContextMeter } from "./context.js";
+import { hostUpdateContent } from "./host-updates.js";
 
 const typeIcon = (type) =>
   type === "embedding" ? "vector" : type === "chat" ? "chat" : "sliders";
@@ -32,6 +33,7 @@ export function renderOverview(app) {
   const extensions = extensionPlugins(s);
   const active = extensions.filter((p) => p.status === "active").length;
   return `<div class="page-heading"><div><div class="eyebrow">YOUR LOCAL WORKSPACE</div><h1>欢迎回来</h1><p>鲸鲸已就绪。模型、记忆与插件，都在这里。</p></div><div class="heading-actions"><span class="badge green"><i class="status-dot"></i>核心运行中</span></div></div>
+ <section class="host-update panel" aria-label="WhaleLife 本体更新" data-host-update>${hostUpdateContent(app)}</section>
  <div class="stats-grid">${[
    [
      "可用模型",

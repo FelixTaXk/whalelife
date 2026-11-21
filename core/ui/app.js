@@ -9,6 +9,7 @@ import { renderPersonas, bindPersonas } from "./personas.js";
 import { renderMemory, bindMemory, loadMemory } from "./memory.js";
 import { renderContextMeter } from "./context.js";
 import { renderStore, bindStore } from "./plugin-store.js";
+import { bindHostUpdate, resetHostUpdateSession } from "./host-updates.js";
 import { extensionPage, extensionNavigation, extensionActiveKey, extensionSignature, updateExtensionContent } from "./extensions.js";
 import {
   renderOverview,
@@ -25,7 +26,7 @@ import {
 const pages = {
   memory: { name: "记忆管理", render: renderMemory, bind: bindMemory },
   personas: { name: "人格配置", render: renderPersonas, bind: bindPersonas },
-  overview: { name: "概览", render: renderOverview },
+  overview: { name: "概览", render: renderOverview, bind: bindHostUpdate },
   models: { name: "模型服务", render: renderModels, bind: bindModels },
   bindings: { name: "使用配置", render: renderBindings, bind: bindBindings },
   chat: { name: "对话", render: renderChat, bind: bindChat },
@@ -245,6 +246,11 @@ class ConsoleApp {
     try {
       await api("/api/login", { password: $("password").value });
       $("password").value = "";
+      if (this.reloadAfterHostUpdate) {
+        // The restarted server can ship different console modules.
+        location.reload();
+        return;
+      }
       await this.load();
       await this.enter();
     } catch (error) {
@@ -544,6 +550,9 @@ class ConsoleApp {
     };
   }
   requireLogin() {
+    if (!this.authenticated) return;
+    const wasUpdating = resetHostUpdateSession(this);
+    this.reloadAfterHostUpdate = wasUpdating;
     this.authenticated = false;
     this.hideStore();
     this.generation++;
@@ -551,7 +560,9 @@ class ConsoleApp {
     this.logWS?.close();
     $("shell").hidden = true;
     $("login").hidden = false;
-    $("login-error").textContent = "服务已重启或登录已过期，请重新进入。";
+    $("login-error").textContent = wasUpdating
+      ? "请重新进入控制台，在概览中查看本次更新结果。"
+      : "服务已重启或登录已过期，请重新进入。";
   }
   updateConnection() {
     const online = this.chatConnected && this.logConnected;
