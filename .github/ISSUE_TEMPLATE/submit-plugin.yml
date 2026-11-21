@@ -2,6 +2,11 @@ name: 提交社区插件
 description: 申请将你的 WhaleLife 插件收录进公开目录。
 title: "[收录] "
 body:
+  - type: markdown
+    attributes:
+      value: |
+        这张表用于首次收录。维护者确认收录后即可关闭 Issue，并在你的仓库订阅发版通知。后续在原仓库升版并发布正式 GitHub Release 即可。
+        如需提供一键安装，请在 Release 中附上发行包，并写明 SHA-256 和兼容条件。每个新版附件都会单独审核。[社区发行包与审核说明](https://github.com/iinukami/whalelife/blob/main/market/community-packages.md)
   - type: input
     id: repository
     attributes:
