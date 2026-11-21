@@ -212,7 +212,11 @@ export function renderPlugins(app) {
     ${checkPluginsStatus(app.state)}
     <div data-official-read-status role="status"></div>
     <div class="plugin-grid">${cards.map(p => pluginCard(app.state.status, p, app.state)).join("")}</div>${plugins.length ? "" : '<div class="panel empty">尚未安装扩展插件</div>'}
-  </section>`;
+  </section>
+  <footer class="community-plugin-notice">
+    <strong>社区插件免责声明</strong>
+    <p>社区插件由第三方作者开发和维护。商店审核仅覆盖所测版本和环境，WhaleLife 不保证社区插件的安全性或稳定性。遇到问题，可在商店的插件详情中点「反馈问题」联系作者。</p>
+  </footer>`;
 }
 export function bindPlugins(app) {
   bindPluginActions(app);

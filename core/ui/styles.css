@@ -799,6 +799,14 @@ main {
 }
 .plugin-hub-heading { align-items: center; margin-bottom: 16px; }
 #installed-plugins .plugin-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+.community-plugin-notice {
+  margin-top: 24px;
+  max-width: 76ch;
+  color: #646b7b;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.community-plugin-notice strong { font-weight: 600; }
 #installed-plugins .plugin-card { display: flex; flex-direction: column; }
 #installed-plugins .plugin-card p { color: #636b7b; font-size: 13px; line-height: 1.6; }
 #installed-plugins .plugin-card .plugin-error { color: #a34958; }
