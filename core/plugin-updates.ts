@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { readPublishedCommunityReviews } from "./community-reviews.ts";
+import { readOfficialRegistry } from "./official-update-registry.ts";
 import type { ReviewedCommunityEntry } from "./community-packages.ts";
 
 type Entry = { id: string; repository: string };
@@ -12,9 +13,8 @@ type Recognition = { plugins: { runtimeId: string; installedVersion: string | nu
 type Notice = Entry & { runtimeId: string; source: "official" | "community"; installedVersion: string; latestVersion: string; url: string };
 type Target = { version: string; url: string };
 type Metadata = Record<string, any>;
-type CommunityVersions = (reviews: ReviewedCommunityEntry[], ids: ReadonlySet<string>) => Promise<Map<string, string>>;
+type CommunityVersions = (reviews: ReviewedCommunityEntry[], ids: ReadonlySet<string>, registry?: Metadata | null) => Promise<Map<string, string>>;
 
-const market = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/";
 const repoPattern = /^https:\/\/github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\/?$/;
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const bundled = (file: string) => JSON.parse(readFileSync(new URL(file, import.meta.url), "utf8"));
@@ -48,31 +48,6 @@ function newer(target: string, installed: string) {
   return current.prerelease;
 }
 
-// Only the public official registry is read here. No local installation data is sent.
-async function readJSON(address: string, signal: AbortSignal): Promise<Metadata> {
-  const response = await fetch(address, { redirect: "error", credentials: "omit", referrerPolicy: "no-referrer",
-    headers: { Accept: "application/json" }, signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) });
-  if (!response.ok || !response.body) {
-    await response.body?.cancel();
-    throw Error("无法读取公开发行资料");
-  }
-  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > 2 * 1024 ** 2) {
-      await reader.cancel();
-      throw Error("公开发行资料过大");
-    }
-    chunks.push(value);
-  }
-  const json = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  if (!json || typeof json !== "object" || Array.isArray(json)) throw Error("公开发行资料格式无效");
-  return json;
-}
-
 function verifiedTarget(entry: Metadata, installed: string, host: string, platform: string, arch: string): Target | undefined {
   let best: Target | undefined;
   for (const release of Array.isArray(entry.verifiedReleases) ? entry.verifiedReleases : []) {
@@ -91,7 +66,7 @@ function verifiedTarget(entry: Metadata, installed: string, host: string, platfo
 export class PluginUpdates {
   private registry: Metadata;
   private host: string = bundled("../package.json").version;
-  private cache = new Map<string, { expires: number; value: Promise<Metadata | null> }>();
+  private officialReview?: Promise<Metadata | null>;
   private last?: { key: string; updates: Notice[]; incomplete?: boolean };
   private lastCheck = 0;
   private signal: AbortSignal;
@@ -104,17 +79,6 @@ export class PluginUpdates {
     this.registry = registry;
   }
 
-  private read(address: string) {
-    const cached = this.cache.get(address);
-    if (cached && cached.expires > Date.now()) return cached.value;
-    const entry = { expires: Date.now() + 30 * 60_000, value: readJSON(address, this.signal).catch(() => {
-      entry.expires = Date.now() + 60_000;
-      return null;
-    }) };
-    this.cache.set(address, entry);
-    return entry.value;
-  }
-
   snapshot(installed: Installed[]) {
     if (!this.last) return { updates: [] };
     const updates = this.last.updates.filter(row => installed.some(plugin =>
@@ -125,7 +89,8 @@ export class PluginUpdates {
     return { updates: updates.filter(row => row.source === "official") };
   }
 
-  async list(installed: Installed[], recognize: () => Promise<Recognition>) {
+  async list(installed: Installed[], recognize: (registry?: Metadata | null) => Promise<Recognition>,
+      officialVersions?: (registry: Metadata, ids: ReadonlySet<string>) => Promise<Map<string,string>>) {
     const check = ++this.lastCheck;
     const local = new Map(installed.filter(p => !p.builtin && parseVersion(p.version)).map(p => [p.id, p]));
     if (!local.size) {
@@ -134,7 +99,9 @@ export class PluginUpdates {
     }
     const hasOfficial = this.registry.plugins.some((entry: Metadata) =>
       local.has(entry.parentId ? entry.parentId + "/" + entry.id : entry.id));
-    const publicRegistry = hasOfficial ? await this.read(market + "official-releases.json") : null;
+    // Coalesce simultaneous clicks. Each later manual check can see a maintainer's withdrawal.
+    const publicRegistry = hasOfficial ? await (this.officialReview ??= readOfficialRegistry(this.signal)
+      .catch(() => null).finally(() => { this.officialReview = undefined; })) : null;
     const publicPlugins = publicRegistry?.schemaVersion === 1 && Array.isArray(publicRegistry.plugins) ? publicRegistry.plugins : null;
     let incomplete = false;
     const updates: Notice[] = [];
@@ -150,14 +117,24 @@ export class PluginUpdates {
       const matches = publicPlugins?.filter((other: Metadata) => other?.id === id && other.repository === repository &&
           other.parentId === entry.parentId && other.name === entry.name) ?? [];
       let target = verifiedTarget(entry, installedVersion, this.host, process.platform, process.arch);
-      if (matches.length === 1) target = verifiedTarget(matches[0], target?.version ?? installedVersion, this.host, process.platform, process.arch) ?? target;
+      if (matches.length === 1) target = verifiedTarget(matches[0], installedVersion, this.host, process.platform, process.arch);
       if (target) officialCandidates.push({ id, runtimeId, repository, installedVersion, latestVersion: target.version, url: target.url, source: "official" });
     }
     const official = async () => {
       if (!officialCandidates.length) return;
-      const recognition = await recognize().catch(() => null);
+      if (officialVersions && !publicPlugins) { incomplete = true; return; }
+      const recognition = await recognize(publicRegistry).catch(() => null);
       if (!recognition) { incomplete = true; return; }
+      const compatible = officialVersions && publicRegistry ? await officialVersions(publicRegistry,
+        new Set(officialCandidates.map(row => row.id))).catch(() => null) : undefined;
+      if (compatible === null) { incomplete = true; return; }
       for (const item of officialCandidates) {
+        if (compatible) {
+          const version = compatible.get(item.id);
+          if (!version || !newer(version,item.installedVersion)) continue;
+          item.latestVersion = version;
+          item.url = item.repository + "/releases/tag/v" + version;
+        }
         if (recognition.recognizedRuntimeIds.includes(item.runtimeId) && recognition.plugins.some(plan =>
           plan.installed && plan.runtimeId === item.runtimeId && plan.installedVersion === item.installedVersion)) updates.push(item);
       }
@@ -175,7 +152,7 @@ export class PluginUpdates {
             entry.verifiedReleases?.some(release => newer(release.version, plugin.version!));
         });
         if (!candidates.length) return;
-        const targets = await this.communityVersions(reviews, new Set(candidates.map(entry => entry.id)));
+        const targets = await this.communityVersions(reviews, new Set(candidates.map(entry => entry.id)), publicRegistry);
         for (const { id, repository } of candidates) {
           const version = targets.get(id), installedVersion = local.get(id)!.version!;
           if (!version || !newer(version, installedVersion)) continue;

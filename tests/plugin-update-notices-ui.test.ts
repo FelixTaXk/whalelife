@@ -34,12 +34,14 @@ test("installed official and community plugins show a notice in both views and a
   for (const [i, [plugin, runtimeId]] of fixtures.entries()) {
     const card = renderStore({ state: { ...state, storeSearch: plugin.id } });
     assert.match(card, /有更新/);
+    assert.match(card, /更新到 v1\.10\.0<\/button>/);
     const managed = pluginCard(status, status.plugins.find(p => p.id === runtimeId), state);
     assert.match(managed, /有更新/);
     const details = renderStore({ state: { ...state, storeDetail: plugin.id } });
     assert.match(details, /有更新/);
     assert.match(details, /1\.2\.0/);
     assert.match(details, /1\.10\.0/);
+    assert.match(details, /更新到 v1\.10\.0<\/button>/);
     assert.ok(details.includes('href="' + state.pluginUpdates[i].url + '"'));
     assert.doesNotMatch(details, /data-official-action=/);
   }
@@ -49,10 +51,78 @@ test("a stale notice cannot attach to a changed local install or a different sto
   for (const plugins of [[], [{ ...status.plugins[2], version: "1.10.0" }]]) {
     const changed = { ...state, status: { plugins }, storeDetail: note.id };
     assert.doesNotMatch(renderStore({ state: changed }), /有更新|查看新版/);
+    assert.doesNotMatch(renderStore({ state: changed }), /data-plugin-update=/);
     if (plugins.length) assert.doesNotMatch(pluginCard({ plugins }, plugins[0], changed), /有更新/);
   }
   const transferred = { official: [], community: [{ ...note, repository: "https://github.com/other/color-note" }] };
   assert.doesNotMatch(renderStore({ state: { ...state, publishedStore: transferred, storeDetail: note.id } }), /有更新|查看新版/);
+});
+
+test("official and community store updates preview dependencies and post only the confirmed version and plan", async t => {
+  const posts: {path: string; data: any}[] = [];
+  let blocked = false, fail = false;
+  t.mock.method(globalThis, "fetch", async (path: string, options: RequestInit) => {
+    if (options?.method !== "POST") return Response.json({plugins: []});
+    const data = JSON.parse(String(options.body));
+    posts.push({path, data});
+    if (path.endsWith("/preview")) return Response.json({
+      id: data.id, version: data.version, installedVersion: "1.2.0", planKey: blocked ? "" : "approved",
+      reason: blocked ? "请先升级依赖" : "", steps: [
+        {id: "first", name: "甲", action: "install", version: "1.0.0"},
+        {id: "second", name: "乙", action: "enable", version: "1.1.0"},
+        {id: "third", name: "丙", action: "reuse", version: "1.2.0"},
+        {id: data.id, name: "目标", action: "update", version: data.version},
+      ],
+    });
+    assert.equal(path, "/api/plugin-updates/apply");
+    return fail ? Response.json({error: "启用目标失败", rolledBack: ["已还原原版"]}, {status: 409})
+      : Response.json({ok: true, message: "更新成功"});
+  });
+  const doc = { getElementById: () => null };
+  const listing = { onclick: null as any, contains: () => false };
+  const root = { isConnected: true, ownerDocument: doc, addEventListener() {}, querySelectorAll: () => [],
+    querySelector: (s: string) => s === "[data-store-results]" ? listing : null };
+  const content = { ownerDocument: doc, querySelectorAll: () => [], querySelector: (s: string) => s === "#plugin-store" ? root : null };
+  const dialogs: {title: string; body: string; submit?: () => Promise<void>}[] = [];
+  const app = { content, state: { ...state, communityPlugins: [], storeDetail: "" }, async refreshStatus() {}, toast() {},
+    dialog(title: string, body: string, submit?: () => Promise<void>) { dialogs.push({title, body, submit}); } };
+  bindStore(app, content, false);
+  const click = (pluginUpdate: string, source: string) => listing.onclick({target: {closest: (selector: string) =>
+    selector === "[data-plugin-update]" ? {dataset: {pluginUpdate, source, version: "1.10.0"}} : null }});
+
+  for (const [entry, , source] of [fixtures[0], fixtures[2]]) {
+    app.state.storeDetail = source === "community" ? entry.id : "";
+    const data = {id: entry.id, source, version: "1.10.0"};
+    posts.length = 0;
+    blocked = true;
+    await click(entry.id, source);
+    assert.match(dialogs.at(-1)!.body, /请先升级依赖/);
+    assert.equal(dialogs.at(-1)!.submit, undefined);
+    assert.deepEqual(posts, [{path: "/api/plugin-updates/preview", data}]);
+
+    blocked = false;
+    await click(entry.id, source);
+    const preview = dialogs.at(-1)!;
+    assert.match(preview.body, /v1\.2\.0.*v1\.10\.0/);
+    assert.match(preview.body, /安装<\/span><strong>甲/);
+    assert.match(preview.body, /启用<\/span><strong>乙/);
+    assert.match(preview.body, /沿用<\/span><strong>丙/);
+    assert.match(preview.body, /配置、数据/);
+    assert.ok(posts.every(p => p.path.endsWith("/preview")));
+
+    root.isConnected = false;
+    await assert.rejects(preview.submit!(), /计划已变化/);
+    assert.ok(posts.every(p => p.path.endsWith("/preview")));
+    root.isConnected = true;
+    fail = true;
+    await assert.rejects(preview.submit!(), /启用目标失败[\s\S]*已撤回的改动[\s\S]*已还原原版/);
+    assert.ok(app.state.pluginUpdates.some(p => p.id === entry.id));
+    fail = false;
+    await preview.submit!();
+    assert.deepEqual(posts.at(-1), {path: "/api/plugin-updates/apply", data: {...data, planKey: "approved"}});
+    assert.ok(!app.state.pluginUpdates.some(p => p.id === entry.id));
+    assert.ok(!posts.some(p => p.path.endsWith("/check")));
+  }
 });
 
 test("management and store share an explicit check; binding, rendering and waiting do not start one", async t => {

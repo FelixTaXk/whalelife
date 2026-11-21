@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { CommunityPackages, type ReviewedCommunityEntry, type ReviewedCommunityRelease } from "../core/community-packages.ts";
 import { Runtime } from "../core/runtime.ts";
+import { startWeb } from "../core/web.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
 
 const hash = (data: Buffer) => createHash("sha256").update(data).digest("hex");
@@ -17,9 +18,10 @@ async function fixture(t: TestContext) {
   await runtime.bus.start();
   await runtime.scan();
   const assets = new Map<string, Buffer>(), downloads: string[] = [];
-  t.mock.method(globalThis, "fetch", async (url: URL) => {
-    downloads.push(url.href);
-    const bytes = assets.get(url.href);
+  t.mock.method(globalThis, "fetch", async (url: URL | string) => {
+    const href = String(url);
+    downloads.push(href);
+    const bytes = assets.get(href);
     return bytes ? new Response(new Uint8Array(bytes)) : new Response(null, {status:404});
   });
   function plugin(id: string, version = "1.0.0", options: {deps?: Record<string,string>; extra?: Record<string,string>;
@@ -36,7 +38,7 @@ async function fixture(t: TestContext) {
       sha256:hash(packed), sizeBytes:packed.length, assetUrl, dependencies:options.deps ?? {}, bundledPluginIds:options.children};
     const entry: ReviewedCommunityEntry = {id, name:id, description:"fixture", repository, installation:repository,
       dependencies:Object.keys(release.dependencies), verifiedReleases:[release]};
-    return {entry, release, packed};
+    return {entry, release, packed, files};
   }
   return {root, runtime, assets, downloads, plugin, manager:(entries: ReviewedCommunityEntry[]) => new CommunityPackages(runtime, entries)};
 }
@@ -45,6 +47,42 @@ async function row(manager: CommunityPackages, id: string) {
   assert.ok(result);
   return result;
 }
+
+test("the web confirmation rejects a withdrawn or changed approval and cannot bypass the manual check", async t => {
+  const localFetch = globalThis.fetch;
+  const f = await fixture(t), old = f.plugin("notes"), next = f.plugin("notes","1.1.0");
+  const manager = f.manager([old.entry]);
+  await manager.apply(await row(manager,"notes"));
+  const catalog = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json";
+  const publish = (community: unknown[]) => f.assets.set(catalog,Buffer.from(JSON.stringify({official:[],community})));
+  publish([next.entry]);
+  const web = await startWeb({web:{port:0}}, {channels:{},logger:{info(){},error(){}}}, f.runtime);
+  t.after(() => web.close());
+  const origin = "http://127.0.0.1:" + (web.server.address() as {port:number}).port;
+  const cookie = (await localFetch(origin+"/api/login",{method:"POST",body:"{}"})).headers.get("set-cookie")!.split(";")[0];
+  const post = (route: string, body: unknown) => localFetch(origin+route,{method:"POST",
+    headers:{cookie,origin,"content-type":"application/json"},body:JSON.stringify(body)});
+  const input = {id:"notes",source:"community",version:"1.1.0"};
+  assert.equal((await post("/api/plugin-updates/preview",input)).status,409);
+  const check = await post("/api/plugin-updates/check",{});
+  assert.equal((await check.json()).updates[0].latestVersion,"1.1.0");
+  const preview = await (await post("/api/plugin-updates/preview",input)).json();
+  assert.ok(preview.planKey,preview.reason);
+  const confirmed = {...input,planKey:preview.planKey};
+  assert.equal((await post("/api/official-plugins/apply",{...confirmed,action:"update"})).status,409);
+  assert.equal((await post("/api/plugin-updates/apply",{...confirmed,assetUrl:next.release.assetUrl})).status,400);
+  publish([]);
+  assert.equal((await post("/api/plugin-updates/apply",confirmed)).status,409);
+  publish([{...next.entry,verifiedReleases:[{...next.release,sha256:"e".repeat(64)}]}]);
+  assert.equal((await post("/api/plugin-updates/apply",confirmed)).status,409);
+  assert.equal(f.runtime.records.get("notes").manifest.version,"1.0.0");
+  assert.ok(!f.downloads.includes(next.release.assetUrl));
+  publish([next.entry]);
+  const saved = await post("/api/plugin-updates/apply",confirmed);
+  assert.equal(saved.status,200,await saved.text());
+  assert.equal(f.runtime.records.get("notes").manifest.version,"1.1.0");
+  assert.equal((await post("/api/plugin-updates/apply",confirmed)).status,409);
+});
 
 test("cold install uses reviewed bytes only on confirmation, keeps old data, and serializes double clicks", async t => {
   const f = await fixture(t), top = f.plugin("notes"), manual = {...f.plugin("manual").entry, verifiedReleases:undefined};
@@ -78,6 +116,32 @@ test("a same-ID manual installation with different code is neither adopted nor o
   await assert.rejects(manager.apply({...plan,action:"install"}));
   assert.deepEqual(f.downloads,[]);
   assert.equal(await readFile(join(f.root,"plugins/notes/index.ts"),"utf8"),program + " // local");
+});
+
+test("manual community upgrades verify a missing old archive before replacing any installed file", async t => {
+  for (const changed of [false,true]) {
+    const f = await fixture(t), old = f.plugin("manual-note"), next = f.plugin("manual-note","1.1.0");
+    const dir = join(f.root,"plugins",old.entry.id);
+    await mkdir(dir);
+    for (const file of old.files) await writeFile(join(dir,file.path),file.bytes);
+    if (changed) await writeFile(join(dir,"index.ts"),program + " // local customization");
+    await f.runtime.loadPath(old.entry.id);
+    assert.equal((await f.manager([next.entry]).updatePlan(old.entry.id,"1.1.0")).planKey,"");
+    next.entry.verifiedReleases!.push(old.release);
+    const manager = f.manager([next.entry]), plan = await manager.updatePlan(old.entry.id,"1.1.0");
+    assert.equal(plan.action,"update");
+    assert.deepEqual(f.downloads,[]);
+    const apply = manager.applyUpdate({id:old.entry.id,version:"1.1.0",planKey:plan.planKey});
+    if (changed) {
+      await assert.rejects(apply,/不一致/);
+      assert.equal(await readFile(join(dir,"index.ts"),"utf8"),program + " // local customization");
+      assert.equal(f.runtime.records.get(old.entry.id).manifest.version,"1.0.0");
+    } else {
+      await apply;
+      assert.equal(f.runtime.records.get(old.entry.id).manifest.version,"1.1.0");
+    }
+    assert.deepEqual(new Set(f.downloads),new Set([old.release.assetUrl,next.release.assetUrl]));
+  }
 });
 
 test("pin a dependency's reviewed version; reuse or explicitly enable it and restore its old state after failed activation", async t => {

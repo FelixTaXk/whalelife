@@ -83,7 +83,7 @@ test("updates compare local installations to compatible reviewed packages withou
   assert.deepEqual((await service.list([], recognized)).updates, []);
   assert.deepEqual((await service.list([{ id: "color-note", version: "2.0.0" }], recognized)).updates, []);
   assert.deepEqual((await service.list(installed, async () => { throw Error("inventory busy"); })).updates.map(p => p.source), ["community"]);
-  assert.deepEqual(requests.map(r => r.address), [registryURL, catalogURL, catalogURL, catalogURL]);
+  assert.deepEqual(requests.map(r => r.address), [registryURL, catalogURL, catalogURL, registryURL, catalogURL]);
 });
 
 test("a fresh instance makes no public requests and unlisted installations do not trigger any author queries", async t => {

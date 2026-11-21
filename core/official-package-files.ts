@@ -3,11 +3,13 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir, unlink } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { constants, createReadStream } from "node:fs";
+import { cp, link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createGunzip } from "node:zlib";
+import { recoverReplacementDirectories, replacementIdentity, replacementFormat, replacementName,
+  retireReplacement, type ReplacementJournal } from "./plugin-replacement-recovery.ts";
 
 export interface OfficialPackageSpec {
   directory: string;
@@ -222,7 +224,9 @@ async function releaseAt(root: string, spec: OfficialPackageSpec) {
 function subDirectory(path: string) {
   return /^(?:sub\/[^/]+\/)*sub$/.test(path);
 }
-async function inspectTree(root: string, spec: OfficialPackageSpec, inventory: Inventory, fresh = false): Promise<OfficialFileState> {
+type RetainedPaths = { data: string[]; children: string[] };
+async function inspectTree(root: string, spec: OfficialPackageSpec, inventory: Inventory, fresh = false,
+  retained?: RetainedPaths, partial?: Set<string>): Promise<OfficialFileState> {
   const base = await directoryAt(root, spec.directory);
   if (!base) return { state: "absent" };
   const seen = new Set<string>();
@@ -231,12 +235,17 @@ async function inspectTree(root: string, spec: OfficialPackageSpec, inventory: I
       const path = parent ? parent + "/" + item.name : item.name;
       if (isPackageDataPath(path, spec.preserve)) {
         if (item.isSymbolicLink()) throw Error(`持久目录或配置使用了链接：${path}`);
+        retained?.data.push(path);
         continue;
       }
       if (item.isSymbolicLink()) throw Error(`插件目录中存在链接：${path}`);
       if (item.isDirectory()) {
-        if (subDirectory(parent) && !inventory.directories.has(path)) continue;
-        if (!inventory.directories.has(path) && !subDirectory(path)) throw Error(`无法确认目录归属：${path}`);
+        if (subDirectory(parent) && !inventory.directories.has(path)) {
+          retained?.children.push(path);
+          continue;
+        }
+        const containsPreserved = spec.preserve?.some(value => value.toLowerCase().startsWith(path.toLowerCase() + "/"));
+        if (!inventory.directories.has(path) && !subDirectory(path) && !containsPreserved) throw Error(`无法确认目录归属：${path}`);
         await visit(path);
       } else {
         if (!item.isFile() || !inventory.byPath.has(path)) throw Error(`无法确认文件归属：${path}`);
@@ -246,11 +255,13 @@ async function inspectTree(root: string, spec: OfficialPackageSpec, inventory: I
   }
   await visit("");
   if (!seen.size) return { state: "absent" };
-  for (const file of inventory.files) {
+  const files = partial ? inventory.files.filter(file => seen.has(file.path)) : inventory.files;
+  for (const file of files) {
     if (!seen.has(file.path)) throw Error(`缺少发行文件：${file.path}`);
+    partial?.add(file.path);
   }
-  for (let i = 0; i < inventory.files.length; i += 16) {
-    await Promise.all(inventory.files.slice(i, i + 16).map(async file => {
+  for (let i = 0; i < files.length; i += 16) {
+    await Promise.all(files.slice(i, i + 16).map(async file => {
       if (await digestFile(join(base, file.path), file.size, fresh) !== file.sha256) throw Error(`文件与已审核发行包不一致：${file.path}`);
     }));
   }
@@ -266,16 +277,21 @@ async function serialized<T>(root: string, work: () => Promise<T>) {
 }
 export async function inspectOfficialFiles(root: string, spec: OfficialPackageSpec): Promise<OfficialFileState> {
   return serialized(root, async () => {
-    try { return await inspectTree(root, spec, (await releaseAt(root, spec)).inventory); }
+    try {
+      await checkPendingReplacement(root, spec.directory, true);
+      return await inspectTree(root, spec, (await releaseAt(root, spec)).inventory);
+    }
     catch (error) { return { state: "blocked", reason: errorText(error) }; }
   });
 }
 
-async function change(root: string, spec: OfficialPackageSpec, install: boolean) {
+async function change(root: string, spec: OfficialPackageSpec, install: boolean, interruptedInstall = false) {
   return serialized(root, async () => {
+    await checkPendingReplacement(root, spec.directory);
     if (install && spec.recognitionOnly) throw Error("历史清单仅供识别已安装的官方版本。");
     const { archive, cache, inventory } = await releaseAt(root, spec);
-    const before = await inspectTree(root, spec, inventory, true);
+    const partial = interruptedInstall ? new Set<string>() : undefined;
+    const before = await inspectTree(root, spec, inventory, true, undefined, partial);
     if (before.state === (install ? "installed" : "absent")) return;
     await directoryAt(root, ".artifacts/official-packages", true);
     const staging = await mkdtemp(join(cache, install ? "install-" : "uninstall-"));
@@ -285,9 +301,10 @@ async function change(root: string, spec: OfficialPackageSpec, install: boolean)
       if (install) await readPackage(archive, staging, inventory);
       const base = (await directoryAt(root, spec.directory, install, made))!;
       // Publish the manifest last on install; hide it first on uninstall.
-      const files = inventory.files.filter(file => file.path !== "plugin.yaml");
+      const files = inventory.files.filter(file => file.path !== "plugin.yaml" && (!partial || partial.has(file.path)));
       const manifest = inventory.byPath.get("plugin.yaml")!;
-      if (install) files.push(manifest); else files.unshift(manifest);
+      if (install) files.push(manifest);
+      else if (!partial || partial.has(manifest.path)) files.unshift(manifest);
       for (const file of files) {
         const target = join(base, file.path), backup = join(staging, file.path), parent = dirname(target);
         if (!checked.has(parent)) {
@@ -340,3 +357,210 @@ async function removeEmpty(path: string) {
 }
 export function installOfficialFiles(root: string, spec: OfficialPackageSpec) { return change(resolve(root), spec, true); }
 export function uninstallOfficialFiles(root: string, spec: OfficialPackageSpec) { return change(resolve(root), spec, false); }
+/** Only for a journaled dependency that was absent before the interrupted install. */
+export function rollbackInterruptedInstall(root: string, spec: OfficialPackageSpec) { return change(resolve(root), spec, false, true); }
+
+const liveReplacements = new Set<string>();
+export { safePath as validPackagePath };
+
+export async function verifyReplacementTree(root: string, tree: string, spec: OfficialPackageSpec) {
+  const retained: RetainedPaths = {data: [], children: []};
+  const {inventory} = await releaseAt(root, spec);
+  if ((await inspectTree(dirname(tree), {...spec, directory:basename(tree)}, inventory, true, retained)).state !== "installed")
+    throw Error("插件程序文件缺失：" + tree);
+  return retained;
+}
+
+export async function recoverPendingPluginReplacements(root: string) {
+  root = resolve(root);
+  return serialized(root, async () => {
+    const cache = await directoryAt(root, ".artifacts/official-packages");
+    return cache ? recoverReplacementDirectories(root, cache, liveReplacements) : [];
+  });
+}
+
+// A process can exit between the two renames. Even when no manifest is at the live path, a
+// pending backup belongs to an installed plugin. Never allow a later install to take its place.
+async function checkPendingReplacement(root: string, directory: string, allowLiveRead = false) {
+  const cache = await directoryAt(root, ".artifacts/official-packages");
+  if (!cache) return;
+  const key = replacementName(directory);
+  for (const name of await readdir(cache)) {
+    if (name !== key && !name.startsWith(key + ".sub.") && !key.startsWith(name + ".sub.")) continue;
+    const transaction = join(cache, name);
+    if (allowLiveRead && liveReplacements.has(transaction)) continue;
+    throw Error("插件更新事务尚未结束，请先处理更新备份：" + transaction);
+  }
+}
+
+async function vacant(path: string) {
+  try { await lstat(path); }
+  catch (error) { if (missing(error)) return; throw error; }
+  throw Error("目标路径已被占用，已保留原文件：" + path);
+}
+
+// Do not follow links while copying data: a failed trial must be reversible within this instance.
+async function dataStamp(file: string) {
+  const info = await lstat(file, { bigint: true });
+  if (!info.isDirectory() && !info.isFile()) throw Error("插件资料包含链接或特殊文件，无法完整备份：" + file);
+  return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join("/");
+}
+async function copyPluginData(source: string, target: string, stamps: Map<string, string>) {
+  await mkdir(dirname(target), { recursive: true });
+  await cp(source, target, {
+    recursive: true, force: false, errorOnExist: true, preserveTimestamps: true, mode: constants.COPYFILE_FICLONE,
+    filter: async file => {
+      stamps.set(file, await dataStamp(file));
+      return true;
+    },
+  });
+}
+
+async function replacementPaths(root: string, tree: string, old: OfficialPackageSpec, next: Inventory) {
+  const retained = await verifyReplacementTree(root, tree, old);
+  const independent: ReplacementJournal["children"] = [];
+  const empty: Inventory = {files: [], byPath: new Map(), directories: new Set()};
+  for (const path of retained.children) {
+    if (!next.directories.has(path)) {
+      independent.push({path, identity:await replacementIdentity(join(tree, path))});
+      continue;
+    }
+    // A previous uninstall can leave a data-only directory at the newly bundled child's path.
+    const nested: RetainedPaths = { data: [], children: [] }, prefix = path + "/";
+    const preserve = old.preserve?.filter(name => name.startsWith(prefix)).map(name => name.slice(prefix.length));
+    try { await inspectTree(tree, {...old, directory:path, preserve}, empty, true, nested); }
+    catch (error) { throw Error("新发行包与已有独立子插件目录冲突：" + path + "，" + errorText(error)); }
+    for (const name of nested.data) retained.data.push(prefix + name);
+    for (const name of nested.children) retained.children.push(prefix + name);
+  }
+  return {data: retained.data, independent};
+}
+
+/** The caller stops the target before switching and stops a failed trial before rollback. */
+export async function replaceOfficialFiles(root: string, oldSpec: OfficialPackageSpec, newSpec: OfficialPackageSpec, transactionId?: string) {
+  root = resolve(root);
+  return serialized(root, async () => {
+    if (oldSpec.directory !== newSpec.directory || newSpec.recognitionOnly) throw Error("更新必须替换同一插件的已审核发行包。");
+    const directory = oldSpec.directory;
+    const preserve = [...new Set([...(oldSpec.preserve ?? []), ...(newSpec.preserve ?? [])])];
+    const oldFiles = { ...oldSpec, preserve }, newFiles = { ...newSpec, preserve };
+    await checkPendingReplacement(root, directory);
+    const old = await releaseAt(root, oldFiles), next = await releaseAt(root, newFiles);
+    const base = join(root, directory);
+    if (!await directoryAt(root, directory)) throw Error("原版本程序文件缺失，无法安全更新。");
+    const {independent} = await replacementPaths(root, base, oldFiles, next.inventory);
+    const stage = join(next.cache, replacementName(directory));
+    const original = join(stage, "original"), candidate = join(stage, "candidate"), failed = join(stage, "trial");
+    const children = new Set<string>();
+    let displaced = false, published = false, childSource = candidate;
+    let disposition: "pending" | "committed" | "restored" = "pending";
+    let cleanupWarning = "";
+    let trialIdentity = "";
+    const removeBackup = async (keepTrial = false) => {
+      const archive = await retireReplacement(stage, next.cache, keepTrial);
+      if (keepTrial) cleanupWarning = "试运行文件有其他改动，已将副本保留在 " + archive;
+    };
+    const restore = async () => {
+      if (!displaced) return;
+      if (published) {
+        if (await directoryAt(root, directory) !== base || await replacementIdentity(base) !== trialIdentity)
+          throw Error("更新后目标目录发生变化，已保留更新前备份：" + original);
+        await rename(base, failed);
+        published = false;
+        childSource = failed;
+      }
+      for (const path of children) {
+        const parent = path.slice(0, path.lastIndexOf("/"));
+        if (!await directoryAt(childSource, parent)) throw Error("独立子插件的父目录已变化：" + path);
+        await directoryAt(original, parent, true);
+        await vacant(join(original, path));
+        await rename(join(childSource, path), join(original, path));
+        children.delete(path);
+      }
+      await directoryAt(root, directory.slice(0, directory.lastIndexOf("/")));
+      await vacant(base);
+      await rename(original, base);
+      displaced = false;
+    };
+    await mkdir(stage);
+    liveReplacements.add(stage);
+    try {
+      await mkdir(candidate);
+      trialIdentity = await replacementIdentity(candidate);
+      const oldIdentity = await replacementIdentity(base);
+      const journal: ReplacementJournal = {
+        format: replacementFormat, transactionId, old: oldFiles, next: newFiles, oldIdentity, trialIdentity,
+        stageIdentity: await replacementIdentity(stage), parentIdentity: await replacementIdentity(dirname(base)), children: independent,
+      };
+      await writeFile(join(stage, "transaction.json"), JSON.stringify(journal), { flag: "wx", mode: 0o600, flush: true });
+      await readPackage(next.archive, candidate, next.inventory);
+      if (!await directoryAt(root, directory) || await replacementIdentity(base) !== oldIdentity) throw Error("更新前插件路径已变化。");
+      await rename(base, original);
+      displaced = true;
+      const retained = await replacementPaths(root, original, oldFiles, next.inventory);
+      const identities = new Map(independent.map(child => [child.path, child.identity]));
+      if (independent.length !== retained.independent.length || retained.independent.some(child => identities.get(child.path) !== child.identity))
+        throw Error("更新前独立子插件目录已变化。");
+      const stamps = new Map<string, string>();
+      for (const path of retained.data) await copyPluginData(join(original, path), join(candidate, path), stamps);
+      // Independently installed children keep the same files, even if they write data during
+      // the trial and the parent later rolls back. A new bundle cannot claim an existing child.
+      for (const child of independent) {
+        const path = child.path;
+        if (await replacementIdentity(join(original, path)) !== child.identity) throw Error("独立子插件目录已变化：" + path);
+        const target = join(candidate, path);
+        await directoryAt(candidate, path.slice(0, path.lastIndexOf("/")), true);
+        await vacant(target);
+        await rename(join(original, path), target);
+        children.add(path);
+      }
+      for (const [path, stamp] of stamps) {
+        if (await dataStamp(path) !== stamp) throw Error("复制期间插件资料已变化，请等待写入结束后再试：" + path);
+      }
+      if (await replacementIdentity(candidate) !== trialIdentity ||
+          (await inspectTree(stage, { ...newFiles, directory: "candidate" }, next.inventory)).state !== "installed")
+        throw Error("切换前新版文件已变化。");
+      await vacant(base);
+      await rename(candidate, base);
+      published = true;
+      return {
+        get cleanupWarning() { return cleanupWarning; },
+        rollback: () => serialized(root, async () => {
+          if (disposition === "restored") return;
+          if (disposition === "committed") throw Error("已确认的更新不能再次回滚。");
+          // Preserve unexpected local edits in the failed trial, outside the restored plugin.
+          let keepTrial = false;
+          if (published) {
+            const retainedTrial: RetainedPaths = { data: [], children: [] };
+            try {
+              await inspectTree(root, newFiles, next.inventory, true, retainedTrial);
+              keepTrial = retainedTrial.children.some(path => !children.has(path) && !old.inventory.directories.has(path));
+            } catch { keepTrial = true; }
+          }
+          try {
+            await restore();
+            disposition = "restored";
+            try { await removeBackup(keepTrial); }
+            catch (error) { cleanupWarning = "原版本及资料已恢复，临时备份清理失败：" + errorText(error); }
+          } finally { liveReplacements.delete(stage); }
+        }),
+        commit: () => serialized(root, async () => {
+          if (disposition === "committed") return;
+          if (disposition === "restored") throw Error("更新已撤回。");
+          disposition = "committed";
+          try {
+            await writeFile(join(stage, "committed"), JSON.stringify({stage:journal.stageIdentity, sha256:newFiles.sha256}), {flag:"wx", mode:0o600, flush:true});
+            await removeBackup();
+          } finally { liveReplacements.delete(stage); }
+        }),
+      };
+    } catch (error) {
+      try { await restore(); }
+      catch (rollback) { throw Error(errorText(error) + "；恢复未完成，备份在 " + stage + "：" + errorText(rollback)); }
+      finally { liveReplacements.delete(stage); }
+      try { await removeBackup(); }
+      catch (cleanup) { throw Error(errorText(error) + "；临时备份清理失败：" + errorText(cleanup)); }
+      throw error;
+    }
+  });
+}

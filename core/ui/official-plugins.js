@@ -3,9 +3,9 @@
  * Additional terms under AGPLv3 Section 7: see LICENSE-ADDITIONAL.
  */
 import { api, escapeHTML as e } from "./api.js";
-import { renderManageUpdate } from "./plugin-updates.js";
+import { clearCompletedUpdate, renderManageUpdate } from "./plugin-updates.js";
 
-const stepNames = { install: "安装", enable: "启用", reuse: "沿用", uninstall: "卸载" };
+const stepNames = { install: "安装", enable: "启用", reuse: "沿用", uninstall: "卸载", update: "更新" };
 export const officialBadge = '<span class="store-official-badge">官方</span>';
 
 function upgradeLink(url) {
@@ -118,8 +118,11 @@ function openDialog(app, plugin, title, body, submit, label, danger) {
   doc.getElementById("dialog")?.addEventListener("close", () => {
     if (app.state.page !== page || (doc.activeElement?.isConnected && doc.activeElement !== doc.body)) return;
     const drawer = doc.getElementById("store-drawer");
-    const buttons = (drawer?.open ? drawer : app.content).querySelectorAll("[data-official-action]:enabled, [data-community-install]:enabled");
-    [...buttons].find(b => (b.dataset.officialId || b.dataset.communityInstall) === plugin.id)?.focus({ preventScroll: true });
+    const surface = drawer?.open ? drawer : app.content;
+    const buttons = surface.querySelectorAll("[data-plugin-update]:enabled, [data-official-action]:enabled, [data-community-install]:enabled, [data-store-entry]");
+    const button = [...buttons].find(b => (b.dataset.pluginUpdate || b.dataset.officialId || b.dataset.communityInstall) === plugin.id)
+      || [...buttons].find(b => b.dataset.storeEntry === plugin.id);
+    (button || surface.querySelector("#store-heading"))?.focus({ preventScroll: true });
   }, { once: true });
 }
 
@@ -142,13 +145,16 @@ async function apply(app, plugin, source = "official") {
   paint(app);
   let applied = false;
   try {
-    const result = await api(`/api/${source}-plugins/apply`, { id: plugin.id, action: plugin.action, planKey: plugin.planKey });
+    const result = plugin.action === "update"
+      ? await api("/api/plugin-updates/apply", { id: plugin.id, source, version: plugin.version, planKey: plugin.planKey })
+      : await api(`/api/${source}-plugins/apply`, { id: plugin.id, action: plugin.action, planKey: plugin.planKey });
     if (!result.ok) throw Object.assign(Error(result.error || result.message || "插件操作失败。"), { rolledBack: result.rolledBack });
     applied = true;
     app.toast(result.message);
   } finally {
     try { await app.refreshStatus(); } catch (error) { app.toast(error.message, true); }
     state.officialBusy = null;
+    if (applied && plugin.action === "update") clearCompletedUpdate(app, plugin.id, source);
     // Installing or enabling a dependency changes the plan for other entries too.
     state.communityPlugins = null;
     app.communityRead = null;
@@ -160,6 +166,34 @@ async function apply(app, plugin, source = "official") {
       content.ownerDocument.defaultView.location.hash = "#plugins";
     } else await refresh(app, true);
   }
+}
+
+export async function confirmPluginUpdate(app, entry, update, stillCurrent) {
+  const state = app.state;
+  if (state.officialBusy || state.pluginUpdatePreview || !stillCurrent()) return;
+  state.pluginUpdatePreview = entry.id;
+  app.storeOfficialChange?.();
+  let plan;
+  try {
+    plan = await api("/api/plugin-updates/preview", { id: entry.id, source: update.source, version: update.latestVersion });
+    if (!stillCurrent()) return;
+    if (!plan.planKey) throw Error(plan.reason || "当前安装环境无法更新。");
+    if (plan.id !== entry.id || plan.version !== update.latestVersion || plan.installedVersion !== update.installedVersion)
+      throw Error("插件版本已变化，请重新检查更新。");
+  } catch (error) {
+    if (stillCurrent()) openDialog(app, entry, "暂时无法更新 " + entry.name, `<p class="official-dialog-text">${e(error.message)}</p>`);
+    return;
+  } finally {
+    state.pluginUpdatePreview = null;
+    app.storeOfficialChange?.();
+  }
+  const body = `<p class="official-dialog-text">${e(entry.name)} 将从 v${e(plan.installedVersion)} 更新到 <strong>v${e(plan.version)}</strong>。配置、数据和该插件原有的启停状态都会保留。</p>` +
+    installSteps(plan);
+  openDialog(app, entry, "确认更新 " + entry.name, body, async () => {
+    if (!stillCurrent()) throw Error("更新计划已变化，请关闭并重新检查。");
+    try { await apply(app, { ...plan, action: "update" }, update.source); }
+    catch (error) { throw Error(failureMessage(error)); }
+  }, e(plan.label || "更新到 v" + plan.version));
 }
 
 export function confirmCommunityInstall(app, entry, plugin, stillCurrent) {

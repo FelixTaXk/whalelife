@@ -123,6 +123,17 @@ function updateSummary(state, updates, incomplete) {
   return incomplete ? found + "部分版本信息暂时无法核实，请稍后重试。" : found || "未发现可用的插件更新。";
 }
 
+export function clearCompletedUpdate(app, id, source) {
+  const state = app.state;
+  state.pluginUpdates = (state.pluginUpdates || []).filter(row => row.id !== id || row.source !== source);
+  const check = state.pluginUpdateCheck;
+  if (check && !check.pending) {
+    check.message = updateSummary(state, state.pluginUpdates, check.incomplete);
+    paintCheckControls(app);
+  }
+  paintUpdates(app);
+}
+
 async function restorePluginUpdates(app) {
   app.pluginUpdateSnapshotRead = true;
   const state = app.state, key = installedKey(state);
@@ -133,7 +144,7 @@ async function restorePluginUpdates(app) {
     state.pluginUpdatesKey = key;
     state.pluginUpdates = updates;
     if (checked && key === installedKey(state)) {
-      state.pluginUpdateCheck = { key, pending: false, message: updateSummary(state, updates, incomplete) };
+      state.pluginUpdateCheck = { key, pending: false, incomplete, message: updateSummary(state, updates, incomplete) };
       paintCheckControls(app);
     }
     paintUpdates(app);
@@ -153,6 +164,7 @@ export async function loadPluginUpdates(app) {
     if (!Array.isArray(updates)) throw Error("插件更新结果格式有误，请稍后重试。");
     state.pluginUpdatesKey = check.key;
     state.pluginUpdates = updates;
+    check.incomplete = incomplete;
     check.message = updateSummary(state, updates, incomplete);
     paintUpdates(app);
   } catch (error) {

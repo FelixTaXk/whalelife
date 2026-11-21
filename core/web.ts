@@ -12,9 +12,10 @@ import { conversationRows } from "./channel-history.ts";
 import { PluginWebRegistry } from "./plugin-web.ts";
 import { WebClientDisconnectedError } from "./web-errors.ts";
 import { OfficialPlugins } from "./official-plugins.ts";
-import { CommunityPackages } from "./community-packages.ts";
+import { CommunityPackages, type ReviewedCommunityEntry } from "./community-packages.ts";
 import { readPublishedCommunityReviews } from "./community-reviews.ts";
 import { PluginUpdates } from "./plugin-updates.ts";
+import { officialUpdateEntries, readOfficialUpdateEntries } from "./official-update-registry.ts";
 import { HostUpdates } from "./host-updates.ts";
 import { CacheDiagnostics } from "./cache-diagnostics.ts";
 
@@ -49,8 +50,21 @@ export async function startWeb(config: any, services: any, runtime: any) {
   };
   const hostUpdates: HostUpdates = services.hostUpdates ?? new HostUpdates(runtime.root,
     JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version);
-  const pluginUpdates = new PluginUpdates(lifetime.signal, (reviews, ids) =>
-    new CommunityPackages(runtime, reviews).compatibleUpdateVersions(ids));
+  async function reviewedUpdateManager(reviews: ReviewedCommunityEntry[], ids: ReadonlySet<string>, registry?: Record<string, any> | null) {
+    const available = new Map(reviews.map(entry => [entry.id, entry]));
+    const visited = new Set<string>();
+    function usesOfficial(id: string): boolean {
+      if (visited.has(id)) return false;
+      visited.add(id);
+      const entry = available.get(id);
+      return !entry || entry.dependencies.some(usesOfficial);
+    }
+    const needsOfficial = [...ids].some(usesOfficial);
+    return new CommunityPackages(runtime, reviews, !needsOfficial ? undefined :
+      registry ? officialUpdateEntries(registry) : await readOfficialUpdateEntries(lifetime.signal));
+  }
+  const pluginUpdates = new PluginUpdates(lifetime.signal, async (reviews, ids, registry) =>
+    (await reviewedUpdateManager(reviews, ids, registry)).compatibleUpdateVersions(ids));
   let officialRead: ReturnType<typeof official.list> | undefined;
   let lastOfficial: { time: number; result: Awaited<ReturnType<typeof official.list>> } | undefined;
   function officialList(forNotice = false) {
@@ -232,13 +246,47 @@ export async function startWeb(config: any, services: any, runtime: any) {
         if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
           return send(415, { error: "请使用 JSON 提交操作。" });
         await body(req, 4096);
-        return send(200, await pluginUpdates.list(runtime.list(), () => officialList(true)));
+        return send(200, await pluginUpdates.list(runtime.list(), registry => registry
+          ? new OfficialPlugins(runtime, officialUpdateEntries(registry)).list() : officialList(true),
+          (registry, ids) => new OfficialPlugins(runtime, officialUpdateEntries(registry)).compatibleUpdateVersions(ids)));
+      }
+      if (req.method === "POST" && (pathname === "/api/plugin-updates/preview" || pathname === "/api/plugin-updates/apply")) {
+        if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
+          return send(415, {error:"请使用 JSON 提交操作。"});
+        const input = await body(req, 4096);
+        const apply = pathname.endsWith("/apply");
+        const fields = apply ? ["id","source","version","planKey"] : ["id","source","version"];
+        if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => !fields.includes(key)))
+          return send(400, {error:"请使用商店提供的更新计划。"});
+        const notice = pluginUpdates.snapshot(runtime.list()).updates.find(row => row.id === input.id &&
+          row.source === input.source && row.latestVersion === input.version);
+        if (!notice) return send(409, {error:"请先手动检查插件更新，再确认当前可用的新版。"});
+        if (apply && (typeof input.planKey !== "string" || !/^[0-9a-f]{64}$/.test(input.planKey)))
+          return send(409, {error:"请重新查看更新计划并确认。"});
+        // Both preview and confirmation re-read the published approvals. Never accept
+        // a download URL, checksum, dependency list or filesystem path from the UI.
+        try {
+          if (notice.source === "community") {
+            const reviews = await reviewedPackages();
+            const owner = reviews.find(r => r.id === notice.id && r.repository === notice.repository);
+            if (!owner) return send(409, {error:"社区插件的审核记录或仓库已发生变化，请重新检查更新。"});
+            const packages = await reviewedUpdateManager(reviews, new Set([notice.id]));
+            return send(200, apply ? await packages.applyUpdate({ id:notice.id, version:notice.latestVersion, planKey:input.planKey })
+              : await packages.updatePlan(notice.id, notice.latestVersion));
+          }
+          const packages = new OfficialPlugins(runtime, await readOfficialUpdateEntries(lifetime.signal));
+          return send(200, apply ? await packages.apply({ action:"update", id:notice.id, version:notice.latestVersion, planKey:input.planKey })
+            : await packages.updatePlan(notice.id, notice.latestVersion));
+        } finally { if (apply) lastOfficial = undefined; }
       }
       if (pathname === "/api/official-plugins" && req.method === "GET") return send(200, await officialList());
       if (pathname === "/api/official-plugins/apply" && req.method === "POST") {
         if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")
           return send(415, { error: "请使用 JSON 提交操作。" });
-        try { return send(200, await official.apply(await body(req, 4096))); }
+        const input = await body(req, 4096);
+        if (input?.action !== "install" && input?.action !== "uninstall")
+          return send(409, {error:"请选择安装或卸载。更新请从商店手动检查并确认。"});
+        try { return send(200, await official.apply(input)); }
         finally { lastOfficial = undefined; }
       }
       const memoryUrl = new URL(req.url!, origin);

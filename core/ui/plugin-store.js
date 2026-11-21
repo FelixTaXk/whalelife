@@ -4,7 +4,7 @@
  */
 import { api, escapeHTML as e } from "./api.js";
 import { icon } from "./icons.js";
-import { bindOfficialActions, confirmCommunityInstall, officialBadge, renderStoreInstall } from "./official-plugins.js";
+import { bindOfficialActions, confirmCommunityInstall, confirmPluginUpdate, officialBadge, renderStoreInstall } from "./official-plugins.js";
 import { bindPluginUpdateCheck, checkPluginsButton, checkPluginsStatus, storeUpdate, updateBadge, updateDetails } from "./plugin-updates.js";
 import "../../market/assets/catalog-validation.js";
 
@@ -54,17 +54,23 @@ function versionLine(state, entry, official, plan, update) {
   return `<span class="store-version">${labels.map(e).join(" · ")}</span>`;
 }
 
+function updateButton(state, entry, update) {
+  const label = state.pluginUpdatePreview === entry.id ? "核对中…" : state.officialBusy === entry.id ? "更新中…" : "更新到 v" + update.latestVersion;
+  return `<button type="button" class="btn small tonal" data-plugin-update="${e(entry.id)}" data-source="${e(update.source)}" data-version="${e(update.latestVersion)}" aria-label="${e(entry.name + " · " + label)}"${state.officialBusy || state.pluginUpdatePreview ? " disabled" : ""}>${e(label)}</button>`;
+}
+
 function card(state, entry, official) {
   const plan = localPlan(state, entry, official);
   const update = storeUpdate(state, entry, official ? "official" : "community");
   const installed = (official ? plan?.installed : plan?.action === "installed") || !!update;
   const status = installed ? icon("check") + "已安装" : plan?.action === "install" ? "可安装" : "";
-  return `<button type="button" class="store-card" data-store-entry="${e(entry.id)}">
+  return `<div class="store-card"><button type="button" class="store-card-link" data-store-entry="${e(entry.id)}">
     ${art(entry, official)}<span class="store-card-body"><span class="store-card-line">
     <span class="store-name-line"><strong>${e(entry.name)}</strong>${official ? officialBadge : ""}${updateBadge(update)}</span>
     <span class="store-card-status"${installed ? " data-installed" : ""}>${status}</span></span>
     ${versionLine(state, entry, official, plan, update)}
-    <span class="store-description">${e(entry.description)}</span></span></button>`;
+    <span class="store-description">${e(entry.description)}</span></span></button>
+    ${update ? `<div class="store-card-update store-action">${updateButton(state, entry, update)}</div>` : ""}</div>`;
 }
 
 function communityOrder(sort) {
@@ -101,11 +107,11 @@ function detail(state, catalog) {
   const local = officialEntry && bundledIdentity(state, entry);
   const plan = localPlan(state, entry, !!officialEntry);
   const update = storeUpdate(state, entry, officialEntry ? "official" : "community");
-  const action = local
+  const action = update ? `<span class="store-action">${updateButton(state, entry, update)}</span>` : local
     ? `<span class="store-action" data-official-store-slot="${e(entry.id)}">${renderStoreInstall(state, entry.id)}</span>`
     : plan ? communityAction(state, entry, plan) : externalLink(entry.installation, "安装说明");
   const links = [
-    local || plan ? externalLink(entry.installation, "安装说明") : "",
+    local || plan || update ? externalLink(entry.installation, "安装说明") : "",
     externalLink(entry.repository, "原仓库 · 加星"),
     externalLink(entry.feedback, "反馈问题"),
   ].join("");
@@ -220,13 +226,18 @@ export function bindStore(app, container = app.content, opening = true) {
     if (!root.isConnected) return;
     const active = root.ownerDocument.activeElement;
     const focusedId = active?.closest("[data-store-entry]")?.dataset.storeEntry;
+    const focusedUpdate = active?.closest("[data-plugin-update]")?.dataset.pluginUpdate;
     const focusedDetail = state.storeDetail && listing.contains(active);
     const catalog = state.publishedStore || state.bundledStore;
     const current = state.storeView || "all";
     for (const button of controls) button.setAttribute("aria-pressed", String(button.dataset.storeView === current));
     if (sort) sort.closest("label").hidden = current === "official" || !(catalog?.community.length > 1);
     listing.innerHTML = storeBody(state);
-    if (focusedId) {
+    if (focusedUpdate) {
+      const button = [...listing.querySelectorAll("[data-plugin-update]:enabled")].find(el => el.dataset.pluginUpdate === focusedUpdate)
+        || [...listing.querySelectorAll("[data-store-entry]")].find(el => el.dataset.storeEntry === focusedUpdate);
+      (button || listing.querySelector("#store-heading"))?.focus({ preventScroll: true });
+    } else if (focusedId) {
       [...listing.querySelectorAll("[data-store-entry]")].find(el => el.dataset.storeEntry === focusedId)?.focus({ preventScroll: true });
     } else if (focusedDetail) {
       const next = active.matches("a") ? [...listing.querySelectorAll("a")].find(link => link.href === active.href)
@@ -254,7 +265,21 @@ export function bindStore(app, container = app.content, opening = true) {
   listing.onclick = event => {
     const card = event.target.closest("[data-store-entry]");
     const install = event.target.closest("[data-community-install]");
+    const updateButton = event.target.closest("[data-plugin-update]");
     if (card) app.showStoreDetail(card.dataset.storeEntry);
+    else if (updateButton && !updateButton.disabled) {
+      const { pluginUpdate: id, source, version } = updateButton.dataset;
+      if (source !== "official" && source !== "community") return;
+      const currentEntry = () => (state.publishedStore || state.bundledStore)?.[source]?.find(item => item.id === id);
+      const entry = currentEntry();
+      const update = entry && storeUpdate(state, entry, source);
+      if (update && update.latestVersion === version) return confirmPluginUpdate(app, entry, update, () => {
+        const shown = currentEntry();
+        const current = shown && storeUpdate(state, shown, source);
+        return root.isConnected && current?.latestVersion === version && current.installedVersion === update.installedVersion &&
+          current.repository === update.repository;
+      });
+    }
     else if (event.target.closest("[data-store-retry]")) void loadStoreCatalog(app, paint);
     else if (install && !install.disabled) {
       const id = install.dataset.communityInstall;

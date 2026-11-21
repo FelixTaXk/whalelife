@@ -14,6 +14,8 @@ import { Tools } from "./tools.ts";
 import { RegisteredToolOrder } from "./tool-order.ts";
 import { approval } from "./permission.ts";
 import { Runtime } from "./runtime.ts";
+import { recoverPendingPluginReplacements } from "./official-package-files.ts";
+import { recoverUpdateDependencies } from "./package-update-journal.ts";
 import { Sessions } from "./session.ts";
 import { Channels } from "./channels.ts";
 import { startWeb } from "./web.ts";
@@ -84,6 +86,19 @@ export async function boot(
   tools.diagnostics = diagnostics;
   const toolOrder = await RegisteredToolOrder.open(resolve(root, "config/tool-order.json"), logger);
   const runtime = new Runtime(root, logger, config.plugin_runtime);
+  // Recover before exposing the console or running a trial plugin's startup hooks.
+  const recovered = await recoverPendingPluginReplacements(root).catch(error => {
+    logger.warn("无法检查插件更新备份", {error});
+    return [];
+  });
+  for (const result of recovered) {
+    if (result.status === "pending") {
+      logger.warn("插件更新备份需要检查", result);
+      if (/^plugins\/[a-z][a-z0-9-]*(?:\/sub\/[a-z][a-z0-9-]*)*$/.test(result.directory))
+        runtime.packageRecoveryBlocks.set(result.directory.slice(8).replaceAll("/sub/", "/"), result.message);
+    } else logger.info("已处理上次中断的插件更新", result);
+  }
+  await recoverUpdateDependencies(runtime);
   const services: any = {
     hostUpdates,
     hostStarting,

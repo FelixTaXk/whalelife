@@ -971,6 +971,21 @@ html:has(#store-drawer[open]) { overflow: hidden; }
   transition: border-color .15s, box-shadow .15s;
 }
 .store-card:hover { border-color: #a29ab6; box-shadow: 0 3px 12px #29203913; }
+.store-card-link {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: inherit;
+  font: inherit;
+}
+.store-card-link:focus-visible { outline-offset: -3px; }
+.store-card-update { padding: 0 14px 12px; }
 .store-card-body { display: block; padding: 10px 14px 12px; }
 .store-card-line { align-items: center; flex-wrap: wrap; }
 .store-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; min-width: 0; overflow-wrap: anywhere; }

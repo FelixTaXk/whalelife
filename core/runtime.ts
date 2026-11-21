@@ -22,6 +22,7 @@ export class Runtime {
   root: string;
   logger: Logger;
   pluginState: PluginState;
+  readonly packageRecoveryBlocks = new Map<string, string>();
   events: PluginEvents;
   private actions: Promise<unknown> = Promise.resolve();
   private closing = false;
@@ -172,6 +173,8 @@ export class Runtime {
       if (manifest.id !== basename(dir))
         throw Error("manifest ID 必须匹配目录");
       manifest.builtin = false;
+      for (const [target, reason] of this.packageRecoveryBlocks)
+        if (target === id || id.startsWith(target + "/")) throw Error(reason);
       assertPluginCompatibility(manifest);
       if (manifest.console?.groupChildren !== undefined && typeof manifest.console.groupChildren !== "boolean")
         throw Error("console.groupChildren 必须是布尔值");

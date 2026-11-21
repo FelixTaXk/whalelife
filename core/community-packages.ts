@@ -9,7 +9,6 @@ import { parse } from "yaml";
 import { PluginPackages, type PackageEntry, type PackageRelease } from "./official-plugins.ts";
 import { directoryAt, isPackageDataPath, verifiedPackageManifests } from "./official-package-files.ts";
 import { reviewedCommunityEntries } from "./community-reviews.ts";
-import { recordCommunityInstalls } from "./community-install-receipts.ts";
 import { assertPluginCompatibility } from "./plugin-compatibility.ts";
 import { validPluginId } from "./plugin-state.ts";
 import type { Runtime } from "./runtime.ts";
@@ -79,7 +78,7 @@ async function verify(root: string, entry: PackageEntry, release: PackageRelease
 export class CommunityPackages {
   private ids: Set<string>;
   private manager: PluginPackages;
-  constructor(runtime: Runtime, records: readonly ReviewedCommunityEntry[]) {
+  constructor(runtime: Runtime, records: readonly ReviewedCommunityEntry[], officialEntries = official) {
     const entries: PackageEntry[] = [];
     for (const record of reviewedCommunityEntries({ official: [], community: records })) {
       if (runtime.records.get(record.id.split("/")[0])?.manifest.builtin || !record.verifiedReleases?.length) continue;
@@ -99,19 +98,26 @@ export class CommunityPackages {
       entries.push({...e, id, parentId:null, requiredPlugins:e.requiredPlugins.map(d => officialAliases.get(d) ?? d),
         verifiedReleases:e.verifiedReleases.map(r => ({...r, dependencies:Object.fromEntries(
           Object.entries(r.dependencies).map(([d,v]) => [officialAliases.get(d) ?? d,v]))}))});
-      for (const dep of e.requiredPlugins) { const item = official.find(p => p.id === dep); if (item) include(item); }
+      for (const dep of e.requiredPlugins) { const item = officialEntries.find(p => p.id === dep); if (item) include(item); }
     }
-    for (const e of official) if (required.has(officialId(e))) include(e);
+    for (const e of officialEntries) if (required.has(officialId(e))) include(e);
     this.manager = new PluginPackages(runtime, entries, [], [...records, ...cards.map(c => ({...c, id:officialAliases.get(c.id) ?? c.id}))], {
       available, verify,
-      installed: (root, parts) => recordCommunityInstalls(root, parts.map(({entry, release}) => ({
-        id:entry.id, name:entry.name, sha256:release.sha256, version:release.version, dependencies:Object.keys(release.dependencies),
-      }))),
     });
   }
 
   compatibleUpdateVersions(ids: ReadonlySet<string>) {
     return this.manager.compatibleUpdateVersions(ids);
+  }
+
+  updatePlan(id: string, version: string) {
+    if (!this.ids.has(id)) throw Object.assign(Error("这个插件的发行包已撤回或尚未通过审核。"), {status:409});
+    return this.manager.updatePlan(id, version);
+  }
+
+  applyUpdate(input: {id: string; version: string; planKey: string}) {
+    if (!this.ids.has(input.id)) throw Object.assign(Error("这个插件的发行包已撤回或尚未通过审核。"), {status:409});
+    return this.manager.apply({...input, action:"update"});
   }
 
   async list() {
