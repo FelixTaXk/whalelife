@@ -7,9 +7,10 @@ import { join } from "node:path";
 import { atomic } from "./memory.ts";
 import { directoryAt } from "./official-package-files.ts";
 import { validPluginId } from "./plugin-state.ts";
+import { parseHostRange } from "./package-host-range.ts";
 
 export type CommunityInstallReceipt = { id: string; name: string; version: string; sha256: string; dependencies: string[];
-  dependencyVersions?: Record<string, string>; transactionId?: string };
+  hostRange?: string; dependencyVersions?: Record<string, string>; transactionId?: string };
 export type OfficialInstallReceipt = CommunityInstallReceipt & { repository: string; platform: string; arch: string;
   bundledPluginIds: string[]; preserve: string[] };
 const filename = "community-installs.json";
@@ -29,6 +30,7 @@ export async function readPackageInstalls(root: string) {
   for (const item of [...record.installs, ...(record.officialInstalls ?? [])]) {
     if (!validPluginId(item?.id) || typeof item.name !== "string" || typeof item.version !== "string" ||
         typeof item.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(item.sha256) ||
+        (item.hostRange !== undefined && !parseHostRange(item.hostRange)) ||
         (item.transactionId !== undefined && (typeof item.transactionId !== "string" ||
           !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/.test(item.transactionId))) ||
         !Array.isArray(item.dependencies) || !item.dependencies.every(validPluginId) ||

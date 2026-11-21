@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { readPublishedCommunityReviews } from "./community-reviews.ts";
 import { readOfficialRegistry } from "./official-update-registry.ts";
 import type { ReviewedCommunityEntry } from "./community-packages.ts";
+import { compatibleHostFloor } from "./package-host-range.ts";
 
 type Entry = { id: string; repository: string };
 type Installed = { id: string; version?: string; builtin?: boolean; repository?: unknown };
@@ -52,7 +53,7 @@ function verifiedTarget(entry: Metadata, installed: string, host: string, platfo
   let best: Target | undefined;
   for (const release of Array.isArray(entry.verifiedReleases) ? entry.verifiedReleases : []) {
     if (!release || release.recognitionOnly || release.delivery !== "github-release" || release.platform !== platform ||
-        release.arch !== arch || release.hostRange !== host || !newer(release.version, best?.version ?? installed) ||
+        release.arch !== arch || !compatibleHostFloor(release.hostRange, host) || !newer(release.version, best?.version ?? installed) ||
         !/^[0-9a-f]{64}$/.test(release.sha256) || !/^[0-9a-f]{64}$/.test(release.inventorySha256) ||
         !Number.isSafeInteger(release.sizeBytes) || release.sizeBytes <= 0) continue;
     const tag = "v" + release.version, asset = release.composition?.packagePart?.assetUrl ?? release.assetUrl;

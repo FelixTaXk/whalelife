@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { validPluginId } from "./plugin-state.ts";
+import { parseHostRange } from "./package-host-range.ts";
 import type { ReviewedCommunityEntry, ReviewedCommunityRelease } from "./community-packages.ts";
 
 const publishedCatalog = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/catalog.json";
@@ -35,7 +36,7 @@ function invalid(context: string, detail: string): never {
 }
 
 function reviewedRelease(value: unknown, id: string, repository: string, required: string[]): ReviewedCommunityRelease {
-  if (!record(value) || !version(value.version) || !version(value.hostRange) ||
+  if (!record(value) || !version(value.version) || typeof value.hostRange !== "string" || !parseHostRange(value.hostRange) ||
       typeof value.platform !== "string" || !platforms.has(value.platform) ||
       typeof value.arch !== "string" || !arches.has(value.arch))
     return invalid(id, "缺少经过验证的插件版本、宿主版本或运行平台");
@@ -86,8 +87,9 @@ export function reviewedCommunityEntries(catalog: unknown): ReviewedCommunityEnt
     const releases: ReviewedCommunityRelease[] = [];
     for (const value of entry.verifiedReleases) {
       const release = reviewedRelease(value, id, entry.repository, entry.dependencies);
+      const minimumHost = parseHostRange(release.hostRange)!.minimum;
       const overlaps = (a: string, b: string) => a === b || a === "any" || b === "any";
-      if (releases.some(prev => prev.version === release.version && prev.hostRange === release.hostRange &&
+      if (releases.some(prev => prev.version === release.version && parseHostRange(prev.hostRange)!.minimum === minimumHost &&
         overlaps(prev.platform, release.platform) && overlaps(prev.arch, release.arch))) return invalid(id, "同版本的平台匹配重复");
       for (const child of release.bundledPluginIds ?? []) {
         const owner = owners.get(child);

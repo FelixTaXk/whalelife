@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        这张表用于首次收录。收录后可以关闭 Issue。后续请在插件仓库升版并发布正式 GitHub Release，维护者会收到发版通知，无需重新投稿。
-        希望提供一键安装时，请把发行包、SHA-256 和兼容说明放在 Release 中。用户手动检查更新时，只提示已审核且适合本机的新版。[社区发行包与审核说明](https://github.com/iinukami/whalelife/blob/main/market/community-packages.md)
+        这张表用于首次收录。收录后，维护者会在你的仓库订阅发版通知，投稿 Issue 可以关闭。后续请在原仓库升版并发布正式 GitHub Release，无需重新投稿。
+        如需提供一键安装，请在 Release 中附上发行包，并写明 SHA-256 和兼容条件。维护者逐个审核附件。用户手动检查插件更新时，只会看到已审核且适合本机的新版。[社区发行包与审核说明](https://github.com/iinukami/whalelife/blob/main/market/community-packages.md)
   - type: input
     id: repository
     attributes:

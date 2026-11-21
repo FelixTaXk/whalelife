@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { temporaryDirectory } from "./temporary-directory.ts";
@@ -26,8 +26,14 @@ async function program(dir: string, version: string, body: string) {
       const image = join(root, 'plugins/gallery/data/image.png'), ready = () => process.exit(0);
       let plugins = ['gallery'];
       ${body}
-      return {runtime:{list:()=>plugins.map(id=>({id,status:'active'}))}, logger:{error(){}}, close(){}};
-    }`);
+      return {runtime:{
+        list:()=>plugins.map(id=>({id,status:'active'})),
+        checkInstalledPlugins(ids) {
+          for (const id of ids) if (!plugins.includes(id)) throw Error("插件 " + id + " 预检失败");
+        },
+      }, logger:{error(){}}, close(){}};
+    }
+    export const prepareHostTrial = boot;`);
 }
 const old = `
   if (existsSync(join(root, 'asked'))) setTimeout(ready, 250);
@@ -97,7 +103,7 @@ test("interrupted trial recovers its saved image before bringing back the old ap
   const {root,image} = await fixture(), original = await readFile(image);
   await writeFile(join(root, "asked"), "yes");
   await prepareHostBackup(root);
-  await writeFile(join(root, ".whalelife-updates/state.json"), JSON.stringify({active:null,pending:"0.2.0",phase:"trial",lastResult:null}));
+  await writeFile(join(root, ".whalelife-updates/state.json"), JSON.stringify({active:null,pending:"0.2.0",phase:"trial",preflightOnly:true,lastResult:null}));
   await writeFile(image, "trial changed");
   assert.equal(await runHostSupervisor(root), 0);
   assert.deepEqual(await readFile(image), original);
@@ -137,22 +143,136 @@ test("killing the manager while the final handover response is outstanding resto
   const recovered = await readHostUpdateState(root);
   assert.deepEqual([recovered.active,recovered.lastResult?.status], [null,"rolled-back"]);
 });
-test("an interrupted delivery retains its prior program and snapshot if the selected version cannot boot", async () => {
-  const {root,target,image} = await fixture(), original = await readFile(image);
+for (const phase of ["trial", "handover"]) test(`legacy ${phase} keeps both images for inspection when plugins might have executed`, async () => {
+  const {root,image} = await fixture();
+  await prepareHostBackup(root);
+  const interrupted = {active:null,pending:"0.2.0",phase,lastResult:null};
+  await writeFile(join(root, ".whalelife-updates/state.json"), JSON.stringify(interrupted));
+  await writeFile(image, "external receipt already recorded");
+  await assert.rejects(runHostSupervisor(root), /旧启动器.*插件可能已执行/);
+  assert.deepEqual(await readHostUpdateState(root), interrupted);
+  assert.equal(await readFile(image, "utf8"), "external receipt already recorded");
+  assert.ok(await readFile(join(root, ".whalelife-updates/backup/items.json"), "utf8"));
+});
+test("an interrupted delivery keeps the selected program, fresh data and backup when it cannot restart", async () => {
+  const {root,target,image} = await fixture();
   await writeFile(join(root, "asked"), "yes");
   await prepareHostBackup(root);
   await program(target,"0.2.0","throw Error('partial delivery failed to boot');");
   await writeFile(join(root, ".whalelife-updates/state.json"), JSON.stringify({
     active:"0.2.0",pending:null,lastResult:null,delivery:{previous:null,plugins:["gallery"]},
   }));
-  await writeFile(image, "trial changed");
-  assert.equal(await runHostSupervisor(root), 0);
-  assert.deepEqual(await readFile(image), original);
-  assert.equal((await readHostUpdateState(root)).lastResult?.status, "rolled-back");
+  await writeFile(image, "newly accepted write");
+  await assert.rejects(runHostSupervisor(root), /partial delivery failed to boot/);
+  assert.equal(await readFile(image, "utf8"), "newly accepted write");
+  assert.equal((await readHostUpdateState(root)).active, "0.2.0");
+  assert.ok(await readFile(join(root, ".whalelife-updates/backup/items.json"), "utf8"));
 });
 test("a second supervisor never consumes or resets the first supervisor's pending journal", async () => {
   const {root} = await fixture();
   const unlock = await holdHostLock(root,"manager");
   try { await assert.rejects(runHostSupervisor(root), /仍在运行/); }
   finally { await unlock(); }
+});
+test("an older worker calling the live entry for a trial is refused before core startup", async () => {
+  const root = await temporaryDirectory("whale-old-host-entry-");
+  const entry = join(root, "old-worker.mjs");
+  await writeFile(entry, `
+    import { boot } from ${JSON.stringify(new URL("../core/index.ts", import.meta.url).href)};
+    import { writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    try { await boot(process.argv[2], undefined, () => true); process.exit(2); }
+    catch (error) { writeFileSync(join(process.argv[2], "diagnosis"), error.message); process.exit(0); }
+  `);
+  const worker = fork(entry, [root, root, "trial"], { execArgv: [], stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  assert.equal((await once(worker, "exit"))[0], 0);
+  assert.match(await readFile(join(root, "diagnosis"), "utf8"), /根目录的启动器需要手动升级/);
+  await assert.rejects(stat(join(root, "logs")), { code: "ENOENT" });
+});
+test("a failure writing the authoritative takeover transaction never starts the candidate's plugins", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const {root,target,image} = await fixture(), original = await readFile(image);
+  await program(target, "0.2.0", `
+    if (process.argv[4] === 'trial') {
+      writeFileSync(image, 'reversible core startup');
+      const { DatabaseSync } = await import('node:sqlite');
+      const db = new DatabaseSync(join(root, '.whalelife-updates/state.sqlite'));
+      db.exec("CREATE TRIGGER fail_selection BEFORE UPDATE ON host_state WHEN json_extract(NEW.state, '$.active') = '0.2.0' BEGIN SELECT RAISE(ABORT, 'takeover write failure'); END");
+      db.close();
+    } else {
+      writeFileSync(join(root, 'candidate-live'), 'ran');
+      setTimeout(ready, 250);
+    }
+  `);
+  assert.equal(await runHostSupervisor(root), 0);
+  const state = await readHostUpdateState(root);
+  assert.equal(state.active, null);
+  assert.match(state.lastResult!.message, /takeover write failure/);
+  assert.deepEqual(await readFile(image), original);
+  await assert.rejects(stat(join(root, "candidate-live")), { code: "ENOENT" });
+});
+test("interrupting the first Windows journal migration leaves the original JSON usable for retry", {
+  skip: process.platform !== "win32",
+}, async t => {
+  const {root,target,image} = await fixture(), original = await readFile(image);
+  await program(target, "0.2.0", "setTimeout(ready, 950);");
+  const legacy = { active: null, pending: null, lastResult: null };
+  const directory = join(root, ".whalelife-updates");
+  await writeFile(join(directory, "state.json"), JSON.stringify(legacy));
+  const entry = join(root, "interrupted-migration.mjs");
+  await writeFile(entry, `
+    import { DatabaseSync } from 'node:sqlite';
+    import { runHostSupervisor } from ${JSON.stringify(new URL("../core/host-supervisor.ts", import.meta.url).href)};
+    const prepare = DatabaseSync.prototype.prepare;
+    DatabaseSync.prototype.prepare = function(sql) {
+      if (sql.startsWith('INSERT INTO host_state')) process.exit(76);
+      return prepare.call(this, sql);
+    };
+    process.exitCode = await runHostSupervisor(process.argv[2]);`);
+  const manager = fork(entry, [root], { execArgv: [], stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  const exited = once(manager, "exit");
+  t.after(async () => { if (manager.exitCode === null && manager.signalCode === null) manager.kill("SIGKILL"); await exited; });
+  assert.equal((await exited)[0], 76);
+  await (await holdHostLock(root, "worker", 30_000))();
+  assert.deepEqual(await readHostUpdateState(root), legacy);
+  await assert.rejects(stat(join(directory, "state.sqlite")), { code: "ENOENT" });
+  assert.deepEqual(await readFile(image), original);
+  await rename(join(root, "asked"), join(root, "first-request"));
+  assert.equal(await runHostSupervisor(root), 0);
+  assert.equal((await readHostUpdateState(root)).active, "0.2.0");
+});
+test("successive durable selections survive an older JSON mirror, leftover backup and journal read errors", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const {root,target,image} = await fixture();
+  const directory = join(root, ".whalelife-updates");
+  const journal = join(directory, "state.sqlite");
+  await readHostUpdateState(root);
+  await assert.rejects(stat(journal), { code: "ENOENT" });
+  await program(target, "0.2.0", `
+    if (process.argv[4] === 'active') setTimeout(() => updates.activate('0.3.0'), 300);
+  `);
+  await program(hostReleaseDirectory(root, "0.3.0"), "0.3.0", `
+    if (process.argv[4] === 'active') {
+      writeFileSync(image, 'newest user data');
+      // Prevent automatic cleanup of this snapshot. It must never be read as rollback authority.
+      writeFileSync(join(root, '.whalelife-updates/backup/owner'), 'unknown backup owner');
+      setTimeout(ready, 250);
+    }
+  `);
+  assert.equal(await runHostSupervisor(root), 0);
+  const newest = await readHostUpdateState(root);
+  assert.equal(newest.active, "0.3.0");
+  const stale = {active:"0.2.0",pending:"0.3.0",phase:"handover",preflightOnly:true,lastResult:null,windowsJournal:true};
+  await writeFile(join(directory, "state.json"), JSON.stringify(stale));
+  assert.equal(await runHostSupervisor(root), 0);
+  assert.deepEqual(await readHostUpdateState(root), newest);
+  assert.equal(await readFile(image, "utf8"), "newest user data");
+  await rename(journal, journal + ".saved");
+  await assert.rejects(runHostSupervisor(root), /缺少本体更新事务数据库/);
+  await writeFile(journal, "damaged journal");
+  await assert.rejects(runHostSupervisor(root), /database/i);
+  assert.equal(await readFile(image, "utf8"), "newest user data");
+  assert.ok(await readFile(join(directory, "backup/items.json"), "utf8"));
 });

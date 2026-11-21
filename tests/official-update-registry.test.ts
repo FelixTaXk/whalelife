@@ -22,6 +22,20 @@ test("current main authorizes official target bytes and the shipped inventory ca
   }
 });
 
+test("official update approvals accept bounded hosts and reject duplicate builds with the same host floor", () => {
+  const resolve = (...ranges: string[]) => officialUpdateEntries({
+    schemaVersion:1, plugins:[{...published, verifiedReleases:ranges.map(hostRange => ({...release("1.1.0"), hostRange}))}],
+  }, [local])[0].verifiedReleases.filter(r => !r.recognitionOnly);
+  const ranges = ["=0.1.0", ">=0.1.1 <=0.1.5", ">=0.1.6 <1.0.0", ">=1.0.0"];
+  assert.deepEqual(resolve(...ranges).map(r => r.hostRange), ranges);
+  for (const aliases of [["0.1.0", ">=0.1.0"], ["=0.1.0", ">=0.1.0 <0.2.0"]]) {
+    assert.throws(() => resolve(...aliases), /版本与平台重复/);
+  }
+  for (const invalid of [">=0.1.0 <0.1.0", "^0.1.0", "latest"]) {
+    assert.throws(() => resolve(invalid), /审核资料无效/);
+  }
+});
+
 test("an inventory absent from the host is read from the digest-addressed official main file and verified", async t => {
   const bytes=JSON.stringify({format:1,files:[]})+"\n";
   const sha256=createHash("sha256").update(bytes).digest("hex");

@@ -31,6 +31,22 @@ export async function boot(
   hostUpdates?: HostUpdates,
   hostStarting?: () => boolean,
 ) {
+  // Older installation-root workers call boot() even for a reversible trial.
+  if (process.send && hostStarting && process.argv[4] === "trial")
+    throw Error("安装根目录的启动器需要手动升级后才能安全更新本体。请退出 WhaleLife，保留实例资料，更新根目录的程序文件后重启。");
+  return initialize(root, hostUpdates, hostStarting, false);
+}
+
+export function prepareHostTrial(root: string, hostUpdates?: HostUpdates) {
+  return initialize(root, hostUpdates, () => true, true);
+}
+
+async function initialize(
+  root: string,
+  hostUpdates: HostUpdates | undefined,
+  hostStarting: (() => boolean) | undefined,
+  trial: boolean,
+) {
   const config = JSON.parse(
     (await readFile(resolve(root, "config/config.json"), "utf8")).replace(
       /^\uFEFF/,
@@ -86,19 +102,21 @@ export async function boot(
   tools.diagnostics = diagnostics;
   const toolOrder = await RegisteredToolOrder.open(resolve(root, "config/tool-order.json"), logger);
   const runtime = new Runtime(root, logger, config.plugin_runtime);
-  // Recover before exposing the console or running a trial plugin's startup hooks.
-  const recovered = await recoverPendingPluginReplacements(root).catch(error => {
-    logger.warn("无法检查插件更新备份", {error});
-    return [];
-  });
-  for (const result of recovered) {
-    if (result.status === "pending") {
-      logger.warn("插件更新备份需要检查", result);
-      if (/^plugins\/[a-z][a-z0-9-]*(?:\/sub\/[a-z][a-z0-9-]*)*$/.test(result.directory))
-        runtime.packageRecoveryBlocks.set(result.directory.slice(8).replaceAll("/sub/", "/"), result.message);
-    } else logger.info("已处理上次中断的插件更新", result);
+  // Recovery consumes plugin journals outside the host snapshot. Only the active host may do it.
+  if (!trial) {
+    const recovered = await recoverPendingPluginReplacements(root).catch(error => {
+      logger.warn("无法检查插件更新备份", {error});
+      return [];
+    });
+    for (const result of recovered) {
+      if (result.status === "pending") {
+        logger.warn("插件更新备份需要检查", result);
+        if (/^plugins\/[a-z][a-z0-9-]*(?:\/sub\/[a-z][a-z0-9-]*)*$/.test(result.directory))
+          runtime.packageRecoveryBlocks.set(result.directory.slice(8).replaceAll("/sub/", "/"), result.message);
+      } else logger.info("已处理上次中断的插件更新", result);
+    }
+    await recoverUpdateDependencies(runtime);
   }
-  await recoverUpdateDependencies(runtime);
   const services: any = {
     hostUpdates,
     hostStarting,
@@ -158,10 +176,12 @@ export async function boot(
   services.web = web;
   await runtime.builtin("web", web);
   await runtime.bus.start();
-  await runtime.scan();
-  await toolOrder.remember(tools.entries.keys());
-  runtime.events.emit("whalelife/ready", { at: new Date().toISOString() });
-  logger.info("核心就绪");
+  if (!trial) {
+    await runtime.scan();
+    await toolOrder.remember(tools.entries.keys());
+    runtime.events.emit("whalelife/ready", { at: new Date().toISOString() });
+    logger.info("核心就绪");
+  }
   let closing: Promise<void> | undefined;
   const close = () => {
     if (closing) return closing;

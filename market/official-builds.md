@@ -1,13 +1,15 @@
 # 官方插件安装包
 
-在控制台打开「插件商店」，选择插件，点击版本号旁的「安装」。如果需要其他插件，确认框会列出将安装、启用或沿用的版本。WhaleLife 从登记的 GitHub Release 获取缺少的发行文件，核对大小和 SHA-256，全部通过后开始安装。经校验的本机缓存可以重复使用。当前清单适用于 Windows x64、WhaleLife 0.1.0。
+在控制台打开「插件商店」，选择插件，点击版本号旁的「安装」。如果需要其他插件，确认框会列出将安装、启用或沿用的版本。WhaleLife 从登记的 GitHub Release 获取缺少的发行文件，核对大小和 SHA-256，全部通过后开始安装。经校验的本机缓存可以重复使用。当前清单的实测基线为 Windows x64、WhaleLife 0.1.0。宿主从 0.1.1 起将清单中的单个宿主版本作为最低要求，也会检查声明的上界、平台和架构。
 
 浏览商店、识别手动安装和卸载使用宿主随附的文件清单，可以离线进行。下载中断或校验失败时，控制台会显示失败的步骤，可以直接重试。已安装的依赖版本不兼容时，商店会提示用户先升级。
 
+官方子插件声明它需要的最低父插件版本。例如，QQ 空间 0.5.2 要求 QQ 至少为 0.22.0。装有兼容版本时商店会沿用它，已停用时会提示启用。从空缓存安装时，商店会选择清单中适配当前宿主和平台、且达到最低要求的最新父插件。已使用旧版商店的用户需要更新宿主才能使用此规则。
+
 | 插件 | 版本 | 程序文件数 | 此版验证的必需插件 |
 | --- | --- | ---: | --- |
-| QQ | 0.22.0 | 2925 | — |
-| QQ 空间 | 0.5.2 | 136 | QQ 0.22.0 |
+| QQ | 0.23.0 | 2925 | — |
+| QQ 空间 | 0.5.2 | 136 | QQ 0.22.0、0.23.0（最低 0.22.0） |
 | 自主性 | 0.6.3 | 16 | — |
 | 图库 | 0.1.2 | 381 | — |
 | 网上冲浪 | 0.1.1 | 1239 | — |
@@ -17,7 +19,7 @@
 
 ## 从公开源码重建缓存
 
-使用 Windows x64 版 Node.js 24.22.1、随附的 npm 11.19.1 和 Git。构建机上的 Git 检出使用 `core.autocrlf=true`。换行、打包器和压缩库都会影响最终字节，因此这些参数也是复现条件。宿主无需在插件安装时运行 npm 或构建脚本。
+使用 Windows x64 版 Node.js 24.22.1、随附的 npm 11.19.1 和 Git。下方示例使用早期发行包的 `core.autocrlf=true` 检出设置。换行、打包器和压缩库都会影响最终字节，各版本的构建差异见相应插件小节。宿主无需在插件安装时运行 npm 或构建脚本。
 
 以下 PowerShell 命令从**主仓根目录**运行。将 `$pluginId` 换成所需插件标识，源码目录选择一个空位置。清单中保存了每款插件的原仓库、精确提交、缓存字节数和 SHA-256。[发行清单](official-releases.json)
 
@@ -61,7 +63,9 @@ node ./market/tools/cache-official.mjs $pluginId $source
 
 ### QQ 桌面组件
 
-QQ 0.22.0 桌面版需要 NapCat 4.18.41 的 Shell 与 Framework 原包，还有锁定的 Frida 原生绑定。维护者可以使用插件作者 v0.19.3 Release 已提供的同版本原包，两项资产的 GitHub 摘要与当前 `engine.lock.json`、`desktop-engine.lock.json` 一致。第三方使用和再分发条件见插件的 `THIRD_PARTY_NOTICES.md` 与 NapCat 原许可证。[Shell 原包](https://github.com/iinukami/whalelife-plugin-qq/releases/download/v0.19.3/NapCat.Shell.Windows.Node.zip) · [Framework 原包](https://github.com/iinukami/whalelife-plugin-qq/releases/download/v0.19.3/NapCat.Framework.zip)
+QQ 0.22.0 和 0.23.0 桌面版使用相同的 NapCat 4.18.41 Shell、Framework 和 Frida 17.24.0 原生绑定。维护者可以使用插件作者 v0.19.3 Release 已提供的同版本原包，两项资产的 GitHub 摘要与当前 `engine.lock.json`、`desktop-engine.lock.json` 一致。第三方使用和再分发条件见插件的 `THIRD_PARTY_NOTICES.md` 与 NapCat 原许可证。[Shell 原包](https://github.com/iinukami/whalelife-plugin-qq/releases/download/v0.19.3/NapCat.Shell.Windows.Node.zip) · [Framework 原包](https://github.com/iinukami/whalelife-plugin-qq/releases/download/v0.19.3/NapCat.Framework.zip)
+
+0.23.0 保留了本次桌面构建中的文件换行。QQ 主程序和随包的图库入口均已从对应提交独立编译并逐字节比对。需要相同缓存字节时可直接使用本版商店附件。[QQ v0.23.0](https://github.com/iinukami/whalelife-plugin-qq/releases/tag/v0.23.0)
 
 上方构建命令自动下载两个原包。已有原包的维护者也可以在插件源码根目录的 `.artifacts/vendor/` 放入同名文件并跳过下载。准备脚本核对组件版本和摘要，桌面构建核对最终文件清单。
 
@@ -81,6 +85,8 @@ node ./market/tools/vision-without-decoders.mjs check $part
 ## 识别手动安装
 
 `recognitionOnly` 条目的 SHA-256 对应 `market/inventories/<sha256>.json` 的原始字节。这些清单用于逐文件识别现有程序及卸载校验，安装按钮只选择可安装包。历史程序保留其发行时的实际换行和文档摘要，校验时严格比较原始字节。
+
+QQ 0.23.0 登记了两种文件清单。商店包有 2,925 个文件。已验证的手动安装还留有旧版随附的 18 个程序文件，商店可依据第二份清单识别这个版本。
 
 电脑与文件 0.1.2 使用该版留存的 Windows x64 构建，共 22 个文件（含 `BUILD.json`）。已按本版清单核对 `SandboxRunner.exe` 及其源码。从源码构建会重新编译该组件。需要与商店缓存逐字节一致的安装包时，请使用本版公开附件。[电脑与文件 v0.1.2](https://github.com/iinukami/whalelife-plugin-computer/releases/tag/v0.1.2)
 
@@ -103,3 +109,5 @@ B 站 0.2.10 同时登记了公开构建和此前手动安装的文件清单。�
 2026-11-21，在 Windows x64 上用 WhaleLife 0.1.0 的隔离实例从空缓存安装电脑与文件 0.1.2。商店从 GitHub 下载 82,895 字节的安装包，核验 SHA-256 后启用插件。卸载并重装后，插件再次启用，测试文件的内容与卸载前一致。
 
 在装有电脑与文件 0.1.0 的实例内，商店识别了旧版，并显示通往 0.1.2 Release 的更新提示。通过商店卸载旧版、安装 0.1.2 后，新版正常启用，原有测试文件内容保留，更新提示消失。
+
+2026-11-21，在 Windows x64 的隔离实例从空缓存安装 QQ 空间 0.5.2。商店从两个公开 GitHub Release 匿名下载并校验安装包，依次启用 QQ 0.23.0 和 QQ 空间。分别预装 QQ 0.22.0 和 0.23.0 时，商店均沿用已有 QQ。卸载并重装空间保留了样例数据，空间仍在使用 QQ 时，商店阻止了父插件卸载。

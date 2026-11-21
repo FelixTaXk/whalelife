@@ -9,6 +9,60 @@
       "requiredPlugins": [],
       "verifiedReleases": [
         {
+          "version": "0.23.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "f8dd10ad406f191ef9212533393c7ff17a8a4726",
+          "delivery": "github-release",
+          "verification": "market/official-builds.md",
+          "bundledPluginIds": [
+            "qq/gallery"
+          ],
+          "sha256": "1fc911677c29743a8f56c6408cc558126098f4b2e9cd2c252832937a132a9151",
+          "fileCount": 2925,
+          "sizeBytes": 235657251,
+          "inventorySha256": "e043ec63535a6f688a360239963e05d6d389d285ce766d9a30c844321f91915d",
+          "assetUrl": "https://github.com/iinukami/whalelife-plugin-qq/releases/download/v0.23.0/qq-0.23.0-win32-x64.wlpkg.gz"
+        },
+        {
+          "version": "0.23.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "f8dd10ad406f191ef9212533393c7ff17a8a4726",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "bundledPluginIds": [
+            "qq/gallery"
+          ],
+          "sha256": "e043ec63535a6f688a360239963e05d6d389d285ce766d9a30c844321f91915d",
+          "fileCount": 2925,
+          "sizeBytes": 440927,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/e043ec63535a6f688a360239963e05d6d389d285ce766d9a30c844321f91915d.json"
+        },
+        {
+          "version": "0.23.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {},
+          "sourceCommit": "f8dd10ad406f191ef9212533393c7ff17a8a4726",
+          "delivery": "inventory",
+          "verification": "market/official-builds.md",
+          "bundledPluginIds": [
+            "qq/gallery"
+          ],
+          "sha256": "b196868635b6c7c92ad4ea6f131ae030f891bef69591e2102d74bc64e8939e3c",
+          "fileCount": 2943,
+          "sizeBytes": 443202,
+          "recognitionOnly": true,
+          "inventoryPath": "market/inventories/b196868635b6c7c92ad4ea6f131ae030f891bef69591e2102d74bc64e8939e3c.json"
+        },
+        {
           "version": "0.22.0",
           "hostRange": "0.1.0",
           "platform": "win32",

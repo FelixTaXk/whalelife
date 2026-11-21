@@ -1,9 +1,12 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { PluginUpdates } from "../core/plugin-updates.ts";
 import { CommunityPackages } from "../core/community-packages.ts";
-import type { Runtime } from "../core/runtime.ts";
+import { Runtime } from "../core/runtime.ts";
+import { Logger } from "../core/logger.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
 
 const host: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -51,10 +54,11 @@ function serve(t: TestContext, replies: Map<string, unknown>) {
 }
 
 test("updates compare local installations to compatible reviewed packages without disclosing them", async t => {
-  const newest = asset("1.10.0");
+  const newest = { ...asset("1.10.0"), hostRange: "0.0.9" };
   const publicEntries = [{ ...child, verifiedReleases: [
     asset("1.9.0"), newest, { ...asset("3.0.0"), recognitionOnly: true }, { ...asset("4.0.0"), platform: "other" },
     { ...asset("5.0.0"), arch: "other" }, { ...asset("6.0.0"), hostRange: "other" },
+    { ...asset("6.1.0"), hostRange: "99.0.0" }, { ...asset("6.2.0"), hostRange: ">=0.0.1 <" + host },
     { ...asset("7.0.0"), delivery: "inventory" }, { ...asset("8.0.0"), inventorySha256: "invalid" },
     { ...asset("9.0.0"), assetUrl: "https://example.net/download" }, asset("20.0.0-pre.1")
   ] }];
@@ -199,4 +203,40 @@ test("reviewed notices follow the install planner through missing, conflicting a
     { ...leaf, dependencies: [dep.id], verifiedReleases: [review(leaf, "1.0.0", { [dep.id]: "1.0.0" })] }] });
   assert.deepEqual((await make(root).list(root, unrecognized)).updates, []);
   assert.ok(requests.every(r => r.address === catalogURL));
+});
+
+test("community notices apply host floors, explicit bounds and platform restrictions to approved releases", async t => {
+  const replies = new Map<string, unknown>();
+  const requests = serve(t, replies);
+  const service = make();
+  const release = { ...review(author, "2.0.0"), hostRange: "0.0.9" };
+  for (const [candidate, expected] of [
+    [release, true], [{ ...release, hostRange: "99.0.0" }, false], [{ ...release, hostRange: "=0.0.9" }, false],
+    [{ ...release, hostRange: ">=0.0.9 <=" + host }, true], [{ ...release, hostRange: ">=0.0.9 <" + host }, false],
+    [{ ...release, platform: process.platform === "win32" ? "linux" : "win32" }, false],
+    [{ ...release, arch: process.arch === "x64" ? "arm64" : "x64" }, false],
+  ] as const) {
+    replies.set(catalogURL, { ...catalog, community: [{ ...author, verifiedReleases: [candidate] }] });
+    const checked = await service.list([installed[1]], unrecognized);
+    assert.equal(checked.incomplete, undefined);
+    assert.deepEqual(checked.updates.map(item => item.latestVersion), expected ? [candidate.version] : []);
+  }
+  assert.ok(requests.every(request => request.address === catalogURL));
+});
+
+test("a pending parent package recovery blocks loading its children and preflight only inspects their files", async t => {
+  const root = await temporaryDirectory("whale-plugin-update-preflight-");
+  const runtime = new Runtime(root, new Logger(join(root, "logs")));
+  t.after(() => runtime.bus.stop());
+  const dir = join(root, "plugins", "parent", "sub", "child");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "plugin.yaml"), JSON.stringify({ id: "child", name: "Child", description: "Fixture", version: "1.0.0" }));
+  await writeFile(join(dir, "index.ts"), 'throw Error("plugin code ran during preflight")');
+  runtime.packageRecoveryBlocks.set("parent", "parent transaction needs review");
+  await assert.rejects(runtime.checkInstalledPlugins(["parent/child"]), /parent transaction needs review/);
+  const blocked = await runtime.loadPath("parent/child");
+  assert.equal(blocked.status, "failed");
+  assert.match(blocked.error, /parent transaction needs review/);
+  runtime.packageRecoveryBlocks.clear();
+  await runtime.checkInstalledPlugins(["parent/child"]);
 });

@@ -2,7 +2,7 @@
   "official": [
     {
       "id": "qq",
-      "version": "0.22.0",
+      "version": "0.23.0",
       "name": "QQ",
       "author": "iinukami 和贡献者",
       "description": "在 QQ 私聊里延续 WhaleLife 的对话，和白名单好友收发消息。",
@@ -207,6 +207,41 @@
           "sha256": "c6e37794d7fe77617ca4344e8d6a9a11c2b9c73fcb5164044b0e51abb0871767",
           "dependencies": {},
           "bundledPluginIds": ["studio/image", "studio/promptkit", "studio/video"]
+        }
+      ]
+    },
+    {
+      "id": "thinking-space",
+      "version": "0.1.0",
+      "name": "思维空间",
+      "author": "SSSSmallSlimeSmile",
+      "description": "把多个插件的工具组合成可重复运行的技能，在技能库或画布中编辑和试跑。",
+      "repository": "https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space",
+      "installation": "https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space/blob/819abcf10c8614e5c2886241c3b4a8321cc3285b/README.md#二怎么装",
+      "feedback": "https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space/issues",
+      "dependencies": [],
+      "collected": "2026-11-21",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.1.0",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space/releases/download/v0.1.0/thinking-space-0.1.0.wlpkg.gz",
+          "sizeBytes": 235194,
+          "sha256": "0c75ad7c9a1bbd8b9764b883c6441032d69c4805086807d165053b91f354bf44",
+          "dependencies": {}
+        },
+        {
+          "version": "0.1.0",
+          "hostRange": "0.1.1",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space/releases/download/v0.1.0/thinking-space-0.1.0.wlpkg.gz",
+          "sizeBytes": 235194,
+          "sha256": "0c75ad7c9a1bbd8b9764b883c6441032d69c4805086807d165053b91f354bf44",
+          "dependencies": {}
         }
       ]
     }

@@ -1,6 +1,8 @@
 # 社区插件发行包与一键安装
 
-首次投稿在 Issue 里填公开仓库链接和一句话介绍，安装说明放在作者仓库。收录后可以关闭投稿 Issue。维护者在作者仓库订阅 Release 通知，作者照常在原仓库发新版，无需再填投稿表。没有已审核发行包的条目继续提供「安装说明」。用户手动点「检查插件更新」时，只会看到适合本机的已审核新版。
+首次投稿在 Issue 里填公开仓库链接和一句话介绍，安装说明放在作者仓库。收录后可以关闭投稿 Issue。维护者在作者仓库订阅 Release 通知，作者后续发新版无需再填投稿表。希望提供一键安装的作者需随 Release 附上发行包，由维护者逐个审核附件。没有已审核发行包的条目继续提供「安装说明」。
+
+用户手动点「检查插件更新」时，只会看到适合本机的已审核新版。旧版控制台可能根据作者的最新 Release 显示「有更新」。可在商店查看一键安装版本，也可核对[公开目录](catalog.json)中对应插件的 `verifiedReleases` 记录。
 
 ## 社区插件图标
 
@@ -31,8 +33,8 @@ node market/tools/review-community-icon.mjs sample "$url"
    ```
 
 3. 核对输出文件列表。工具会过滤插件和子插件的 `data/`、用户配置、隐藏文件和常见凭据文件，遇到私钥内容标记会终止。请从清单中逐项确认只有公开程序、必要依赖与授权材料，检查源码或其他命名的文件内是否嵌入了账号资料。用户安装时无需运行作者机器上的构建步骤。
-4. 在**插件自己的公开 GitHub 仓库**创建 Release 草稿。标签与 `plugin.yaml` 的新版本对应，例如插件 `1.2.0` 使用 `v1.2.0`。把生成的 `.wlpkg.gz` 附到草稿。GitHub 自动生成的源码归档可供手动安装。
-5. 在发行说明里写出附件名、打包工具输出的 `sizeBytes` 和 `sha256`、适用的 WhaleLife 版本、已测试的操作系统与架构，以及必需插件的完整 ID 和版本。子插件同时写明父插件及版本。核对附件后发布正式 Release，维护者会收到 GitHub 通知。建议在作者仓库开启不可变发行版，保护今后发布的标签和附件。[GitHub 不可变发行版说明](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
+4. 在**插件自己的公开 GitHub 仓库**创建 Release 草稿。标签与 `plugin.yaml` 的新版本对应，例如插件 `1.2.0` 使用 `v1.2.0`。把生成的 `.wlpkg.gz` 附到草稿。GitHub 自动生成的源码归档可用于手动安装。
+5. 在发行说明里写出附件名、打包工具输出的 `sizeBytes` 和 `sha256`、适用的 WhaleLife 版本、已测试的操作系统与架构，以及必需插件的完整 ID 和版本。子插件请同时写明父插件及版本，可选集成单独说明。核对附件后发布正式 Release，维护者会收到发版通知。建议在作者仓库开启不可变发行版，保护今后发布的标签和附件。[GitHub 不可变发行版说明](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 
 ## 维护者审核
 
@@ -50,13 +52,13 @@ node market/tools/review-community-icon.mjs sample "$url"
 
    | 字段 | 登记内容 |
    | --- | --- |
-   | `version`、`hostRange` | 插件正式版本和实测 WhaleLife 精确版本，例如 `1.2.0`、`0.1.0` |
+   | `version`、`hostRange` | 插件正式版本和最低实测宿主，例如 `1.2.0`、`0.1.0`。宿主有上限时填 `>=0.1.0 <0.2.0` 或 `>=0.1.0 <=0.1.1`，仅适配单一版本时填 `=0.1.0`。 |
    | `platform`、`arch` | 对应 Node 的平台和架构，例如 `win32`、`x64`。该维度确实通用时可填 `any` |
    | `assetUrl` | 同一作者仓库下的 `/releases/download/v1.2.0/<文件名>.wlpkg.gz` 附件直链 |
    | `sizeBytes`、`sha256` | 实际压缩文件的字节数和 64 位小写十六进制摘要 |
    | `dependencies` | 必需插件完整运行 ID 对应实测精确版本，如 `{"surf":"0.1.1"}`。没有时填 `{}`；条目的 `dependencies` 列表与这些 ID 对应 |
    | `bundledPluginIds` | 可选，随同该附件安装的子插件完整 ID，例如 `["sample/calendar"]` |
 
-5. 在主仓根目录运行 `node market/tools/generate-catalog.mjs` 生成展示文件，再运行 `node market/tools/generate-catalog.mjs --check` 核对。发布后在控制台回读条目，核对安装版本、依赖提示和作者链接。首次收录结果在投稿 Issue 告知作者，后续需补充资料或修复问题时，可继续在原帖沟通。
+5. 在主仓根目录运行 `node market/tools/generate-catalog.mjs` 生成展示文件，再运行 `node market/tools/generate-catalog.mjs --check` 核对。发布后在控制台回读条目，核对安装版本、依赖提示和作者链接。首次收录结果在投稿 Issue 告知作者，后续需要补充资料或修复问题时，可继续在原帖沟通。
 
-每个新版附件都独立审核。哪怕只修打包内容，也要提高版本号并发布新的 Release。已登记附件如被替换，大小或摘要不匹配会中止安装。审核尚未通过时，商店仍提供先前已审核且兼容的版本。
+每个新版附件都独立审核。即使只修打包内容，也要提高版本号并发布新的 Release。已登记附件如被替换，大小或摘要不匹配会中止安装。新附件审核通过前，商店继续提供先前已审核且兼容的版本。

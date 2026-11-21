@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { inspectOfficialFiles, installOfficialFiles, replaceOfficialFiles, uninstallOfficialFiles } from "./official-package-files.ts";
 import { ensureOfficialPackage } from "./official-package-download.ts";
+import { compareVersions as compare, compatibleHostFloor, stableVersion } from "./package-host-range.ts";
 import type { Runtime } from "./runtime.ts";
 import { readPackageInstalls, recordPackageInstalls, type CommunityInstallReceipt, type OfficialInstallReceipt } from "./community-install-receipts.ts";
 
@@ -31,12 +32,35 @@ const read = (file: string) => JSON.parse(readFileSync(new URL(file, import.meta
 const registry: { plugins: Entry[]; installedBuilds?: InstalledBuild[] } = read("../market/official-releases.json");
 const cards: Card[] = read("../market/catalog.json").official;
 const hostVersion: string = read("../package.json").version;
-const compare = (left: string, right: string) => {
-  const a = left.split(".").map(Number), b = right.split(".").map(Number);
-  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-};
-/** The release registry pins the host and dependency versions exercised together. */
-const matches = (version: string, verifiedVersion: string) => version === verifiedVersion;
+type Requirement = { version: string; minimum: boolean };
+const satisfies = (version: string, required: Requirement) => version === required.version ||
+  (required.minimum && stableVersion.test(required.version) && compare(version, required.version) > 0);
+
+const parentOf = (pathId: string) => pathId.split("/").slice(0, -1).join("/");
+
+function dependencyOrder(root: Item, items: Map<string, Item>, updating: boolean) {
+  const ordered = new Map<Item, Map<string, Item>>(), visiting = new Set<Item>();
+  const byPath = new Map([...items.values()].map(item => [item.pathId, item]));
+  function visit(part: Item) {
+    if (ordered.has(part)) return;
+    if (visiting.has(part)) throw Error("发行清单包含循环依赖。");
+    visiting.add(part);
+    // Installed releases can predate changes to the current catalog's required plugins.
+    const ids = part.existing && !(updating && part === root)
+      ? Object.keys(part.existing.dependencies) : part.entry.requiredPlugins;
+    const dependencies = new Map<string, Item>();
+    for (const id of ids) {
+      const dependency = items.get(id) ?? byPath.get(id);
+      if (!dependency) throw Error("发行清单缺少依赖版本：" + id);
+      dependencies.set(id, dependency);
+      visit(dependency);
+    }
+    visiting.delete(part);
+    ordered.set(part, dependencies);
+  }
+  visit(root);
+  return [...ordered];
+}
 const spec = (item: Item, release: Release) => ({ directory: "plugins/" + item.pathId.split("/").join("/sub/"),
   sha256: release.sha256, recognitionOnly: release.recognitionOnly, preserve: item.entry.preserve });
 function inventorySpec(item: Item, release: Release) {
@@ -70,8 +94,9 @@ export class PluginPackages {
     const record = runtime.records.get(pathId);
     const releases = entry.verifiedReleases.filter(r => (r.platform === process.platform || (entry.community && r.platform === "any")) &&
       (r.arch === process.arch || (entry.community && r.arch === "any")))
-      .sort((a, b) => compare(b.version, a.version));
-    const eligible = releases.filter(r => !r.recognitionOnly && matches(hostVersion, r.hostRange));
+      .sort((a, b) => compare(b.version, a.version) || compare(
+        compatibleHostFloor(b.hostRange, hostVersion) ?? "", compatibleHostFloor(a.hostRange, hostVersion) ?? ""));
+    const eligible = releases.filter(r => !r.recognitionOnly && compatibleHostFloor(r.hostRange, hostVersion));
     const target = eligible[0];
     const item: Item = { entry, pathId, eligible, target, installedVersion: record?.manifest.version, installed: !!record,
       enabled: runtime.pluginState.enabled(pathId), active: record?.status === "active", reason: "" };
@@ -82,7 +107,9 @@ export class PluginPackages {
       // A receipt restores offline ownership only, never a target or URL for installing into an empty directory.
       // The cached archive and every installed program file must still match its pinned digest below.
       item.entry = {...entry, preserve:[...new Set([...(entry.preserve ?? []), ...official.preserve])]};
-      candidates.push({version:official.version, hostRange:hostVersion, platform:official.platform, arch:official.arch,
+      const reviewed = candidates.find(r => r.sha256 === official.sha256);
+      candidates.push({version:official.version, hostRange:reviewed?.hostRange ?? official.hostRange ?? "",
+        platform:official.platform, arch:official.arch,
         sha256:official.sha256, dependencies:official.dependencyVersions ?? {}, bundledPluginIds:official.bundledPluginIds});
     }
     const receipt = entry.community && this.communityReceipts.get(pathId);
@@ -94,12 +121,13 @@ export class PluginPackages {
       return item;
     }
     if (updating && record) {
-      const historical = {version: record.manifest.version, platform: process.platform, arch: process.arch, hostRange: hostVersion, dependencies: {}};
+      const historical = {version: record.manifest.version, platform: process.platform, arch: process.arch, hostRange: "", dependencies: {}};
       if (receipt && receipt.version === item.installedVersion) {
         // A review may retain only the newest version. A receipt pins the package that actually ran here.
         const approved = candidates.filter(r => r.sha256 === receipt.sha256);
         candidates.splice(0, candidates.length, ...approved);
-        if (!approved.length) candidates.push({...historical, sha256: receipt.sha256});
+        if (!approved.length) candidates.push({...historical, sha256: receipt.sha256,
+          hostRange:receipt.hostRange ?? "", dependencies:receipt.dependencyVersions ?? {}});
       }
       for (const build of this.installedBuilds) {
         if (build.runtimeId === pathId && build.platform === process.platform && build.arch === process.arch &&
@@ -108,7 +136,7 @@ export class PluginPackages {
     }
     if (!candidates.length) {
       item.reason = record ? "当前安装版本未匹配已验证的发行包，无法确认程序文件归属。"
-        : releases.length ? "当前 WhaleLife 没有兼容版本，请先升级 WhaleLife。" : "此平台还没有验证过的发行包。";
+        : releases.length ? "此插件没有适用于当前 WhaleLife 版本的发行包。" : "此平台还没有验证过的发行包。";
       return item;
     }
     if (entry.community && !record) {
@@ -195,33 +223,38 @@ export class PluginPackages {
       else if (used.length) reason = "请先卸载依赖它的插件：" + used.join("、") + "。";
       if (!reason) add(item, "uninstall", item.existing);
     } else if (!reason && selected) {
-      const walking = new Set<string>();
-      const visit = (part: Item, requirement?: string) => {
-        if (walking.has(part.entry.id)) throw Error("发行清单包含循环依赖。");
-        const replacing = update && part === item;
-        const release = replacing ? selected : part.installed ? part.existing : requirement ? part.eligible.find(r => r.version === requirement) : part.target;
-        if (requirement && part.installedVersion && !matches(part.installedVersion, requirement)) {
-          upgradeUrl = this.cards.find(c => c.id === part.entry.id)?.installation ?? part.entry.repository;
-          const instruction = compare(part.installedVersion, requirement) < 0 ? "请先升级" + part.entry.name + "至已验证的 " + requirement + " 版本"
-            : part.entry.name + "与本插件的已验证组合要求 " + requirement;
-          throw Error(instruction + "（当前 " + part.installedVersion + "）。");
+      try {
+        const requirements = new Map<Item, Requirement[]>();
+        // Gather all consumers' constraints before choosing a shared dependency's release.
+        for (const [part, dependencies] of dependencyOrder(item, items, update).reverse()) {
+          const replacing = update && part === item;
+          const required = requirements.get(part) ?? [];
+          const installed = part.installedVersion;
+          const mismatch = installed && required.find(r => !satisfies(installed, r));
+          if (mismatch) {
+            upgradeUrl = this.cards.find(c => c.id === part.entry.id)?.installation ?? part.entry.repository;
+            const instruction = compare(installed, mismatch.version) < 0 ? "请先升级" + part.entry.name + "至 " + mismatch.version + (mismatch.minimum ? " 或更高版本" : " 版本")
+              : part.entry.name + "与本插件的已验证组合要求 " + mismatch.version;
+            throw Error(instruction + "（当前 " + installed + "）。");
+          }
+          const release = replacing ? selected : part.installed ? part.existing
+            : part.eligible.find(r => required.every(rule => satisfies(r.version, rule)));
+          if (part.reason || !release) throw Error(part.entry.name + "：" + (part.reason || "没有同时符合依赖要求的已验证发行包。"));
+          if (part.installed && !compatibleHostFloor(release.hostRange, hostVersion))
+            throw Error(part.entry.name + "的已安装版本尚未验证适用于当前 WhaleLife。");
+          if (!replacing && part.installed && part.enabled && !part.active)
+            throw Error("请先在插件管理中恢复" + part.entry.name + "，再重试。");
+          add(part, replacing ? "update" : !part.installed ? "install" : part.enabled ? "reuse" : "enable", release);
+          for (const [id, dependency] of dependencies) {
+            const version = release.dependencies[id];
+            if (!version) throw Error("发行清单缺少依赖版本：" + id);
+            const rules = requirements.get(dependency) ?? [];
+            rules.push({ version, minimum: !part.entry.community && parentOf(part.pathId) === dependency.pathId });
+            requirements.set(dependency, rules);
+          }
         }
-        if (part.reason || !release) throw Error(part.entry.name + "：" + (part.reason || "没有兼容的发行包。"));
-        if (requirement && !matches(release.version, requirement)) throw Error(part.entry.name + "没有符合依赖要求的已验证版本。");
-        const previous = steps.find(step => step.id === part.entry.id);
-        if (previous && previous.version !== release.version) throw Error(part.entry.name + "存在互不兼容的依赖版本要求。");
-        if (previous) return;
-        walking.add(part.entry.id);
-        for (const id of part.installed && !replacing ? Object.keys(release.dependencies) : part.entry.requiredPlugins) {
-          const dependency = items.get(id) ?? [...items.values()].find(p => p.pathId === id);
-          if (!dependency || !release.dependencies[id]) throw Error("发行清单缺少依赖版本：" + id);
-          visit(dependency, release.dependencies[id]);
-        }
-        walking.delete(part.entry.id);
-        if (part.installed && part.enabled && !part.active && !replacing) throw Error("请先在插件管理中恢复" + part.entry.name + "，再重试。");
-        add(part, replacing ? "update" : !part.installed ? "install" : part.enabled ? "reuse" : "enable", release);
-      };
-      try { visit(item); } catch (error) { reason = errorText(error); steps.length = 0; }
+        steps.reverse();
+      } catch (error) { reason = errorText(error); steps.length = 0; }
     }
     const action = reason || !steps.length ? null : update ? "update" : item.installed ? "uninstall" : "install";
     const components = steps.flatMap(step => {
@@ -256,7 +289,10 @@ export class PluginPackages {
         (r.arch === process.arch || r.arch === "any")) ?? [];
       const recorded = receipt?.dependencyVersions?.[item.pathId];
       const pins = recorded ? new Set([recorded]) : new Set(releases.map(r => r.dependencies[item.entry.id] ?? r.dependencies[item.pathId]));
-      if (pins.size !== 1 || !pins.has(target.version)) {
+      const official = receipt ? receipt === this.officialReceipts.get(record.id) : dependent && !dependent.entry.community;
+      const minimum = !!official && parentOf(record.id) === item.pathId;
+      const [version] = pins;
+      if (pins.size !== 1 || !version || !satisfies(target.version, {version, minimum})) {
         const name = receipt?.name ?? dependent?.entry.name ?? record.id;
         return name + "依赖当前插件，尚未验证它能配合 v" + target.version + " 使用。";
       }
@@ -317,7 +353,11 @@ export class PluginPackages {
         // This plan stays local to the query and never authorizes replacing the installed files.
         const replacement = { ...current, installed: false, installedVersion: undefined, existing: undefined, reason: "" };
         const preview = new Map(items).set(id, replacement);
+        const checked = new Set<string>();
         for (const target of current.eligible) {
+          // Confirmation selects the first eligible build of the requested version.
+          if (checked.has(target.version)) continue;
+          checked.add(target.version);
           replacement.eligible = [target];
           replacement.target = target;
           if (!this.reverseConstraint(current, target, items) && this.plan(replacement, preview).action === "install") {
@@ -547,7 +587,7 @@ export class PluginPackages {
             const p = items.get(step.id)!, release = releaseFor(p, step.version);
             const dependencyVersions = Object.fromEntries(Object.entries(release.dependencies)
               .map(([id, version]) => [items.get(id)?.pathId ?? id, version]));
-            const receipt = {id:p.pathId, name:p.entry.name, version:step.version, sha256:release.sha256,
+            const receipt = {id:p.pathId, name:p.entry.name, version:step.version, sha256:release.sha256, hostRange:release.hostRange,
               dependencies:Object.keys(dependencyVersions), dependencyVersions, ...(transactionId ? {transactionId} : {})};
             if (p.entry.community) community.push(receipt);
             else official.push({...receipt, repository:p.entry.repository, platform:process.platform, arch:process.arch,

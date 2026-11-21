@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { reviewedCommunityEntries } from "../../core/community-reviews.ts";
+import { parseHostRange } from "../../core/package-host-range.ts";
 import { inspectCommunityIcon } from "./review-community-icon.mjs";
 
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -83,6 +84,7 @@ for (const [index, plugin] of manifest.plugins.entries()) {
       assert.ok(typeof release[key] === "string" && release[key].trim(), plugin.id + ": missing " + key);
     }
     assert.match(release.sourceCommit, /^[a-f0-9]{40}$/);
+    assert.ok(parseHostRange(release.hostRange), plugin.id + ": invalid hostRange");
     assert.match(release.sha256, /^[a-f0-9]{64}$/);
     assert.ok(!hashes.has(release.sha256), "Duplicate official asset");
     hashes.add(release.sha256);
@@ -129,6 +131,8 @@ for (const [index, plugin] of manifest.plugins.entries()) {
     assert.ok(release.dependencies && typeof release.dependencies === "object" && !Array.isArray(release.dependencies));
     for (const [dep, range] of Object.entries(release.dependencies)) {
       assert.ok(ids.includes(dep) && dep !== plugin.id && typeof range === "string" && range.trim());
+      if (dep === plugin.parentId)
+        assert.match(range, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, plugin.id + ": expected a minimum stable parent version");
     }
     assert.deepEqual(Object.keys(release.dependencies).sort(), [...plugin.requiredPlugins].sort());
   }

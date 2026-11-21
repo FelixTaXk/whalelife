@@ -8,9 +8,19 @@ import { CommunityPackages, type ReviewedCommunityEntry, type ReviewedCommunityR
 import { Runtime } from "../core/runtime.ts";
 import { startWeb } from "../core/web.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
+import { compatibleHostFloor } from "../core/package-host-range.ts";
 
 const hash = (data: Buffer) => createHash("sha256").update(data).digest("hex");
 const program = "export function apply(){}";
+test("reviewed host ranges accept newer stable hosts and enforce numeric lower and upper bounds", () => {
+  for (const host of ["0.1.0", "0.1.1", "0.1.10", "1.0.0"]) assert.equal(compatibleHostFloor("0.1.0", host), "0.1.0");
+  assert.equal(compatibleHostFloor("0.1.10", "0.1.2"), undefined);
+  assert.equal(compatibleHostFloor(">=0.1.0 <=0.1.10", "0.1.10"), "0.1.0");
+  assert.equal(compatibleHostFloor(">=0.1.0 <0.1.10", "0.1.10"), undefined);
+  assert.equal(compatibleHostFloor("=0.1.0", "0.1.1"), undefined);
+  assert.equal(compatibleHostFloor("=0.1.0", "0.1.0"), "0.1.0");
+  assert.equal(compatibleHostFloor("0.1.0", "0.1.1-preview"), undefined);
+});
 async function fixture(t: TestContext) {
   const root = await temporaryDirectory("whale-community-install-");
   const runtime = new Runtime(root, {info() {}, error() {}, warn() {}} as any);
@@ -157,6 +167,9 @@ test("pin a dependency's reviewed version; reuse or explicitly enable it and res
   const oldOnly = f.manager([{...base.entry,verifiedReleases:[base.release]},child.entry]);
   await oldOnly.apply(await row(oldOnly,"test-provider"));
   assert.equal((await row(manager,child.entry.id)).steps[0].action,"reuse");
+  const future = f.manager([{...base.entry, verifiedReleases:[{...base.release, hostRange:"9.0.0"}]}, child.entry]);
+  assert.equal((await row(future, child.entry.id)).action, "blocked");
+  assert.equal((await row(future, base.entry.id)).action, "installed");
   await f.runtime.action("test-provider","stop");
   const stopped = await row(manager,child.entry.id);
   assert.equal(stopped.steps[0].action,"enable");

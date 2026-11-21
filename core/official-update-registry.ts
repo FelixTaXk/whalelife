@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { PackageEntry, PackageRelease } from "./official-plugins.ts";
+import { parseHostRange } from "./package-host-range.ts";
 import { validPluginId } from "./plugin-state.ts";
 
 const market = "https://raw.githubusercontent.com/iinukami/whalelife/main/market/";
@@ -72,7 +73,8 @@ export function officialUpdateEntries(registry: any, known = local.plugins): Pac
       if (!r || r.recognitionOnly || r.delivery !== "github-release") continue;
       const asset = r.composition?.packagePart ?? { ...r, repository: entry.repository };
       const prefix = entry.repository + "/releases/download/v" + r.version + "/";
-      if (!stableVersion(r.version) || !stableVersion(r.hostRange) || !digest.test(r.inventorySha256) ||
+      const hostRange = parseHostRange(r.hostRange);
+      if (!stableVersion(r.version) || !hostRange || !digest.test(r.inventorySha256) ||
           !validAsset(asset, entry.repository) || !asset.assetUrl.startsWith(prefix) ||
           !/^[\w.+-]+\.wlpkg\.gz$/.test(asset.assetUrl.slice(prefix.length)) ||
           !digest.test(r.sha256) || !Number.isSafeInteger(r.sizeBytes) || r.sizeBytes < 1 || r.sizeBytes > 2 * 1024 ** 3 ||
@@ -89,7 +91,7 @@ export function officialUpdateEntries(registry: any, known = local.plugins): Pac
             !Array.isArray(zip.files) || !zip.files.length || !zip.files.every((f: any) => typeof f?.path === "string" && typeof f.member === "string"))
           throw Error("官方组件审核资料无效：" + entry.id);
       }
-      const key = JSON.stringify([r.version,r.hostRange,r.platform,r.arch]);
+      const key = JSON.stringify([r.version,hostRange.minimum,r.platform,r.arch]);
       if (targets.has(key)) throw Error("官方发行包的版本与平台重复：" + entry.id);
       targets.add(key);
       releases.push(r);

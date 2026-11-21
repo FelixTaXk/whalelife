@@ -10,6 +10,8 @@ import { promisify } from "node:util";
 import { inspectOfficialFiles, installOfficialFiles, recoverPendingPluginReplacements,
   replaceOfficialFiles, rollbackInterruptedInstall } from "../core/official-package-files.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
+import { boot, prepareHostTrial } from "../core/index.ts";
+import { beginUpdateDependencies } from "../core/package-update-journal.ts";
 
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 async function put(base: string, path: string, data: string | Buffer) {
@@ -27,8 +29,9 @@ async function archive(root: string, files: Record<string, string>) {
 }
 async function fixture(extra: Record<string,string> = {}) {
   const root = await temporaryDirectory("whale-upgrade-files-");
-  const old = await archive(root, {"plugin.yaml":"version: 1.0.0", "old/entry.ts":"original"});
-  const next = await archive(root, {"plugin.yaml":"version: 1.1.0", "new/entry.ts":"replacement", ...extra});
+  const manifest = "id: demo\nname: Demo\ndescription: Package upgrade fixture\nversion: ";
+  const old = await archive(root, {"plugin.yaml":manifest + "1.0.0", "old/entry.ts":"original"});
+  const next = await archive(root, {"plugin.yaml":manifest + "1.1.0", "new/entry.ts":"replacement", ...extra});
   await installOfficialFiles(root, old.spec);
   return { root, base:join(root, old.spec.directory), cache:join(root, ".artifacts/official-packages"), old, next };
 }
@@ -170,8 +173,8 @@ test("上次进程在换名间中断时保留备份，阻止把空缺位置作�
 });
 
 const transactionId = "63438f75-f3e3-44a1-87db-875ad41e2df5";
-async function interruptFixture() {
-  const fixtureState = await fixture();
+async function interruptFixture(prepared?: Awaited<ReturnType<typeof fixture>>) {
+  const fixtureState = prepared ?? await fixture();
   const {root, old, next, base, cache} = fixtureState;
   await put(base, "data/config.json", "before migration");
   await put(base, "sub/other/data/events", "original events");
@@ -185,6 +188,39 @@ async function interruptFixture() {
     new URL("../core/official-package-files.ts", import.meta.url).href, root, JSON.stringify(old.spec), JSON.stringify(next.spec), transactionId]);
   return {...fixtureState, stage:join(cache, "updating-plugins.demo")};
 }
+
+test("宿主升级预检保留中断的插件更新和依赖记录，正式启动后恢复一次", async () => {
+  const prepared = await fixture();
+  const {root, base, cache, next} = prepared;
+  await put(root, "config/config.json", JSON.stringify({
+    log: {level:"error"}, web: {host:"127.0.0.1", port:0}, providers:[], models:[],
+    model_bindings:{}, personas:{}, channels:{}, memory:{root:"memory", budget_tokens:6000},
+  }));
+  await put(root, "plugins/helper/plugin.yaml", "id: helper\nname: Helper\ndescription: Recovery dependency\nversion: 1.0.0");
+  await put(root, "config/plugins.json", JSON.stringify({version:1, disabled:["demo", "helper"]}));
+  const transaction = await beginUpdateDependencies(root, transactionId, "demo", next.spec.sha256, [{
+    id:"helper", action:"enable", enabled:false, mayRemove:false,
+    files:{directory:"plugins/helper", sha256:next.spec.sha256}, dependencies:[], bundled:[],
+  }]);
+  await transaction!.start("helper");
+  await put(root, "config/plugins.json", JSON.stringify({version:1, disabled:["demo"]}));
+  await interruptFixture(prepared);
+  const journal = join(cache, "update-dependencies-" + transactionId + ".json");
+  const before = await readFile(journal);
+  const trial = await prepareHostTrial(root);
+  try {
+    assert.deepEqual(await readFile(journal), before);
+    assert.equal(await readFile(join(base,"new/entry.ts"), "utf8"), "replacement");
+    assert.deepEqual(JSON.parse(await readFile(join(root,"config/plugins.json"),"utf8")).disabled, ["demo"]);
+  } finally { await trial.close(); }
+  const active = await boot(root);
+  try {
+    assert.equal(await readFile(join(base,"old/entry.ts"), "utf8"), "original");
+    assert.equal(active.runtime.pluginState.enabled("helper"), false);
+    await assert.rejects(readFile(journal), {code:"ENOENT"});
+    assert.deepEqual(await recoverPendingPluginReplacements(root), []);
+  } finally { await active.close(); }
+});
 
 test("重启恢复已切换但未提交的程序和资料，同时保留独立子插件的新写入", async () => {
   const {root, base, old, cache} = await interruptFixture();

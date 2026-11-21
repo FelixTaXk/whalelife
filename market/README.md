@@ -10,7 +10,7 @@
 
 | 插件 | 收录版本 | 作者 | 用途 | 必需插件 | 相关链接 |
 | --- | --- | --- | --- | --- | --- |
-| QQ | v0.22.0 | iinukami 和贡献者 | 在 QQ 私聊里延续 WhaleLife 的对话，和白名单好友收发消息。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-qq/blob/main/README.md#%E6%96%B0%E5%AE%89%E8%A3%85%E4%B8%8E-napcat-%E7%A6%BB%E7%BA%BF%E7%BB%84%E4%BB%B6>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-qq>) · [反馈](<https://github.com/iinukami/whalelife-plugin-qq/issues>) |
+| QQ | v0.23.0 | iinukami 和贡献者 | 在 QQ 私聊里延续 WhaleLife 的对话，和白名单好友收发消息。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-qq/blob/main/README.md#%E6%96%B0%E5%AE%89%E8%A3%85%E4%B8%8E-napcat-%E7%A6%BB%E7%BA%BF%E7%BB%84%E4%BB%B6>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-qq>) · [反馈](<https://github.com/iinukami/whalelife-plugin-qq/issues>) |
 | QQ 空间 | v0.5.2 | iinukami 和贡献者 | 浏览好友的空间动态，发表说说，并按白名单设置点赞、评论。 | QQ | [安装说明](<https://github.com/iinukami/whalelife-plugin-qzone/blob/main/README.md#%E6%9C%8D%E5%8A%A1%E8%BE%B9%E7%95%8C>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-qzone>) · [反馈](<https://github.com/iinukami/whalelife-plugin-qzone/issues>) |
 | 自主性 | v0.6.3 | iinukami 和贡献者 | 让伙伴记下未完成的念头和约定，在你允许的时段主动接续对话。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-autonomy/blob/main/README.md#%E5%BC%80%E5%8F%91%E4%B8%8E%E6%9E%84%E5%BB%BA>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-autonomy>) · [反馈](<https://github.com/iinukami/whalelife-plugin-autonomy/issues>) |
 | 图库 | v0.1.2 | iinukami 和贡献者 | 在本地收藏图片和表情，编辑描述与标签，按含义找回需要的那张图。 | — | [安装说明](<https://github.com/iinukami/whalelife-plugin-gallery/blob/main/README.md#%E5%BC%80%E5%8F%91%E4%B8%8E%E6%9E%84%E5%BB%BA>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-plugin-gallery>) · [反馈](<https://github.com/iinukami/whalelife-plugin-gallery/issues>) |
@@ -26,10 +26,11 @@
 | 表情包工坊 | v0.2.1 | FelixTaXk | 需要先在本机安装 Python 和 Pillow。给图片加字幕、气泡或描边，成品可收藏到官方图库。商店会一并安装缺少的图库插件。 | 图库 | [安装说明](<https://github.com/FelixTaXk/whalelife-community-meme/blob/main/README.md#%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-meme>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-meme/issues>) |
 | 日程 | v0.4.0 | FelixTaXk | 按作息生成每日日程，可查看、编辑并保存。公开版 WhaleLife 支持这些功能。若要在每轮聊天中自动加入当前和下一项日程，需要作者提供的宿主补丁。 | — | [安装说明](<https://github.com/FelixTaXk/whalelife-community-schedule/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-schedule>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-schedule/issues>) |
 | 画室 | v0.2.2 | FelixTaXk | 用本地 ComfyUI、SD-WebUI 或兼容接口生成图片，附带视频和提示词小抄。看图与绘制蒙版需 Python 和 Pillow。 | — | [安装说明](<https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-studio>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-studio/issues>) |
+| 思维空间 | v0.1.0 | SSSSmallSlimeSmile | 把多个插件的工具组合成可重复运行的技能，在技能库或画布中编辑和试跑。 | — | [安装说明](<https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space/blob/819abcf10c8614e5c2886241c3b4a8321cc3285b/README.md#%E4%BA%8C%E6%80%8E%E4%B9%88%E8%A3%85>) · [原仓库 · 加星](<https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space>) · [反馈](<https://github.com/SSSSmallSlimeSmile/WhaleLife-thinking-space/issues>) |
 | 语音模块 | v0.9.4 | FelixTaXk | 管理音色库，合成语音并转换歌声。一键安装包含说话和唱歌两个子插件。使用本机语音引擎时，还需在插件设置中单独部署。 | — | [安装说明](<https://github.com/FelixTaXk/whalelife-community-voice/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-voice>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-voice/issues>) |
 | 颜色便签 | v0.1.0 | iinukami | 社区投稿测试插件。保存一条带颜色的本地便签，重启后可继续查看。 | — | [安装说明](<https://github.com/iinukami/whalelife-community-color-note/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-community-color-note>) · [反馈](<https://github.com/iinukami/whalelife-community-color-note/issues>) |
 
-社区插件由原作者维护。首次[提交收录申请](https://github.com/iinukami/whalelife/issues/new?template=submit-plugin.yml)时附上公开仓库链接和一句话介绍，收录后可关闭 Issue。后续在原仓库升版并发布正式 GitHub Release，维护者会收到发版通知。每个发行包单独审核，用户手动检查时只提示适合本机的已审核新版。仅提供安装说明的条目仍可浏览。[社区插件打包与审核说明](community-packages.md)
+社区插件由原作者维护。首次[提交收录申请](https://github.com/iinukami/whalelife/issues/new?template=submit-plugin.yml)时附上公开仓库链接和一句话介绍，收录后可关闭 Issue。作者后续在原仓库发布正式 GitHub Release，维护者订阅发版通知并逐个审核附件。用户手动检查插件更新时，只提示适合本机的已审核新版。仅提供安装说明的条目仍可浏览。[社区插件打包与审核说明](community-packages.md)
 
 <details>
 <summary>维护目录</summary>
@@ -42,9 +43,9 @@
 
 | 字段 | 说明 |
 | --- | --- |
-| `version`、`hostRange` | 插件 SemVer 版本与已验证的 WhaleLife 主程序兼容范围。只验证一个主程序版本时填写该版本。 |
+| `version`、`hostRange` | 插件版本与适用的 WhaleLife 正式版本。单写 `0.1.0` 表示最低实测宿主。可用 `>=0.1.0 <0.2.0` 或 `<=` 上界限制范围，用 `=0.1.0` 指定单一版本。 |
 | `platform`、`arch` | 适用系统和架构，使用 Node.js 的标识。 |
-| `dependencies` | 该发行版本依赖的插件标识到兼容范围的映射。 |
+| `dependencies` | 按依赖插件 ID 登记版本。官方子插件对父插件登记最低兼容版本，其他依赖登记实测的精确版本。 |
 | `sourceCommit`、`sha256` | 公开源码提交和对应安装包的 SHA-256。已有发布资产可另附 `assetUrl`。 |
 | `delivery`、`recognitionOnly` | 本机构建见 `local-build`；`recognitionOnly` 条目以历史程序清单的 SHA-256 识别手装版本。 |
 | `fileCount`、`sizeBytes` | 发行文件数与安装包或历史清单的字节数。 |

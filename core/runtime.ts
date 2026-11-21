@@ -4,7 +4,7 @@
  */
 import { Context as Cordis } from "@cordisjs/core";
 import { readFileSync } from "node:fs";
-import { readdir, readFile, mkdir } from "node:fs/promises";
+import { readdir, readFile, mkdir, stat } from "node:fs/promises";
 import { join, basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse } from "yaml";
@@ -102,6 +102,35 @@ export class Runtime {
     const entries = await readdir(dir);
     return entries.includes("plugin.yaml") || entries.includes("index.ts");
   }
+  // Inspect only the files of previously active plugins. Importing even a module's
+  // top level could perform an irreversible external action during a reversible trial.
+  async checkInstalledPlugins(ids: string[]) {
+    await this.pluginState.load();
+    for (const id of ids) {
+      try {
+        if (!validPluginId(id) || !this.pluginState.enabled(id)) throw Error("无效或已停用");
+        const dir = join(this.root, "plugins", id.split("/").join("/sub/"));
+        this.validateManifest(parse(await readFile(join(dir, "plugin.yaml"), "utf8")), dir, id);
+        if (!(await stat(join(dir, "index.ts"))).isFile()) throw Error("缺少插件入口文件");
+      } catch (error: any) { throw Error(`插件 ${id} 预检失败：${error.message}`); }
+    }
+  }
+  private validateManifest(manifest: any, dir: string, id: string) {
+    for (const key of ["id", "name", "description", "version"])
+      if (typeof manifest?.[key] !== "string") throw Error("manifest 缺少 " + key);
+    if (manifest.id !== basename(dir)) throw Error("manifest ID 必须匹配目录");
+    manifest.builtin = false;
+    for (const [target, reason] of this.packageRecoveryBlocks)
+      if (target === id || id.startsWith(target + "/")) throw Error(reason);
+    assertPluginCompatibility(manifest);
+    if (manifest.console?.groupChildren !== undefined && typeof manifest.console.groupChildren !== "boolean")
+      throw Error("console.groupChildren 必须是布尔值");
+    if (manifest.depends !== undefined && (!Array.isArray(manifest.depends) || manifest.depends.some((name: any) => typeof name !== "string")))
+      throw Error("插件依赖必须是服务名称数组");
+    if (manifest.optionalDepends !== undefined && (!Array.isArray(manifest.optionalDepends) || manifest.optionalDepends.some((name: any) =>
+      typeof name !== "string" || !name.trim() || name.length > 200 || manifest.depends?.includes(name))))
+      throw Error("optionalDepends 必须是非空服务名称数组，不能重复声明必需依赖");
+  }
   async managePackages<T>(task: () => Promise<T>) {
     this.packageSignal.throwIfAborted();
     return this.serial(async () => {
@@ -167,22 +196,7 @@ export class Runtime {
     try {
       await this.pluginState.load();
       manifest = parse(await readFile(join(dir, "plugin.yaml"), "utf8"));
-      for (const key of ["id", "name", "description", "version"])
-        if (typeof manifest[key] !== "string")
-          throw Error("manifest 缺少 " + key);
-      if (manifest.id !== basename(dir))
-        throw Error("manifest ID 必须匹配目录");
-      manifest.builtin = false;
-      for (const [target, reason] of this.packageRecoveryBlocks)
-        if (target === id || id.startsWith(target + "/")) throw Error(reason);
-      assertPluginCompatibility(manifest);
-      if (manifest.console?.groupChildren !== undefined && typeof manifest.console.groupChildren !== "boolean")
-        throw Error("console.groupChildren 必须是布尔值");
-      if (manifest.depends !== undefined && (!Array.isArray(manifest.depends) || manifest.depends.some((name: any) => typeof name !== "string")))
-        throw Error("插件依赖必须是服务名称数组");
-      if (manifest.optionalDepends !== undefined && (!Array.isArray(manifest.optionalDepends) || manifest.optionalDepends.some((name: any) =>
-        typeof name !== "string" || !name.trim() || name.length > 200 || manifest.depends?.includes(name))))
-        throw Error("optionalDepends 必须是非空服务名称数组，不能重复声明必需依赖");
+      this.validateManifest(manifest, dir, id);
       const enabled = this.pluginState.enabled(id);
       const missing = (manifest.depends ?? []).filter((name: string) => this.lookup({ parent }, name) === undefined);
       const blocked = parts.length > 1 && !["active", "loading"].includes(parent?.status)

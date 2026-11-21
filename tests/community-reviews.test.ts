@@ -11,15 +11,20 @@ test("收录与逐包审核独立；发行记录只能引用原仓库、已审�
   const parse = (entry: object) => reviewedCommunityEntries({official:[], community:[entry]});
   assert.deepEqual(parse(item), []);
   assert.equal(parse({...item,verifiedReleases:[release]})[0].verifiedReleases![0].sha256, release.sha256);
+  for (const hostRange of ["=0.1.0", ">=0.1.0", ">=0.1.0 <0.2.0", ">=0.1.0 <=0.1.1"]) {
+    assert.equal(parse({...item, verifiedReleases:[{...release, hostRange}]})[0].verifiedReleases![0].hostRange, hostRange);
+  }
   for (const invalid of [
     {...release, assetUrl:release.assetUrl.replace("example", "someone-else")},
     {...release, assetUrl:release.assetUrl.replace("v1.2.0/", "latest/")},
     {...release, sha256:""}, {...release, platform:"all"}, {...release, sizeBytes:-1},
+    {...release, hostRange:"0.1"}, {...release, hostRange:">=0.1.1 <0.1.1"}, {...release, hostRange:">=0.2.0 <=0.1.0"},
     {...release, dependencies: {surf:"0.1.1"}}, {...release, bundledPluginIds:["gallery"]},
   ]) assert.throws(() => parse({...item, verifiedReleases:[invalid]}), /审核记录无效/);
   assert.throws(() => parse({...item, id:"surf/bilibili", verifiedReleases:[release]}), /重名/);
   assert.throws(() => parse({...item, id:"surf/sample", verifiedReleases:[release]}), /父插件/);
   assert.throws(() => parse({...item, verifiedReleases:[release, {...release,platform:"win32"}]}), /匹配重复/);
+  assert.throws(() => parse({...item, verifiedReleases:[release, {...release,hostRange:">=0.1.0"}]}), /匹配重复/);
 });
 
 test("同一子插件不能同时由独立条目与另一发行包管理", () => {
