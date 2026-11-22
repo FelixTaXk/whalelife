@@ -109,7 +109,7 @@
     },
     {
       "id": "schedule",
-      "version": "0.4.0",
+      "version": "0.6.0",
       "name": "日程",
       "author": "FelixTaXk",
       "description": "按作息生成每日日程，可查看、编辑并保存。公开版 WhaleLife 支持这些功能。若要在每轮聊天中自动加入当前和下一项日程，需要作者提供的宿主补丁。",
@@ -120,6 +120,19 @@
       "collected": "2026-11-21",
       "stars": 0,
       "verifiedReleases": [
+        {
+          "version": "0.6.0",
+          "hostRange": "0.1.1",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-schedule/releases/download/v0.6.0/schedule-0.6.0.wlpkg.gz",
+          "sizeBytes": 93322,
+          "sha256": "ab817409e21be8d88a1f4271dd0e2cac5ce01bd9ebc3353b91bfd834779a082b",
+          "dependencies": {},
+          "bundledPluginIds": [
+            "schedule/weather"
+          ]
+        },
         {
           "version": "0.4.0",
           "hostRange": "0.1.0",
@@ -186,7 +199,7 @@
     },
     {
       "id": "studio",
-      "version": "0.2.6",
+      "version": "0.2.15",
       "name": "画室",
       "author": "FelixTaXk",
       "description": "用本地 ComfyUI、SD-WebUI 或兼容接口生成图片，附带视频和提示词小抄。看图与绘制蒙版需 Python 和 Pillow。",
@@ -197,6 +210,21 @@
       "collected": "2026-11-21",
       "stars": 0,
       "verifiedReleases": [
+        {
+          "version": "0.2.15",
+          "hostRange": "=0.1.1",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-studio/releases/download/v0.2.15/studio-0.2.15-win32-x64.wlpkg.gz",
+          "sizeBytes": 155912,
+          "sha256": "aa8236ec1a3ad6178e1c9f01dbd2ce5f13dfd81ccffab20b62252e840f5cf81d",
+          "dependencies": {},
+          "bundledPluginIds": [
+            "studio/image",
+            "studio/promptkit",
+            "studio/video"
+          ]
+        },
         {
           "version": "0.2.6",
           "hostRange": "0.1.0",
@@ -258,12 +286,12 @@
     },
     {
       "id": "surf/douyin",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "name": "抖音",
       "author": "FelixTaXk",
       "description": "在「网上冲浪」里浏览抖音推荐、搜索视频、观看片段、阅读评论并参与互动。",
       "repository": "https://github.com/FelixTaXk/whalelife-community-douyin",
-      "installation": "https://github.com/FelixTaXk/whalelife-community-douyin/blob/26b0d7c37521c687c6bb57f51591c32ba650cb96/README.md#装在哪",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-douyin/blob/cd02451d8d61b84b02054a3670673b26dfab7100/README.md#装在哪",
       "feedback": "https://github.com/FelixTaXk/whalelife-community-douyin/issues",
       "dependencies": [
         "surf"
@@ -271,6 +299,18 @@
       "collected": "2026-11-22",
       "stars": 0,
       "verifiedReleases": [
+        {
+          "version": "0.1.6",
+          "hostRange": "=0.1.1",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {
+            "surf": "0.1.1"
+          },
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-douyin/releases/download/v0.1.6/douyin-0.1.6-win32-x64.wlpkg.gz",
+          "sha256": "b6bdf880b0c37174b563957cff4def18b939291a0a2d18a90e758ea4a0f90848",
+          "sizeBytes": 74042
+        },
         {
           "version": "0.1.5",
           "hostRange": "0.1.1",
@@ -282,6 +322,35 @@
           "dependencies": {
             "surf": "0.1.1"
           }
+        }
+      ]
+    },
+    {
+      "id": "qq/group",
+      "version": "0.6.10",
+      "name": "QQ 群聊",
+      "author": "FelixTaXk",
+      "description": "为 QQ 添加群聊，可按群设置回复方式和人格，管理群友标签、引用消息和群语音。安装需要宿主商店能提供官方 QQ v0.24.0。",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-qq-group",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-qq-group/blob/e84f673d2a24ab3e97ef8efabecf8b9c82519995/README.md",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-qq-group/issues",
+      "dependencies": [
+        "qq"
+      ],
+      "collected": "2026-11-22",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.6.10",
+          "hostRange": "=0.1.1",
+          "platform": "win32",
+          "arch": "x64",
+          "dependencies": {
+            "qq": "0.24.0"
+          },
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-qq-group/releases/download/v0.6.10/qq-group-0.6.10-win32-x64.wlpkg.gz",
+          "sha256": "4d298a9a1f637ee4c564e5a93afd4258a0e226af6fb27e85fbe4f396277fae5b",
+          "sizeBytes": 49302
         }
       ]
     }
