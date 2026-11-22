@@ -5,17 +5,24 @@ body:
   - type: markdown
     attributes:
       value: |
-        首次投稿只需填写下面的公开仓库链接和一句话介绍。
+        新投稿请先用 WhaleLife 打包工具生成 `.wlpkg.gz`，上传到插件自己公开仓库中对应版本的正式 GitHub Release。提交下方表单时，请复制该安装包附件的下载链接。
 
-        - **手动安装**　在插件仓库的 README 中写清安装步骤和依赖，即可申请收录「安装说明」。
-        - **一键安装与更新**　用 WhaleLife 打包工具生成 `.wlpkg.gz`（如 `my-plugin-1.2.0.wlpkg.gz`），作为附件上传到自己仓库的正式 GitHub Release。标签与 `plugin.yaml` 版本对应。在发行说明中写明附件字节数、SHA-256、适用的 WhaleLife 版本、系统、架构和必需插件版本。[打包命令与格式说明](https://github.com/iinukami/whalelife/blob/main/market/community-packages.md#作者打包)
+        请在发行说明中列出附件字节数、SHA-256、适用的 WhaleLife 版本、系统、架构和必需插件版本。维护者会下载同一附件，在独立环境试装。[打包命令与格式说明](https://github.com/iinukami/whalelife/blob/main/market/community-packages.md#作者打包)
 
-        收录后可以关闭投稿 Issue。维护者订阅原仓库的 Release，每个新版附件单独审核。
+        已经开帖但尚未提供安装包的投稿会保留待补件状态。请在原 Issue 补充附件链接，审核通过后收录。
   - type: input
     id: repository
     attributes:
       label: 插件的公开 GitHub 仓库
       placeholder: https://github.com/作者/插件仓库
+    validations:
+      required: true
+  - type: input
+    id: package-url
+    attributes:
+      label: 正式发行包下载链接（.wlpkg.gz）
+      description: 在该版本的 Release 页面找到 Assets，复制 .wlpkg.gz 附件的下载链接。源码归档或 Release 页面地址不能用于商店试装。
+      placeholder: https://github.com/作者/插件仓库/releases/download/v1.2.0/my-plugin-1.2.0.wlpkg.gz
     validations:
       required: true
   - type: textarea

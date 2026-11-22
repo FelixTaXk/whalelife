@@ -31,7 +31,7 @@
 | 语音模块 | v0.9.4 | FelixTaXk | 管理音色库，合成语音并转换歌声。一键安装包含说话和唱歌两个子插件。使用本机语音引擎时，还需在插件设置中单独部署。 | — | [安装说明](<https://github.com/FelixTaXk/whalelife-community-voice/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/FelixTaXk/whalelife-community-voice>) · [反馈](<https://github.com/FelixTaXk/whalelife-community-voice/issues>) |
 | 颜色便签 | v0.1.0 | iinukami | 社区投稿测试插件。保存一条带颜色的本地便签，重启后可继续查看。 | — | [安装说明](<https://github.com/iinukami/whalelife-community-color-note/blob/main/README.md#%E6%89%8B%E5%8A%A8%E5%AE%89%E8%A3%85>) · [原仓库 · 加星](<https://github.com/iinukami/whalelife-community-color-note>) · [反馈](<https://github.com/iinukami/whalelife-community-color-note/issues>) |
 
-社区插件由原作者维护。首次[提交收录申请](https://github.com/iinukami/whalelife/issues/new?template=submit-plugin.yml)时附上公开仓库链接和一句话介绍，收录后可关闭 Issue。作者后续在原仓库发布正式 GitHub Release，维护者订阅发版通知并逐个审核附件。用户手动检查插件更新时，只提示适合本机的已审核新版。仅提供安装说明的条目仍可浏览。[社区插件打包与审核说明](community-packages.md)
+社区插件由原作者维护。首次[提交收录申请](https://github.com/iinukami/whalelife/issues/new?template=submit-plugin.yml)需填写公开仓库链接、正式 GitHub Release 的 `.wlpkg.gz` 附件下载链接和一句话介绍。缺包的投稿在原 Issue 待补件，补上并通过审核后收录。用户手动检查插件更新时，只提示适合本机的已审核新版。历史手动安装条目继续提供安装说明。[社区插件打包与审核说明](community-packages.md)
 
 <details>
 <summary>维护目录</summary>

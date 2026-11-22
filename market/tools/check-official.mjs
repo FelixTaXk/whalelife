@@ -22,6 +22,12 @@ for (const entry of catalog.community) {
   assert.equal(entry.icon, "assets/community-icons/" + inspectCommunityIcon(bytes).sha256 + ".png", entry.id + ": icon digest mismatch");
 }
 const reviewedCommunity = reviewedCommunityEntries(catalog);
+const packagedIds = new Set(reviewedCommunity.map(entry => entry.id));
+for (const entry of catalog.community) {
+  // This listing predates the package requirement and only provides manual instructions.
+  if (entry.id === "color-note" && entry.repository === "https://github.com/iinukami/whalelife-community-color-note") continue;
+  assert.ok(packagedIds.has(entry.id), entry.id + ": 新收录社区插件至少需要一个已审核发行包");
+}
 function checkDisplayVersion(card, releases) {
   const versions = releases.filter(release => !release.recognitionOnly).map(release => release.version);
   if (versions.length) assert.equal(card.version, versions.sort((a, b) => b.localeCompare(a, "en", { numeric: true }))[0],
