@@ -173,7 +173,7 @@
     },
     {
       "id": "voice",
-      "version": "0.9.4",
+      "version": "0.13.1",
       "name": "语音模块",
       "author": "FelixTaXk",
       "description": "管理音色库，合成语音并转换歌声。一键安装包含说话和唱歌两个子插件。使用本机语音引擎时，还需在插件设置中单独部署。",
@@ -184,6 +184,20 @@
       "collected": "2026-11-21",
       "stars": 0,
       "verifiedReleases": [
+        {
+          "version": "0.13.1",
+          "hostRange": "=0.1.1",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-voice/releases/download/v0.13.1/voice-0.13.1-win32-x64.wlpkg.gz",
+          "sizeBytes": 77210,
+          "sha256": "f5909e2fb7e5d0fc835c9f65bafd7a12cbe6916cac8259a3a8356b075ac70e5b",
+          "dependencies": {},
+          "bundledPluginIds": [
+            "voice/speak",
+            "voice/sing"
+          ]
+        },
         {
           "version": "0.9.4",
           "hostRange": "0.1.0",
