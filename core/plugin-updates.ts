@@ -52,7 +52,7 @@ function newer(target: string, installed: string) {
 function verifiedTarget(entry: Metadata, installed: string, host: string, platform: string, arch: string): Target | undefined {
   let best: Target | undefined;
   for (const release of Array.isArray(entry.verifiedReleases) ? entry.verifiedReleases : []) {
-    if (!release || release.recognitionOnly || release.delivery !== "github-release" || release.platform !== platform ||
+    if (!release || release.recognitionOnly || release.legacy || release.delivery !== "github-release" || release.platform !== platform ||
         release.arch !== arch || !compatibleHostFloor(release.hostRange, host) || !newer(release.version, best?.version ?? installed) ||
         !/^[0-9a-f]{64}$/.test(release.sha256) || !/^[0-9a-f]{64}$/.test(release.inventorySha256) ||
         !Number.isSafeInteger(release.sizeBytes) || release.sizeBytes <= 0) continue;

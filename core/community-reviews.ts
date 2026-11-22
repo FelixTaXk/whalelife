@@ -53,9 +53,12 @@ function reviewedRelease(value: unknown, id: string, repository: string, require
   const children = value.bundledPluginIds ?? [];
   if (!idList(children) || children.some(child => !child.startsWith(id + "/")))
     return invalid(id, "包内子插件必须使用归属本插件的完整 ID");
+  if (value.legacy !== undefined && typeof value.legacy !== "boolean")
+    return invalid(id, "legacy 标记必须是布尔值");
   return { version: value.version, hostRange: value.hostRange, platform: value.platform, arch: value.arch,
     assetUrl: value.assetUrl, sha256: value.sha256, sizeBytes: value.sizeBytes,
-    dependencies: Object.fromEntries(required.map(key => [key, deps[key] as string])), bundledPluginIds: children };
+    dependencies: Object.fromEntries(required.map(key => [key, deps[key] as string])), bundledPluginIds: children,
+    ...(value.legacy ? { legacy: true } : {}) };
 }
 
 /** Only the maintainer-published catalog supplies executable package references. */
@@ -91,7 +94,7 @@ export function reviewedCommunityEntries(catalog: unknown): ReviewedCommunityEnt
       const overlaps = (a: string, b: string) => a === b || a === "any" || b === "any";
       if (releases.some(prev => prev.version === release.version && parseHostRange(prev.hostRange)!.minimum === minimumHost &&
         overlaps(prev.platform, release.platform) && overlaps(prev.arch, release.arch))) return invalid(id, "同版本的平台匹配重复");
-      for (const child of release.bundledPluginIds ?? []) {
+      for (const child of release.legacy ? [] : release.bundledPluginIds ?? []) {
         const owner = owners.get(child);
         if (owner && owner !== id) return invalid(id, "包内子插件 ID 已被占用：" + child);
         owners.set(child, id);

@@ -14,7 +14,7 @@ export type PackageRelease = {
   version: string; hostRange: string; platform: string; arch: string; sha256: string;
   assetUrl?: string; sizeBytes?: number; inventorySha256?: string;
   composition?: Pick<Parameters<typeof import("./official-package-composition.ts").ensureComposedOfficialPackage>[1], "packagePart" | "zipPart"> & { name: string; version: string };
-  dependencies: Record<string, string>; bundledPluginIds?: string[]; recognitionOnly?: boolean;
+  dependencies: Record<string, string>; bundledPluginIds?: string[]; recognitionOnly?: boolean; legacy?: boolean;
 };
 type Release = PackageRelease;
 export type PackageEntry = { id: string; name: string; repository: string; parentId: string | null; requiredPlugins: string[]; preserve?: string[]; verifiedReleases: Release[];
@@ -96,7 +96,7 @@ export class PluginPackages {
       (r.arch === process.arch || (entry.community && r.arch === "any")))
       .sort((a, b) => compare(b.version, a.version) || compare(
         compatibleHostFloor(b.hostRange, hostVersion) ?? "", compatibleHostFloor(a.hostRange, hostVersion) ?? ""));
-    const eligible = releases.filter(r => !r.recognitionOnly && compatibleHostFloor(r.hostRange, hostVersion));
+    const eligible = releases.filter(r => !r.recognitionOnly && !r.legacy && compatibleHostFloor(r.hostRange, hostVersion));
     const target = eligible[0];
     const item: Item = { entry, pathId, eligible, target, installedVersion: record?.manifest.version, installed: !!record,
       enabled: runtime.pluginState.enabled(pathId), active: record?.status === "active", reason: "" };
@@ -254,6 +254,18 @@ export class PluginPackages {
           }
         }
         steps.reverse();
+        if (update) {
+          // A root-only replacement retires children that the old bundle carried. Install their
+          // independent reviewed releases in the same transaction so existing features survive.
+          for (const id of item.existing?.bundledPluginIds ?? []) {
+            if (selected.bundledPluginIds?.includes(id)) continue;
+            const child = items.get(id);
+            const release = child?.target;
+            if (!child || !release)
+              throw Error("新版不再内置 " + id + "，但商店缺少它的独立发行包。");
+            if (!steps.some(step => step.id === id)) add(child, "install", release);
+          }
+        }
       } catch (error) { reason = errorText(error); steps.length = 0; }
     }
     const action = reason || !steps.length ? null : update ? "update" : item.installed ? "uninstall" : "install";
@@ -471,6 +483,10 @@ export class PluginPackages {
           const changes = plan.steps.flatMap(step => {
             if (step.action !== "install" && step.action !== "enable") return [];
             const p = items.get(step.id)!, r = releaseFor(p, step.version);
+            // Migrated children already exist in the old bundle. Their files are replaced as part
+            // of the parent tree, so they are not dependency-journal entries (whose baseline must
+            // prove the path was absent before the transaction).
+            if (step.action === "install" && p.installed) return [];
             return [{id:p.pathId, action:step.action, enabled:p.enabled, mayRemove:!this.dependents(p,item).length,
               files:spec(p,r), dependencies:Object.keys(r.dependencies).map(id => items.get(id)?.pathId ?? id),
               bundled:r.bundledPluginIds ?? []}];
@@ -488,7 +504,8 @@ export class PluginPackages {
           const p = items.get(step.id)!;
           const release = releaseFor(p, step.version);
           const files = spec(p, release);
-          if (journal && (step.action === "enable" || step.action === "install")) await journal.start(p.pathId);
+          if (journal && (step.action === "enable" || step.action === "install") &&
+              !(step.action === "install" && p.installed)) await journal.start(p.pathId);
           stage = step.name + " · " + ({ install: "安装程序文件", enable: "启用依赖", uninstall: "卸载程序文件", update: "替换程序文件" }[step.action]);
           if (step.action === "update") {
             const old = p.existing!;
@@ -551,12 +568,12 @@ export class PluginPackages {
                   throw Error("父插件尚未启用或没有声明可加载这个子插件。");
               }
             }
-            await installOfficialFiles(runtime.root, files);
+            await installOfficialFiles(runtime.root, files, updating && p.installed);
             undo.push({ label: "撤回新装的" + step.name, run: async () => {
               const used = this.dependents({ ...p, existing: release }, updating ? item : undefined);
               if (used.length) throw Error("仍有插件依赖：" + used.join("、"));
               await stop(p);
-              await uninstallOfficialFiles(runtime.root, files);
+              await uninstallOfficialFiles(runtime.root, files, updating && p.installed);
               forget(p, release);
             } });
           }

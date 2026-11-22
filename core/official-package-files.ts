@@ -285,9 +285,9 @@ export async function inspectOfficialFiles(root: string, spec: OfficialPackageSp
   });
 }
 
-async function change(root: string, spec: OfficialPackageSpec, install: boolean, interruptedInstall = false) {
+async function change(root: string, spec: OfficialPackageSpec, install: boolean, interruptedInstall = false, allowNested = false) {
   return serialized(root, async () => {
-    await checkPendingReplacement(root, spec.directory);
+    await checkPendingReplacement(root, spec.directory, false, allowNested);
     if (install && spec.recognitionOnly) throw Error("历史清单仅供识别已安装的官方版本。");
     const { archive, cache, inventory } = await releaseAt(root, spec);
     const partial = interruptedInstall ? new Set<string>() : undefined;
@@ -355,8 +355,12 @@ async function removeEmpty(path: string) {
   try { await rmdir(path); }
   catch (error: any) { if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error; }
 }
-export function installOfficialFiles(root: string, spec: OfficialPackageSpec) { return change(resolve(root), spec, true); }
-export function uninstallOfficialFiles(root: string, spec: OfficialPackageSpec) { return change(resolve(root), spec, false); }
+export function installOfficialFiles(root: string, spec: OfficialPackageSpec, allowNested = false) {
+  return change(resolve(root), spec, true, false, allowNested);
+}
+export function uninstallOfficialFiles(root: string, spec: OfficialPackageSpec, allowNested = false) {
+  return change(resolve(root), spec, false, false, allowNested);
+}
 /** Only for a journaled dependency that was absent before the interrupted install. */
 export function rollbackInterruptedInstall(root: string, spec: OfficialPackageSpec) { return change(resolve(root), spec, false, true); }
 
@@ -381,7 +385,7 @@ export async function recoverPendingPluginReplacements(root: string) {
 
 // A process can exit between the two renames. Even when no manifest is at the live path, a
 // pending backup belongs to an installed plugin. Never allow a later install to take its place.
-async function checkPendingReplacement(root: string, directory: string, allowLiveRead = false) {
+async function checkPendingReplacement(root: string, directory: string, allowLiveRead = false, allowNested = false) {
   const cache = await directoryAt(root, ".artifacts/official-packages");
   if (!cache) return;
   const key = replacementName(directory);
@@ -389,6 +393,7 @@ async function checkPendingReplacement(root: string, directory: string, allowLiv
     if (name !== key && !name.startsWith(key + ".sub.") && !key.startsWith(name + ".sub.")) continue;
     const transaction = join(cache, name);
     if (allowLiveRead && liveReplacements.has(transaction)) continue;
+    if (allowNested && key.startsWith(name + ".sub.") && liveReplacements.has(transaction)) continue;
     throw Error("插件更新事务尚未结束，请先处理更新备份：" + transaction);
   }
 }

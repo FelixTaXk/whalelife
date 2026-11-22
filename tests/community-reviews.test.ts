@@ -34,6 +34,17 @@ test("同一子插件不能同时由独立条目与另一发行包管理", () =>
   ]}), /已被占用/);
 });
 
+test("旧捆绑发行包可标记 legacy，不再占用拆出子插件的独立条目", () => {
+  const child = {...item, id:"sample/child", dependencies:["sample"],
+    verifiedReleases:[{...release, dependencies:{sample:"1.2.0"}}]};
+  const parsed = reviewedCommunityEntries({official:[], community:[
+    {...item, verifiedReleases:[{...release, legacy:true, bundledPluginIds:["sample/child"]}]}, child]});
+  assert.deepEqual(parsed.map(entry => entry.id), ["sample", "sample/child"]);
+  assert.equal(parsed[0]!.verifiedReleases![0]!.legacy, true);
+  assert.throws(() => reviewedCommunityEntries({official:[], community:[
+    {...item, verifiedReleases:[{...release, legacy:"yes"}]}]}), /legacy/);
+});
+
 test("撤下、断网和格式错误均不会沿用之前的社区发行授权", async () => {
   const signal = new AbortController().signal;
   const responses = [

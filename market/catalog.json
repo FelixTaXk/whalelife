@@ -142,7 +142,9 @@
           "sizeBytes": 70971,
           "sha256": "a7dbbe859a38d42d5c69b06f4d11187dcb57af60a1e268f74f881f1f0e63019e",
           "dependencies": {},
-          "bundledPluginIds": ["schedule/weather"]
+          "bundledPluginIds": [
+            "schedule/weather"
+          ]
         }
       ]
     },
@@ -155,7 +157,9 @@
       "repository": "https://github.com/FelixTaXk/whalelife-community-meme",
       "installation": "https://github.com/FelixTaXk/whalelife-community-meme/blob/main/README.md#安装",
       "feedback": "https://github.com/FelixTaXk/whalelife-community-meme/issues",
-      "dependencies": ["gallery"],
+      "dependencies": [
+        "gallery"
+      ],
       "collected": "2026-11-21",
       "stars": 0,
       "verifiedReleases": [
@@ -167,7 +171,9 @@
           "assetUrl": "https://github.com/FelixTaXk/whalelife-community-meme/releases/download/v0.2.1/meme-0.2.1-win32-x64.wlpkg.gz",
           "sizeBytes": 35776,
           "sha256": "a31dcd82ac78de05de2c183140008768ccb82ef9b91d85b38dc33f36ba390faf",
-          "dependencies": {"gallery": "0.1.2"}
+          "dependencies": {
+            "gallery": "0.1.2"
+          }
         }
       ]
     },
@@ -193,21 +199,24 @@
           "sizeBytes": 72070,
           "sha256": "1614142302ac180d767b6d9959447ec6c7b139e3a62b5d8b6ac2e0d815e5379d",
           "dependencies": {},
-          "bundledPluginIds": ["voice/sing", "voice/speak"]
+          "bundledPluginIds": [
+            "voice/sing",
+            "voice/speak"
+          ]
         }
       ]
     },
     {
       "id": "studio",
-      "version": "0.2.15",
+      "version": "0.2.22",
       "name": "画室",
       "author": "FelixTaXk",
-      "description": "用本地 ComfyUI、SD-WebUI 或兼容接口生成图片，附带视频和提示词小抄。看图与绘制蒙版需 Python 和 Pillow。",
+      "description": "画室的生图和拍视频都靠它：可接本机 ComfyUI / SD-WebUI，也能走网络生图接口；画画、拍视频、表情包、提示词小抄和姿势各自独立。",
       "repository": "https://github.com/FelixTaXk/whalelife-community-studio",
-      "installation": "https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#手动安装",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#安装",
       "feedback": "https://github.com/FelixTaXk/whalelife-community-studio/issues",
       "dependencies": [],
-      "collected": "2026-11-21",
+      "collected": "2026-11-22",
       "stars": 0,
       "verifiedReleases": [
         {
@@ -223,7 +232,8 @@
             "studio/image",
             "studio/promptkit",
             "studio/video"
-          ]
+          ],
+          "legacy": true
         },
         {
           "version": "0.2.6",
@@ -234,7 +244,12 @@
           "sizeBytes": 141194,
           "sha256": "3c828e541ecdd8f168545cccfed2a6c3872dce67fa4f4ceb05be02eaa41d5fb6",
           "dependencies": {},
-          "bundledPluginIds": ["studio/image", "studio/promptkit", "studio/video"]
+          "bundledPluginIds": [
+            "studio/image",
+            "studio/promptkit",
+            "studio/video"
+          ],
+          "legacy": true
         },
         {
           "version": "0.2.2",
@@ -245,7 +260,23 @@
           "sizeBytes": 120344,
           "sha256": "c6e37794d7fe77617ca4344e8d6a9a11c2b9c73fcb5164044b0e51abb0871767",
           "dependencies": {},
-          "bundledPluginIds": ["studio/image", "studio/promptkit", "studio/video"]
+          "bundledPluginIds": [
+            "studio/image",
+            "studio/promptkit",
+            "studio/video"
+          ],
+          "legacy": true
+        },
+        {
+          "version": "0.2.22",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-studio/releases/download/v0.2.22/studio-0.2.22-win32-x64.wlpkg.gz",
+          "sizeBytes": 118049,
+          "sha256": "109daed71d2595f300d73596c74d84e0f4ec4312d4f361ad678dabf5d8fc2a92",
+          "dependencies": {},
+          "bundledPluginIds": []
         }
       ]
     },
@@ -351,6 +382,156 @@
           "assetUrl": "https://github.com/FelixTaXk/whalelife-community-qq-group/releases/download/v0.6.10/qq-group-0.6.10-win32-x64.wlpkg.gz",
           "sha256": "4d298a9a1f637ee4c564e5a93afd4258a0e226af6fb27e85fbe4f396277fae5b",
           "sizeBytes": 49302
+        }
+      ]
+    },
+    {
+      "id": "studio/image",
+      "version": "0.2.22",
+      "name": "画画",
+      "author": "FelixTaXk",
+      "description": "用画室配好的任一后端出图（ComfyUI / SD-WebUI / OpenAI 兼容 / Gemini / 通义万相），四个日常场景 + 通用出图，附带原图坐标刻度和蒙版生成；draw 可接姿势子插件的 pose 参数",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-studio",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-studio/issues",
+      "dependencies": [
+        "studio"
+      ],
+      "collected": "2026-11-22",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.2.22",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-studio/releases/download/v0.2.22/studio-image-0.2.22-win32-x64.wlpkg.gz",
+          "sizeBytes": 25351,
+          "sha256": "7caba4b4df47113f4cd4a1fb8f3929b75dc93c3ea9ef13da7bfd5322261f646d",
+          "dependencies": {
+            "studio": "0.2.22"
+          },
+          "bundledPluginIds": []
+        }
+      ]
+    },
+    {
+      "id": "studio/video",
+      "version": "0.2.22",
+      "name": "拍视频",
+      "author": "FelixTaXk",
+      "description": "用 ComfyUI 视频工作流出片，文生视频和图生视频都走工作流，任务后台跑、按号查结果",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-studio",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-studio/issues",
+      "dependencies": [
+        "studio"
+      ],
+      "collected": "2026-11-22",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.2.22",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-studio/releases/download/v0.2.22/studio-video-0.2.22-win32-x64.wlpkg.gz",
+          "sizeBytes": 5452,
+          "sha256": "702e470ea3ff92456fcb6d6f7ac4ce44adee986dd73d827c8dc4f08188d87df8",
+          "dependencies": {
+            "studio": "0.2.22"
+          },
+          "bundledPluginIds": []
+        }
+      ]
+    },
+    {
+      "id": "studio/meme",
+      "version": "0.2.22",
+      "name": "表情包工坊",
+      "author": "FelixTaXk",
+      "description": "画室的表情包工坊：给图片加字幕、气泡或描边做成表情包；设置页可上传图片、取图库或让画室画一张参考图后一键出图。装了图库时成品通过 offerMedia 交成临时引用（mediaRef，24 小时），收藏入库由 gallery_collect 决定，装 QQ 后可用 QQ 发出去；没装图库则只落本地文件",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-studio",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-studio/issues",
+      "dependencies": [
+        "studio"
+      ],
+      "collected": "2026-11-22",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.2.22",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-studio/releases/download/v0.2.22/studio-meme-0.2.22-win32-x64.wlpkg.gz",
+          "sizeBytes": 24549,
+          "sha256": "e5dbddc9099b29ccb7b330c0e87d03ed1a3bcd2162af06aa6cf3322bef0c51ac",
+          "dependencies": {
+            "studio": "0.2.22"
+          },
+          "bundledPluginIds": []
+        }
+      ]
+    },
+    {
+      "id": "studio/promptkit",
+      "version": "0.2.22",
+      "name": "提示词小抄",
+      "author": "FelixTaXk",
+      "description": "画室的提示词子插件：可选词库的查词、随机挑词、配方拼句，并向画画子插件提供出图前自动补词；设置从画室设置进入",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-studio",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-studio/issues",
+      "dependencies": [
+        "studio"
+      ],
+      "collected": "2026-11-22",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.2.22",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-studio/releases/download/v0.2.22/studio-promptkit-0.2.22-win32-x64.wlpkg.gz",
+          "sizeBytes": 39287,
+          "sha256": "afd61112f5916cb59a48f73caed8e742607e1dd509c486cbaf1e6cb12d497940",
+          "dependencies": {
+            "studio": "0.2.22"
+          },
+          "bundledPluginIds": []
+        }
+      ]
+    },
+    {
+      "id": "studio/pose",
+      "version": "0.2.22",
+      "name": "姿势",
+      "author": "FelixTaXk",
+      "description": "画室的姿势子插件：自带 1439 张中文姿势参考（标准系 / 上半身 / 性感系 / 双人缠绵，288 组，每组五视角，可切白模与深度图），只作生图时的可选参考，不绑日程、不注入上下文；向画画子插件提供英文提示词与参考图路径；高级参考与双人参考默认整类隐藏；图片可读本地库或走 ai-pose-gallery.anhao.app 图源；提供 pose_pick / pose_ref 工具与设置页",
+      "repository": "https://github.com/FelixTaXk/whalelife-community-studio",
+      "installation": "https://github.com/FelixTaXk/whalelife-community-studio/blob/main/README.md#安装",
+      "feedback": "https://github.com/FelixTaXk/whalelife-community-studio/issues",
+      "dependencies": [
+        "studio"
+      ],
+      "collected": "2026-11-22",
+      "stars": 0,
+      "verifiedReleases": [
+        {
+          "version": "0.2.22",
+          "hostRange": "0.1.0",
+          "platform": "win32",
+          "arch": "x64",
+          "assetUrl": "https://github.com/FelixTaXk/whalelife-community-studio/releases/download/v0.2.22/studio-pose-0.2.22-win32-x64.wlpkg.gz",
+          "sizeBytes": 74539,
+          "sha256": "21237d964fb68edc91ab6f5304066317a019119425a14db59e93fd2c5af32879",
+          "dependencies": {
+            "studio": "0.2.22"
+          },
+          "bundledPluginIds": []
         }
       ]
     }
