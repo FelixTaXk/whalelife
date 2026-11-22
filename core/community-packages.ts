@@ -14,7 +14,7 @@ import { validPluginId } from "./plugin-state.ts";
 import type { Runtime } from "./runtime.ts";
 
 export type ReviewedCommunityRelease = Pick<PackageRelease,
-  "version" | "hostRange" | "platform" | "arch" | "dependencies" | "sha256" | "bundledPluginIds"> & {
+  "version" | "hostRange" | "platform" | "arch" | "dependencies" | "sha256" | "bundledPluginIds" | "legacy"> & {
     assetUrl: string; sizeBytes: number;
   };
 export type ReviewedCommunityEntry = {
@@ -87,6 +87,7 @@ export class CommunityPackages {
         requiredPlugins:record.dependencies, verifiedReleases:releases.map(r => ({
           version:r.version, hostRange:r.hostRange, platform:r.platform, arch:r.arch, assetUrl:r.assetUrl,
           sha256:r.sha256, sizeBytes:r.sizeBytes, dependencies:r.dependencies, bundledPluginIds:r.bundledPluginIds,
+          legacy:r.legacy,
         }))});
     }
     this.ids = new Set(entries.map(e => e.id));

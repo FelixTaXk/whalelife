@@ -206,3 +206,30 @@ test("corrupt bytes and identity or undeclared child mismatches fail before a de
     await assert.rejects(readFile(join(f.root,"plugins/library/plugin.yaml")), {code:"ENOENT"});
   }
 });
+
+test("legacy bundled children are reinstalled as independent packages during update", async t => {
+  const f = await fixture(t);
+  const childManifest = JSON.stringify({id:"child", name:"child", version:"0.5.0", description:"test"});
+  const old = f.plugin("sample", "1.0.0", {children:["sample/child"], manifest:{sub:["child"]},
+    extra:{"sub/child/plugin.yaml":childManifest, "sub/child/index.ts":program}});
+  const next = f.plugin("sample", "1.1.0");
+  const child = f.plugin("sample/child", "0.6.0", {deps:{sample:"1.1.0"}});
+  const legacy = {...old.release, legacy:true};
+  const parent = {...next.entry, verifiedReleases:[next.release, legacy]};
+
+  const before = f.manager([old.entry]);
+  await before.apply(await row(before, "sample"));
+  assert.equal(f.runtime.records.get("sample").manifest.version, "1.0.0");
+  assert.equal(f.runtime.records.get("sample/child").manifest.version, "0.5.0");
+  await mkdir(join(f.root, "plugins/sample/data"), {recursive:true});
+  await writeFile(join(f.root, "plugins/sample/data/marker.json"), "keep");
+
+  const after = f.manager([parent, child.entry]);
+  const plan = await after.updatePlan("sample", "1.1.0");
+  assert.deepEqual(plan.steps.map(step => [step.id, step.version, step.action, step.migrated]),
+    [["sample","1.1.0","update",undefined], ["sample/child","0.6.0","install",true]]);
+  await after.applyUpdate({id:"sample", version:"1.1.0", planKey:plan.planKey});
+  assert.equal(f.runtime.records.get("sample").manifest.version, "1.1.0");
+  assert.equal(f.runtime.records.get("sample/child").manifest.version, "0.6.0");
+  assert.equal(await readFile(join(f.root, "plugins/sample/data/marker.json"), "utf8"), "keep");
+});

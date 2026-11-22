@@ -285,9 +285,9 @@ export async function inspectOfficialFiles(root: string, spec: OfficialPackageSp
   });
 }
 
-async function change(root: string, spec: OfficialPackageSpec, install: boolean, interruptedInstall = false) {
+async function change(root: string, spec: OfficialPackageSpec, install: boolean, interruptedInstall = false, allowPendingReplacement = false) {
   return serialized(root, async () => {
-    await checkPendingReplacement(root, spec.directory);
+    if (!allowPendingReplacement) await checkPendingReplacement(root, spec.directory);
     if (install && spec.recognitionOnly) throw Error("历史清单仅供识别已安装的官方版本。");
     const { archive, cache, inventory } = await releaseAt(root, spec);
     const partial = interruptedInstall ? new Set<string>() : undefined;
@@ -355,7 +355,9 @@ async function removeEmpty(path: string) {
   try { await rmdir(path); }
   catch (error: any) { if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error; }
 }
-export function installOfficialFiles(root: string, spec: OfficialPackageSpec) { return change(resolve(root), spec, true); }
+export function installOfficialFiles(root: string, spec: OfficialPackageSpec, insideReplacement = false) {
+  return change(resolve(root), spec, true, false, insideReplacement);
+}
 export function uninstallOfficialFiles(root: string, spec: OfficialPackageSpec) { return change(resolve(root), spec, false); }
 /** Only for a journaled dependency that was absent before the interrupted install. */
 export function rollbackInterruptedInstall(root: string, spec: OfficialPackageSpec) { return change(resolve(root), spec, false, true); }

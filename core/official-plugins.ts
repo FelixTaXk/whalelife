@@ -14,7 +14,7 @@ export type PackageRelease = {
   version: string; hostRange: string; platform: string; arch: string; sha256: string;
   assetUrl?: string; sizeBytes?: number; inventorySha256?: string;
   composition?: Pick<Parameters<typeof import("./official-package-composition.ts").ensureComposedOfficialPackage>[1], "packagePart" | "zipPart"> & { name: string; version: string };
-  dependencies: Record<string, string>; bundledPluginIds?: string[]; recognitionOnly?: boolean;
+  dependencies: Record<string, string>; bundledPluginIds?: string[]; recognitionOnly?: boolean; legacy?: boolean;
 };
 type Release = PackageRelease;
 export type PackageEntry = { id: string; name: string; repository: string; parentId: string | null; requiredPlugins: string[]; preserve?: string[]; verifiedReleases: Release[];
@@ -26,7 +26,7 @@ type CommunityPolicy = {
   available(root: string, id: string): Promise<void>;
   verify(root: string, entry: Entry, release: Release): Promise<void>;
 };
-type Step = { action: "install" | "enable" | "reuse" | "uninstall" | "update"; id: string; name: string; version: string };
+type Step = { action: "install" | "enable" | "reuse" | "uninstall" | "update"; id: string; name: string; version: string; migrated?: boolean };
 type Item = { entry: Entry; pathId: string; eligible: Release[]; target?: Release; existing?: Release; installedVersion?: string; installed: boolean; reason: string; enabled: boolean; active: boolean };
 const read = (file: string) => JSON.parse(readFileSync(new URL(file, import.meta.url), "utf8"));
 const registry: { plugins: Entry[]; installedBuilds?: InstalledBuild[] } = read("../market/official-releases.json");
@@ -68,7 +68,8 @@ function inventorySpec(item: Item, release: Release) {
   return release.inventorySha256 ? { ...files, sha256: release.inventorySha256, recognitionOnly: true } : files;
 }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
-const releaseFor = (part: Item, version: string) => part.existing?.version === version ? part.existing : part.eligible.find(r => r.version === version)!;
+const releaseFor = (part: Item, version: string) => part.eligible.find(r => r.version === version) ??
+  (part.existing?.version === version ? part.existing : undefined)!;
 
 export class PluginPackages {
   private communityReceipts = new Map<string, CommunityInstallReceipt>();
@@ -96,7 +97,7 @@ export class PluginPackages {
       (r.arch === process.arch || (entry.community && r.arch === "any")))
       .sort((a, b) => compare(b.version, a.version) || compare(
         compatibleHostFloor(b.hostRange, hostVersion) ?? "", compatibleHostFloor(a.hostRange, hostVersion) ?? ""));
-    const eligible = releases.filter(r => !r.recognitionOnly && compatibleHostFloor(r.hostRange, hostVersion));
+    const eligible = releases.filter(r => !r.recognitionOnly && !r.legacy && compatibleHostFloor(r.hostRange, hostVersion));
     const target = eligible[0];
     const item: Item = { entry, pathId, eligible, target, installedVersion: record?.manifest.version, installed: !!record,
       enabled: runtime.pluginState.enabled(pathId), active: record?.status === "active", reason: "" };
@@ -208,8 +209,8 @@ export class PluginPackages {
     const steps: Step[] = [];
     let reason = item.reason, upgradeUrl = "";
     const card = this.cards.find(card => card.id === item.entry.id);
-    const add = (part: Item, action: Step["action"], release: Release) =>
-      steps.push({ id: part.entry.id, name: part.entry.name, version: release.version, action });
+    const add = (part: Item, action: Step["action"], release: Release, migrated = false) =>
+      steps.push({ id: part.entry.id, name: part.entry.name, version: release.version, action, ...(migrated ? { migrated: true } : {}) });
     const update = updateVersion !== undefined;
     const selected = update ? item.eligible.find(r => r.version === updateVersion) : item.target;
     if (update) {
@@ -254,6 +255,17 @@ export class PluginPackages {
           }
         }
         steps.reverse();
+        // A verified update may retire children that the old bundle carried. Reinstall
+        // those as their independent approved packages so an update does not drop them.
+        if (update && item.existing) {
+          const retired = (item.existing.bundledPluginIds ?? []).filter(id => !selected.bundledPluginIds?.includes(id));
+          for (const id of retired) {
+            if (steps.some(step => step.id === id)) continue;
+            const child = items.get(id);
+            if (!child?.target) throw Error("升级清单缺少子插件发行包：" + id);
+            add(child, "install", child.target, true);
+          }
+        }
       } catch (error) { reason = errorText(error); steps.length = 0; }
     }
     const action = reason || !steps.length ? null : update ? "update" : item.installed ? "uninstall" : "install";
@@ -469,7 +481,7 @@ export class PluginPackages {
         finishCommit = runtime.beginPackageCommit();
         if (transactionId) {
           const changes = plan.steps.flatMap(step => {
-            if (step.action !== "install" && step.action !== "enable") return [];
+            if (step.migrated || step.action !== "install" && step.action !== "enable") return [];
             const p = items.get(step.id)!, r = releaseFor(p, step.version);
             return [{id:p.pathId, action:step.action, enabled:p.enabled, mayRemove:!this.dependents(p,item).length,
               files:spec(p,r), dependencies:Object.keys(r.dependencies).map(id => items.get(id)?.pathId ?? id),
@@ -488,7 +500,7 @@ export class PluginPackages {
           const p = items.get(step.id)!;
           const release = releaseFor(p, step.version);
           const files = spec(p, release);
-          if (journal && (step.action === "enable" || step.action === "install")) await journal.start(p.pathId);
+          if (journal && !step.migrated && (step.action === "enable" || step.action === "install")) await journal.start(p.pathId);
           stage = step.name + " · " + ({ install: "安装程序文件", enable: "启用依赖", uninstall: "卸载程序文件", update: "替换程序文件" }[step.action]);
           if (step.action === "update") {
             const old = p.existing!;
@@ -551,8 +563,8 @@ export class PluginPackages {
                   throw Error("父插件尚未启用或没有声明可加载这个子插件。");
               }
             }
-            await installOfficialFiles(runtime.root, files);
-            undo.push({ label: "撤回新装的" + step.name, run: async () => {
+            await installOfficialFiles(runtime.root, files, step.migrated);
+            if (!step.migrated) undo.push({ label: "撤回新装的" + step.name, run: async () => {
               const used = this.dependents({ ...p, existing: release }, updating ? item : undefined);
               if (used.length) throw Error("仍有插件依赖：" + used.join("、"));
               await stop(p);

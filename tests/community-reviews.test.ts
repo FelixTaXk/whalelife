@@ -34,6 +34,17 @@ test("同一子插件不能同时由独立条目与另一发行包管理", () =>
   ]}), /已被占用/);
 });
 
+test("legacy 旧合包只用于识别，不占用独立子插件 ID", () => {
+  const parse = (community: object[]) => reviewedCommunityEntries({official:[], community});
+  const legacy = {...release, version:"1.1.0", bundledPluginIds:["sample/child"], legacy:true,
+    assetUrl:repo + "/releases/download/v1.1.0/sample-1.1.0.wlpkg.gz"};
+  const child = {id:"sample/child", name:"子插件", description:"测试", repository:repo, installation:repo, dependencies:["sample"],
+    verifiedReleases:[{...release, version:"1.2.0", dependencies:{sample:"1.1.0"}}]};
+  assert.equal(parse([{...item, verifiedReleases:[legacy]}, child]).length, 2);
+  assert.equal(parse([{...item, verifiedReleases:[legacy]}, child])[0].verifiedReleases![0].legacy, true);
+  assert.throws(() => parse([{...item, verifiedReleases:[{...legacy, legacy:"yes"}]}]), /legacy/);
+});
+
 test("撤下、断网和格式错误均不会沿用之前的社区发行授权", async () => {
   const signal = new AbortController().signal;
   const responses = [
